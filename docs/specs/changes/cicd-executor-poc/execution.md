@@ -190,3 +190,18 @@
 | Final status | **PASS** |
 | Requirements | FR-01, FR-02, NFR-01, NFR-02, NFR-08 · DD-19, DD-23 (+ owner ruling), §7, §7.7 |
 | spawns | attempt 1 implementer 136 calls 318403 tokens complete (+1 continuation); attempt 2 implementer 137 calls 236055 tokens complete; attempt 3 implementer 112 calls 205463 tokens complete; 3 reviewers complete |
+
+### T-05 — Planner · in progress
+
+| Field | Value |
+|---|---|
+| Attempt 1 | Files: `domain/planner/index.ts`, `test/unit/planner.test.ts` (9). Falsifier `.every`→`.some` → fan-in red. Evidence re-run: **VERIFIED** |
+| Reviewer attempt 1 | **FAIL** (`opus`): implementation conformant; missing evidence for FR-06 "dependency failure" clauses — no in-flight-after-failure test; TIMED_OUT never exercised |
+| Spec gaps for the owner (added) | (c) outcome precedence when FAILED and TIMED_OUT coexist (implementer chose FAILED > TIMED_OUT, documented); (d) whether independent pending steps keep being dispatched after a failure; (e) execution outcome when a step is SKIPPED by supersede (T4) |
+| spawns (attempt 1) | implementer 30 calls, 140812 tokens, complete; reviewer complete |
+| Attempt 2 | Added in-flight-after-failure and TIMED_OUT tests; cheap advisories (skip reason, T4 comment, missing finally snapshot as PENDING, ssh finally routing note). 11/11. Falsifiers: 3 mutations red. Evidence re-run: **VERIFIED** |
+| Reviewer attempt 2 | **PASS** (`opus`) |
+| Forward pointer | **T-10 (dispatcher):** RUN_FINALLY for a step with no Step item must not loop (create items up front or treat absent as PENDING in the conditional write); route ssh finally steps via T2 |
+| Final status | **PASS** |
+| Requirements | FR-06, FR-16 F5 · DD-06, §7.3 |
+| spawns (attempt 2) | implementer 39 calls, 93178 tokens, complete; reviewer complete |

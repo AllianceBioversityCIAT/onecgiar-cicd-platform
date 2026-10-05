@@ -169,7 +169,7 @@ Gate C: T-32 → T-33 → T-34 → T-35 → T-36
 ### T-05 — Planner (DAG, fan-in, skip en cascada, finally)
 | Campo | Valor |
 |---|---|
-| Status / Size / Gate | pending · M · **A (ejecutable)** |
+| Status / Size / Gate | **[x] done** · M · **A** |
 | Objetivo | Función pura: estados de steps + definición → acciones |
 | Depends on | T-03, T-04 |
 | Requisitos / Diseño | FR-06 (paralelismo, fan-in, fallo de dependencia, finally y su `BUT`), FR-16 F5 · DD-06 |
