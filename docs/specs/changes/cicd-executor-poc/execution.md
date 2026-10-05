@@ -232,3 +232,20 @@
 | T-20 attempt 2 | Logger port + `StdoutJsonLogger`; `WEBHOOK_UNMATCHED`, `EVENT_IGNORED`, `MALFORMED_PAYLOAD`, `MISSING_DELIVERY_ID` entries without payload contents; NFR-02 no-secret test; environment from definition; omit empty `after`; truthful ref-resolution comments. 30/30. Falsifiers: 2 red. Evidence re-run: **VERIFIED** |
 | T-20 reviewer attempt 2 | **PASS** (`opus`) |
 | T-20 final status | **PASS** · Requirements FR-20, FR-03, NFR-02 · §6.6, DD-20 · spawns: implementer a1 70 calls 136111 tokens; reviewer 14 calls 93037 tokens; implementer a2 73 calls 143413 tokens; reviewer complete |
+| T-17 attempt 2 | Widened presigned/AKIA|ASIA patterns, suffix-based sensitive keys with exemptions, Error normalization, generic object walk, suffix key/value and truncated PEM patterns; logger field-override fix; e2e corpus; heartbeat tick-on-start/try-catch; atomic healthcheck write. 83/83. 5 falsifiers red. Evidence re-run: **VERIFIED** |
+| T-17 reviewer attempt 2 | **FAIL** (`opus`): tokens inside string content leak (key=value, JSON bodies, `X-Amz-Security-Token:` header, `ghs_`/`github_pat_`); cyclic objects crash the logger (no cycle guard; BigInt throws); `idempotencyToken` (a correlation id per DD-04) over-redacted |
+| T-17 attempt 3 (last) | In progress, plus advisories (Error.cause, ARN over-redaction, SigV4/SigV2 signatures, URL credentials, extra keys, heartbeat separate try blocks) |
+
+### T-22 — Infrastructure inventory and base runbooks · done
+
+| Field | Value |
+|---|---|
+| Attempt 1 | `infra/RESOURCES.md` (23 resources + IAM by component + checklist), `docs/runbook.md`, `docs/resources.md`, `docs/jenkins-coexistence-log.md`. Sanitization scan clean; falsifier on the 7-day clause flipped the checklist. Evidence re-run: **VERIFIED** |
+| Reviewer attempt 1 | **FAIL** (`opus`): Executor IAM blocks Slack/GitHub credential reads at point of use; S3 lacks SSE/BPA/bucket policy and worker grants; 7-day rule misdescribed; ingress Lambda missing; wrong cross-reference (#6); coexistence log lacks migration-state/snapshot columns |
+| Design gap noted | FR-17 requires an alarm for executions past their deadline; design §12 lists none. Implemented as an inventory alarm on a reconciler-emitted metric (forward pointer to T-11) |
+| Forward pointer | **T-11:** emit `ExecutionsPastDeadline` metric for the alarm |
+| Attempt 2 | Executor IAM: `GetSecretValue` at point of use on #11–#13, `DescribeSecret` limited to #11–#13 (#14 excluded); #4 SSE + BPA + bucket policy, worker S3 grants on #17 (`executions/*/source/*` read, `executions/*/quality/*` write); 7-day expiration from object creation; ingress row #24; #6 → #23; coexistence log columns "Migration state before / after" and "DB snapshot taken"; `ExecutionsPastDeadline` alarm placeholder; `ecr:GetAuthorizationToken` accepted exception; `sqs:GetQueueAttributes`. Cross-reference script OK; falsifier deleting #24 → MISSING. Evidence re-run (Leader): sanitization scan clean, #24 present — **VERIFIED** |
+| Reviewer attempt 2 | **PASS** (`opus`): all six findings fixed; NFR-01 intact (no ECR push, build, DB or application secrets for the Executor); NFR-09 DEV-only scoping; open decisions untouched |
+| Advisory (non-gating) | (a) a `> 0` alarm on `ExecutionsPastDeadline` may fire on routine reconciliation — T-11 should decide on consecutive periods or post-reconciliation counting; (b) #17's S3 grants also apply to the quality worker's Jenkins invocations — worth one sentence in IAM review; (c) #4's bucket policy principal should name the worker role itself |
+| Forward pointer | **T-11:** choose the `ExecutionsPastDeadline` alarm semantics (advisory a) |
+| Status | **Done** |

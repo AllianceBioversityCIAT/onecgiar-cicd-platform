@@ -465,7 +465,7 @@ Gate C: T-32 → T-33 → T-34 → T-35 → T-36
 ### T-22 — Inventario de infraestructura y runbooks base
 | Campo | Valor |
 |---|---|
-| Status / Size / Gate | pending · S · **A (ejecutable)** |
+| Status / Size / Gate | **[x] done** · S · **A** |
 | Objetivo | `infra/RESOURCES.md` (contrato de recursos DEV, DD-17) y `docs/runbook.md` (incluye §12.1), `docs/resources.md` y la plantilla de `docs/jenkins-coexistence-log.md`, **saneados** |
 | Depends on | T-02 |
 | Requisitos / Diseño | FR-17, FR-18, FR-19 (lifecycle 7/30/1), NFR-06, NFR-09 · design §5.2, §12, §12.1, proposal §14.1 (en forma lógica) |
