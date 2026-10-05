@@ -14,8 +14,8 @@
     "test": "vitest run",
     "inspect:image": "node scripts/inspect-image.mjs",
     "check:deps": "npm audit --omit=dev --audit-level=high",
-    "check:local": "npm run typecheck && npm run lint && npm run build && npm test && npm run check:deps && node -e \"console.log('inspect:image (npm run inspect:image) is an environment-dependent DEFERRED validation: it builds and runs the Docker image and requires a reachable Docker daemon. It is NOT part of this local gate — run it on a Docker-capable environment before deploying.'); process.exit(0)\"",
-    "validate": "node -e \"console.log('TODO(T-21): wire schema/registry validation and boundary guards here'); process.exit(0)\""
+    "check:local": "npm run typecheck && npm run lint && npm run build && npm run validate && npm test && npm run check:deps && node -e \"console.log('inspect:image (npm run inspect:image) is an environment-dependent DEFERRED validation: it builds and runs the Docker image and requires a reachable Docker daemon. It is NOT part of this local gate — run it on a Docker-capable environment before deploying.'); process.exit(0)\"",
+    "validate": "node scripts/guards/run-all.mjs"
   },
   "dependencies": {
     "ajv": "^8.20.0",

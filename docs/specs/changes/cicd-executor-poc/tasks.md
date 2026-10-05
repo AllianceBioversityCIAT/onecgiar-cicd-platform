@@ -447,7 +447,7 @@ Gate C: T-32 → T-33 → T-34 → T-35 → T-36
 ### T-21 — Guardas de frontera (NFR-01) y comando de validación
 | Campo | Valor |
 |---|---|
-| Status / Size / Gate | pending · S · **A (ejecutable)** |
+| Status / Size / Gate | **[x] done** (build-time run deferred to T-31) · S · **A** |
 | Objetivo | Comprobaciones automáticas de la frontera y de la política de publicación, ejecutables localmente y al construir la imagen |
 | Depends on | T-01, T-02, T-03 |
 | Requisitos / Diseño | NFR-01, NFR-02, NFR-08, NFR-10 · design §4.1, DD-23, §8 de requirements (defect classes) |

@@ -1,0 +1,17 @@
+# @akili-spec changes/cicd-executor-poc requirements NFR-08; design 7.7, DD-21, DD-23
+# NFR-08 fixture: the Target Registry entry matching pipeline.yaml in this
+# same directory — fake target id ("atlas-sync-dev"), only logical `<...>`
+# placeholders, "not-required"/"none" deploy-window shape (design 7.7) to
+# keep the fixture minimal. Test data only — not under pipeline-definitions/.
+
+atlas-sync-dev:
+  connectionRef: <ATLAS_SYNC_DEV_CONNECTION_REF>
+  hostKeyRef: <ATLAS_SYNC_DEV_HOST_KEY_REF>
+  credentialRef: <ATLAS_SYNC_DEV_SSH_CREDENTIAL_REF>
+  lockKey: deployment#<ATLAS_SYNC_DEV_TARGET>#atlas-sync-dev-unit
+  externalDeployers: none
+  deployWindowPolicy: not-required
+  containers:
+    - name: <WORKER_CONTAINER>
+      imageRepositoryRef: <ATLAS_SYNC_WORKER_IMAGE_REPOSITORY_REF>
+      portRef: <ATLAS_SYNC_WORKER_PORT_REF>
