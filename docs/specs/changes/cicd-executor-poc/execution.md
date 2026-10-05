@@ -122,3 +122,29 @@
 | Requisitos | FR-05, FR-11, FR-16 · §7.2, §7.3, DD-03, DD-04 |
 | continuations | 1 (directiva T12, error del Leader) |
 | spawns (intento 3) | implementer 86 calls, 231870 tokens, ended complete; reviewer ended complete |
+
+### T-03 — `DefinitionSource` y validación semántica · en curso
+
+| Campo | Valor |
+|---|---|
+| Intento 1 | Archivos: `application/definition-service/*` (index, semantic-rules, registry-rules, reference-resolution, schema-validation), `adapters/bundled-definition-source`, `schemas/targets.schema.json` (`scriptName` para migraciones, `portRef`), `pipeline-definitions/targets/dev.yaml`, tests unitarios (5 archivos) y de contrato. `ajv`, `ajv-formats` y `yaml` pasan a dependencias de producción. Continuación (el Leader resolvió que no hay bloqueo por OD-Q7, porque el empaquetado DD-19 está en alcance): `Dockerfile` con la raíz del repo como contexto, copia de las 3 carpetas, `.dockerignore` en la raíz, build arg `DEFINITION_REF`, `deploy-scripts/README.md`, `resolveBuildContext` en `inspect-image`. 801/801. Re-run de evidencia: **VERIFIED** |
+| Reviewer intento 1 | **FAIL** (`opus`). (1) **Frontera NFR-01:** el arranque resuelve todas las referencias, incluido `envSecretRef` (secreto de aplicación). (2) La detección de duplicados sobre valores resueltos está incompleta: no resuelve `name`, agrupa por el secreto de conexión completo (no por host) y compara el mapeo de puerto entero en lugar del puerto publicado. (3) La imagen arranca en producción sin `DEFINITION_REF` inyectado; `BUILD_INFO.json` malformado se ignora en silencio |
+| ADVISORY intento 1 | `portRef` y advisory (b) aceptables; raíz de definiciones por variable de entorno en lugar de recorrer directorios hacia arriba; un caso end-to-end por regla de esquema a través del servicio; T-18 debe llamar a `validateForStartup` antes de consumir; ampliar el test de sustitución cuando existan el planner y los handlers |
+| Intento 2 | En curso: allowlist de campos a resolver (`envSecretRef` opaco), forma del valor de conexión resuelto con `host`, puerto publicado, `name` resuelto, `requireInjectedRef` en producción y `CICD_DEFINITIONS_ROOT` |
+| spawns (intento 1) | implementer 136 calls, 318403 tokens, ended complete (con continuación); reviewer ended complete |
+| continuations | 1 (empaquetado DD-19) |
+
+### T-06 — Política de lock · en curso
+
+| Campo | Valor |
+|---|---|
+| Intento 1 | Archivos: `executor/src/domain/lock-policy/index.ts`, `executor/test/unit/lock-policy.test.ts` (27). Red run sin recorte → 3 rojos. Falsifiers: tope 1000 → rojo (tras corregir una tautología con el literal 900); elapsed como suma → rojo. Re-run de evidencia: **VERIFIED** |
+| Reviewer intento 1 | **FAIL** (`opus`). La lógica es conforme. El test del tope de 10 intentos es tautológico: usa la constante exportada, así que cambiar 10 a 11 no lo pone rojo |
+| ADVISORY intento 1 | `delaySeconds` fraccional (SQS exige entero); el token de fencing se reinicia si el TTL borra y recrea el lock → T-08 debe usar una condición monotónica; constante de renovación de 60 s; falta un test de cadena |
+| Forward pointers | **T-08:** condición de escritura del target con fencing monotónico (`token ≥ stored`) y no borrar locks vivos por TTL. **T-11:** redondear y usar `LOCK_RENEWAL_INTERVAL_SECONDS` |
+| spawns (intento 1) | implementer 49 calls, 149248 tokens, ended complete; reviewer ended complete |
+| Intento 2 | El test del tope usa los literales `lockWaitAttempts` 9 y 8. `delaySeconds` es entero (`ceil`, nunca > 900). Se exporta `LOCK_RENEWAL_INTERVAL_SECONDS = 60`. 30/30. Falsifier: tope 11 → rojo. Re-run de evidencia: **VERIFIED** |
+| Reviewer intento 2 | **PASS** (`opus`). Hallazgo resuelto; el redondeo `ceil` es conforme con §7.6 |
+| Estado final | **PASS** |
+| Requisitos | FR-11, FR-16 F17–F18 · DD-09, §7.6 |
+| spawns (intento 2) | implementer 23 calls, 81903 tokens, ended complete; reviewer ended complete |

@@ -186,7 +186,7 @@ Gate C: T-32 → T-33 → T-34 → T-35 → T-36
 ### T-06 — Política de lock: lease, fencing, supersede y calendario de espera
 | Campo | Valor |
 |---|---|
-| Status / Size / Gate | pending · S · **A (ejecutable)** |
+| Status / Size / Gate | **[x] done** · S · **A** |
 | Objetivo | Lógica pura de DD-09 y §7.6: cálculo de retrasos (≤ 900 s, recorte al restante), espera acumulada sobre `lockWaitStartedAt`, tope de 10 intentos, supersede, propiedad y renovación |
 | Depends on | T-01 |
 | Requisitos / Diseño | FR-11 (todos los escenarios y la regla canónica), FR-16 F17–F18 · DD-09, §7.6 |
