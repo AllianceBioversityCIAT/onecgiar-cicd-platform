@@ -1,0 +1,29 @@
+{
+  "_provisional": "SYNTHETIC fixture (not a real AWS capture) — design.md premise P-1/P-17 UNVERIFIED. A real capture from <QUALITY_WORKER_FUNCTION> replaces this in T-27. No real account ids, hosts or ARNs: every <PLACEHOLDER> is fictitious.",
+  "timestamp": "2026-10-05T12:01:10.456Z",
+  "requestContext": {
+    "requestId": "8f14e45f-ceea-4d1a-9e65-fa93b3b0b702",
+    "functionArn": "arn:aws:lambda:<AWS_REGION>:<AWS_ACCOUNT_ID>:function:<QUALITY_WORKER_FUNCTION>:cicd",
+    "condition": "Success",
+    "approximateInvokeCount": 1
+  },
+  "requestPayload": {
+    "executionId": "prms-reporting-dev-184",
+    "stepId": "client-quality",
+    "dispatchToken": "dispatch-token-0002",
+    "task": "lint-and-test",
+    "sourceRef": "s3://<CICD_ARTIFACTS_BUCKET>/prms-reporting-dev-184/source.zip"
+  },
+  "responseContext": {
+    "statusCode": 200,
+    "executedVersion": "cicd"
+  },
+  "responsePayload": {
+    "status": "FAILED",
+    "failedCommand": "npm run lint",
+    "exitCode": 1,
+    "error": "2 lint errors in src/app.ts",
+    "logS3Uri": "s3://<CICD_ARTIFACTS_BUCKET>/prms-reporting-dev-184/client-quality/log.txt",
+    "logUrl": "https://<LOG_VIEWER_HOST>/prms-reporting-dev-184/client-quality"
+  }
+}

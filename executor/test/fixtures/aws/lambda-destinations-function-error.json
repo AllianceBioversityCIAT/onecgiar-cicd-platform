@@ -1,0 +1,26 @@
+{
+  "_provisional": "SYNTHETIC fixture (not a real AWS capture) — design.md premise P-1/P-17 UNVERIFIED. A real capture from <QUALITY_WORKER_FUNCTION> replaces this in T-27. No real account ids, hosts or ARNs: every <PLACEHOLDER> is fictitious.",
+  "timestamp": "2026-10-05T12:02:30.789Z",
+  "requestContext": {
+    "requestId": "8f14e45f-ceea-4d1a-9e65-fa93b3b0b703",
+    "functionArn": "arn:aws:lambda:<AWS_REGION>:<AWS_ACCOUNT_ID>:function:<QUALITY_WORKER_FUNCTION>:cicd",
+    "condition": "RetriesExhausted",
+    "approximateInvokeCount": 1
+  },
+  "requestPayload": {
+    "executionId": "prms-reporting-dev-184",
+    "stepId": "server-quality",
+    "dispatchToken": "dispatch-token-0003",
+    "task": "lint-and-test",
+    "sourceRef": "s3://<CICD_ARTIFACTS_BUCKET>/prms-reporting-dev-184/source.zip"
+  },
+  "responseContext": {
+    "statusCode": 200,
+    "functionError": "Unhandled"
+  },
+  "responsePayload": {
+    "errorMessage": "Cannot read properties of undefined (reading 'config')",
+    "errorType": "TypeError",
+    "trace": ["TypeError: Cannot read properties of undefined (reading 'config')", "    at Runtime.handler (/var/task/index.js:12:9)"]
+  }
+}

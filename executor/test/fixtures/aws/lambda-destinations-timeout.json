@@ -1,0 +1,25 @@
+{
+  "_provisional": "SYNTHETIC fixture (not a real AWS capture) — design.md premise P-1/P-17 UNVERIFIED. A real capture from <QUALITY_WORKER_FUNCTION> replaces this in T-27. No real account ids, hosts or ARNs: every <PLACEHOLDER> is fictitious. The errorType=\"Sandbox.Timeout\" heuristic used to classify this as a timeout (vs. a function error) is itself PROVISIONAL — see domain/events's isLambdaTimeoutError doc comment.",
+  "timestamp": "2026-10-05T12:03:45.012Z",
+  "requestContext": {
+    "requestId": "8f14e45f-ceea-4d1a-9e65-fa93b3b0b704",
+    "functionArn": "arn:aws:lambda:<AWS_REGION>:<AWS_ACCOUNT_ID>:function:<QUALITY_WORKER_FUNCTION>:cicd",
+    "condition": "RetriesExhausted",
+    "approximateInvokeCount": 1
+  },
+  "requestPayload": {
+    "executionId": "prms-reporting-dev-184",
+    "stepId": "server-quality",
+    "dispatchToken": "dispatch-token-0004",
+    "task": "lint-and-test",
+    "sourceRef": "s3://<CICD_ARTIFACTS_BUCKET>/prms-reporting-dev-184/source.zip"
+  },
+  "responseContext": {
+    "statusCode": 200,
+    "functionError": "Unhandled"
+  },
+  "responsePayload": {
+    "errorMessage": "2026-10-05T12:03:45.012Z 8f14e45f-ceea-4d1a-9e65-fa93b3b0b704 Task timed out after 900.00 seconds",
+    "errorType": "Sandbox.Timeout"
+  }
+}

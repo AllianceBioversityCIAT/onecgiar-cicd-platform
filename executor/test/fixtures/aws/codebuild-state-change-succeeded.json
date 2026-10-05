@@ -1,0 +1,30 @@
+{
+  "_provisional": "SYNTHETIC fixture (not a real AWS capture) — design.md premise P-18 UNVERIFIED. A real capture replaces this in T-28. No real account ids, hosts or ARNs: every <PLACEHOLDER> is fictitious.",
+  "version": "0",
+  "id": "8f14e45f-ceea-4d1a-9e65-fa93b3b0ba01",
+  "detail-type": "CodeBuild Build State Change",
+  "source": "aws.codebuild",
+  "account": "<AWS_ACCOUNT_ID>",
+  "time": "2026-10-05T12:10:00Z",
+  "region": "<AWS_REGION>",
+  "resources": ["arn:aws:codebuild:<AWS_REGION>:<AWS_ACCOUNT_ID>:build/prms-reporting-dev:build-aaaa0001"],
+  "detail": {
+    "build-status": "SUCCEEDED",
+    "project-name": "prms-reporting-dev",
+    "build-id": "arn:aws:codebuild:<AWS_REGION>:<AWS_ACCOUNT_ID>:build/prms-reporting-dev:build-aaaa0001",
+    "additional-information": {
+      "environment": {
+        "environment-variables": [
+          { "name": "EXECUTION_ID", "value": "prms-reporting-dev-184", "type": "PLAINTEXT" },
+          { "name": "STEP_ID", "value": "server-image", "type": "PLAINTEXT" },
+          { "name": "IMAGE_TAG", "value": "prms-reporting-dev-184", "type": "PLAINTEXT" },
+          { "name": "COMPONENT", "value": "server", "type": "PLAINTEXT" }
+        ]
+      },
+      "exported-environment-variables": [
+        { "name": "imageUri", "value": "<ECR_REGISTRY>/prms-reporting-dev-server:prms-reporting-dev-184" },
+        { "name": "digest", "value": "sha256:<IMAGE_DIGEST>" }
+      ]
+    }
+  }
+}

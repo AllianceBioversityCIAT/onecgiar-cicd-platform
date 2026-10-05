@@ -81,10 +81,19 @@ export interface EventEnvelope {
  */
 export class MalformedEventError extends Error {
   readonly rawMessage: unknown;
-  constructor(message: string, rawMessage: unknown) {
+  /**
+   * Ajv's own `instancePath` + `message` pairs for a schema-validation
+   * failure, when that is the cause (`undefined` for a shape-recognition
+   * failure, which never reached ajv). Safe for DLQ triage: ajv is never run
+   * with `verbose`, so `err.data` — the actual instance value — is never
+   * populated here, only paths and messages, never payload values.
+   */
+  readonly schemaErrors?: readonly string[];
+  constructor(message: string, rawMessage: unknown, schemaErrors?: readonly string[]) {
     super(message);
     this.name = "MalformedEventError";
     this.rawMessage = rawMessage;
+    this.schemaErrors = schemaErrors;
   }
 }
 
@@ -149,7 +158,7 @@ export interface LambdaInvocationErrorPayload {
 }
 
 /**
- * design §6.1 row 1: "Forma del registro de destino (`requestContext`,
+ * design §6.1 row 1: "destination record shape (`requestContext`,
  * `requestPayload`, `responsePayload`)". Matches the AWS Lambda
  * Destinations-on-SQS message format (async invoke, `MaximumRetryAttempts=0`
  * per design §6.2 — so a failing invocation reaches `RetriesExhausted`
