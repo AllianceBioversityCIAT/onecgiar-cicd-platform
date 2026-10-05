@@ -151,7 +151,7 @@ Gate C: T-32 → T-33 → T-34 → T-35 → T-36
 ### T-04 — Máquina de estados: lista cerrada T1–T13
 | Campo | Valor |
 |---|---|
-| Status / Size / Gate | pending · M · **A (ejecutable)** |
+| Status / Size / Gate | **[x] done** · M · **A** |
 | Objetivo | Implementar exactamente las transiciones de design §7.3, con sus guardas, la única vuelta atrás T9 (solo `ssh` y solo con código 50), T10 (nunca `ssh`), T13 (mismo token; solo `codebuild`/`lambda`; una vez) y la regla canónica `LOCK_TIMEOUT` |
 | Depends on | T-01 |
 | Requisitos / Diseño | FR-05 (todos los escenarios, incluida "única vuelta atrás"), FR-11 (`AND IT MUST` canónico), FR-16 (F4–F7, F11–F13, F16–F19) · §7.3, DD-03 |

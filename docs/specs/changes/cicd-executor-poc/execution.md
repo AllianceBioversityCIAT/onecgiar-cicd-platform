@@ -109,3 +109,16 @@
 | Estado final | **PASS** |
 | Requisitos | FR-01, FR-02, FR-04 · §6.1, §7.7 (enmendado), DD-11, DD-21, DD-23 |
 | spawns (intento 2) | implementer 50 calls, 120796 tokens, ended complete; reviewer ended complete |
+| Intento 2 | Archivos: los mismos 3 (máquina de ejecución E1/E2, falsifiers por guarda, restricción de códigos de T7/T8 con blocklist, advisory). 623 tests. Re-run de evidencia: **VERIFIED** |
+| Reviewer intento 2 | **FAIL** (`opus`). Los hallazgos 1–3 del intento 1 resueltos. Nuevos: (1) T9 no comprueba que el código 50 sea del intento vigente (un 50 obsoleto devuelve a `WAITING_LOCK` un intento vivo); (2) la blocklist sigue aceptando `SUPERSEDED`, `TIMED_OUT` como `FAILED` y códigos de exit en T7 desde `DISPATCHING`; (3) T7 no relaciona `reason` y `failureCode`. Advisory: T12 desde `RUNNING` ssh/codebuild con `externalRef` contradice la tabla de recuperación |
+| Huecos de spec (para el owner) | (a) Ninguna regla define **qué estado terminal** toma una ejecución (agregado de sus steps). (b) `QUEUED → CANCELLED` (y cualquier disparador de `CANCELLED`) no está especificado. No se inventan transiciones |
+| Intento 3 (último) | En curso: allowlists por transición derivadas de §7.2; identidad del intento en T9; `reason` ⇔ código en T7; T12 alineado con la tabla de recuperación |
+| spawns (intento 2) | implementer 79 calls, 203145 tokens, ended complete; reviewer ended complete |
+| Intento 3 | Allowlists por transición y tipo derivadas de §7.2; T9 con `matchesCurrentAttempt`; T7 con `reason` ⇔ `DEPLOY_WINDOW_CLOSED`; T12 desde `RUNNING` aceptado para lambda/source/notify y rechazado para ssh/codebuild. Hubo una continuación del mismo intento porque la directiva del Leader sobre T12 fue demasiado estrecha y el Leader la corrigió. 646 tests (794 en total). Falsifiers: 6 mutaciones en rojo, revertidas. Re-run de evidencia: **VERIFIED** |
+| Reviewer intento 3 | **PASS** (`opus`). Hallazgos del intento 2 resueltos; allowlists fieles a §7.2; T12/T13 conformes con la tabla de recuperación; terminales inmutables |
+| ADVISORY final | `notify` sin códigos en T7: el handler debe llegar siempre a T6 o a un resultado (T-16/T-19); un `RUNNING codebuild` cuyo build no encuentra `BatchGetBuilds` no tiene salida → T-11 debe tratarlo; T10 confía en el flag `retryable` del llamador |
+| Forward pointers | **T-11 (reconciler):** build no encontrado por `BatchGetBuilds` → definir el cierre sin inventar estados (escalar si la spec no lo cubre). **T-10:** derivar `retryable` de los códigos de §7.2. **T-16/T-19:** el handler `notify` siempre alcanza T6 o un resultado |
+| Estado final | **PASS** |
+| Requisitos | FR-05, FR-11, FR-16 · §7.2, §7.3, DD-03, DD-04 |
+| continuations | 1 (directiva T12, error del Leader) |
+| spawns (intento 3) | implementer 86 calls, 231870 tokens, ended complete; reviewer ended complete |
