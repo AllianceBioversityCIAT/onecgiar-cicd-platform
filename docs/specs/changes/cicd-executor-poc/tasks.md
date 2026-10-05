@@ -133,7 +133,7 @@ Gate C: T-32 → T-33 → T-34 → T-35 → T-36
 ### T-03 — `DefinitionSource` y validación semántica
 | Campo | Valor |
 |---|---|
-| Status / Size / Gate | pending · M · **A (ejecutable)** |
+| Status / Size / Gate | **[x] done** · M · **A** |
 | Objetivo | Puerto `DefinitionSource` con adaptador `bundled-definition-source` y `definition-service`, que valida reglas semánticas y produce `definitionRef` |
 | Depends on | T-02 |
 | Requisitos / Diseño | FR-01, FR-02, NFR-08 · DD-19, DD-23, §7 (`definition-service`), §7.7 |
@@ -203,7 +203,7 @@ Gate C: T-32 → T-33 → T-34 → T-35 → T-36
 ### T-07 — Sobre de eventos, normalización y eventos huérfanos
 | Campo | Valor |
 |---|---|
-| Status / Size / Gate | pending · M · **A (ejecutable)** |
+| Status / Size / Gate | **[x] done** · M · **A** |
 | Objetivo | Tipos y validación del sobre (§6.1); normalizadores de Lambda Destinations y de EventBridge CodeBuild; detección de `ORPHAN_EVENT` |
 | Depends on | T-02 |
 | Requisitos / Diseño | FR-04 (sobre válido, resultados nativos y su `AND IT MUST` de correlación, envenenado, huérfano), FR-07 · §6.1 |

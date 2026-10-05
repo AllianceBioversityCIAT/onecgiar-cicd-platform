@@ -29,16 +29,48 @@
 #
 # TODO(T-01 follow-up): pin node:22-slim by digest (`node@sha256:...`) once a
 # readable source confirms the current digest; not fabricated here.
+#
+# BUILD CONTEXT (T-03, design DD-19): this Dockerfile is built with the
+# PLATFORM REPO ROOT as context — `docker build -f executor/Dockerfile .`
+# from the repo root, exactly what scripts/inspect-image.mjs does by default
+# (resolveBuildContext) — NOT `executor/`. That is what lets this stage COPY
+# `pipeline-definitions/`, `schemas/` and `deploy-scripts/` (siblings of
+# `executor/`, outside it) straight into the image: DD-19 "pipeline-
+# definitions/, schemas/ and deploy-scripts/ are copied into the image at
+# build time". All COPY sources below are therefore repo-root-relative
+# (`executor/...` for the Executor's own code). The repo-root `.dockerignore`
+# (not `executor/.dockerignore`, which is a separate file only used by the
+# executor-root-context falsifier fixtures) keeps local-only files out of
+# this build. `BundledDefinitionSource` finds these directories at runtime by
+# walking up from its own module location until it finds both
+# `pipeline-definitions/` and `schemas/` — they are copied to the image's
+# filesystem root below so that walk-up succeeds unchanged from dev.
+#
+# DEFINITION_REF (DD-19: "definitionRef = the platform repo's commit,
+# injected at build time"; FR-01: definitionRef recorded per execution): pass
+# the platform repo commit at build time with
+# `--build-arg DEFINITION_REF=$(git rev-parse HEAD)`. Omitting it leaves
+# CICD_DEFINITION_REF empty; because this runtime stage sets NODE_ENV=production,
+# BundledDefinitionSource then REFUSES TO START (requireInjectedRef defaults
+# to NODE_ENV==="production") instead of silently falling back to a dev
+# sentinel — a production container must never run with an unverified
+# definitionRef.
+#
+# CICD_DEFINITIONS_ROOT: set below to the image filesystem root, where
+# pipeline-definitions/, schemas/ and deploy-scripts/ are copied (DD-19).
+# BundledDefinitionSource reads this explicitly rather than relying on its
+# walk-up search, which remains only as a dev-local fallback when the env
+# var is absent.
 
 # ---- builder: compiles the Executor's own TypeScript only (DD-15) ----
 FROM node:22-slim AS builder
 
 WORKDIR /build
 
-COPY package.json package-lock.json tsconfig.json ./
+COPY executor/package.json executor/package-lock.json executor/tsconfig.json ./
 RUN npm ci
 
-COPY src ./src
+COPY executor/src ./src
 RUN npm run build
 
 # ---- deps: installs the Executor's OWN production dependencies only ----
@@ -46,11 +78,13 @@ FROM node:22-slim AS deps
 
 WORKDIR /build
 
-COPY package.json package-lock.json ./
+COPY executor/package.json executor/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 
 # ---- runtime: final, shipped stage. No npm/pnpm/yarn/corepack survive. ----
 FROM node:22-slim AS runtime
+
+ARG DEFINITION_REF=""
 
 # git: needed by git-cli-client (design §4.2). No other OS toolchain.
 # No docker.io/docker-ce-cli, no maven/openjdk/gradle, no python build chains.
@@ -58,11 +92,24 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+RUN groupadd --system executor \
+    && useradd --system --gid executor --home-dir /app --no-create-home executor
+
 WORKDIR /app
 
-COPY package.json ./package.json
-COPY --from=deps /build/node_modules ./node_modules
-COPY --from=builder /build/dist ./dist
+COPY --chown=executor:executor executor/package.json ./package.json
+COPY --from=deps --chown=executor:executor /build/node_modules ./node_modules
+COPY --from=builder --chown=executor:executor /build/dist ./dist
+
+# DD-19 (PoC simplification): pipeline-definitions/, schemas/ and
+# deploy-scripts/ are packaged into the image at build time, at the image
+# filesystem ROOT — a sibling of /app. BundledDefinitionSource is told this
+# explicitly via CICD_DEFINITIONS_ROOT=/ below (its dev-only walk-up, which
+# looks for an ancestor directory containing both pipeline-definitions/ and
+# schemas/, is not relied upon here).
+COPY --chown=executor:executor pipeline-definitions /pipeline-definitions
+COPY --chown=executor:executor schemas /schemas
+COPY --chown=executor:executor deploy-scripts /deploy-scripts
 
 # Remove the Node package managers shipped by the base image. The runtime
 # stage only ever RUNs `node`; npm/npx/corepack/yarn are not application
@@ -79,12 +126,10 @@ RUN rm -rf \
       /usr/local/bin/pnpx \
       /opt/yarn-*
 
-RUN groupadd --system executor \
-    && useradd --system --gid executor --home-dir /app --no-create-home executor \
-    && chown -R executor:executor /app
-
 USER executor
 
+ENV CICD_DEFINITION_REF=${DEFINITION_REF}
+ENV CICD_DEFINITIONS_ROOT=/
 ENV NODE_ENV=production
 
 CMD ["node", "dist/src/main/index.js"]

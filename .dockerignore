@@ -1,0 +1,33 @@
+# @akili-spec changes/cicd-executor-poc design §4.1, DD-19, DD-23
+# Repo-root .dockerignore: used when the Executor image is built with the
+# REPO ROOT as build context (`docker build -f executor/Dockerfile .`), so
+# that pipeline-definitions/, schemas/ and deploy-scripts/ are addressable
+# by the build (design DD-19: "copied into the image at build time"), while
+# local-only analysis files and anything not needed inside the image never
+# reach the build context in the first place.
+#
+# executor/.dockerignore is the separate, executor-scoped ignore file used
+# when the build context is `executor/` instead (e.g. the T-01 falsifier
+# fixtures, built with --dockerfile against an executor-root context) — it
+# is NOT superseded by this file.
+
+# Local-only analysis files (never versioned — design.md §4.1, premise P-26).
+JENKINS_REPLACEMENT_AKILI_CONTEXT.md
+JENKINS_REPLACEMENT_FEASIBILITY_ANALYSIS.md
+
+# Node / JS
+**/node_modules
+executor/dist
+coverage
+
+# Specs, runbooks and docs are not runtime content.
+docs/
+
+# VCS and local tooling state.
+.git
+.codegraph
+.local
+
+# OS cruft.
+.DS_Store
+Thumbs.db

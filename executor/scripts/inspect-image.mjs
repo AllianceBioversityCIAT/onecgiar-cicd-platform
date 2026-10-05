@@ -83,6 +83,15 @@
 //   node scripts/inspect-image.mjs [--dockerfile <path>]
 //   npm run inspect:image -- --dockerfile test/fixtures/dockerfiles/Dockerfile.falsifier-docker-cli
 //
+// Build context (T-03, design DD-19): with no override, this builds the
+// REAL Dockerfile with the platform REPO ROOT as context (`docker build -f
+// executor/Dockerfile .` from the repo root) — not executor/ — because its
+// runtime stage COPYs pipeline-definitions/, schemas/ and deploy-scripts/
+// from the repo root, as siblings of executor/. See resolveBuildContext().
+// A `--dockerfile` override (e.g. the T-01 falsifier fixtures) keeps the
+// OLD executor-root-context behavior, since those fixtures predate this
+// change and COPY paths relative to executor/.
+//
 // Exit codes: 0 = PASS, 1 = FAIL (image built but boundary violated, or the
 // build/run itself failed), 2 = usage error, 3 = DEFERRED (no Docker daemon).
 
@@ -94,6 +103,7 @@ import { fileURLToPath } from "node:url";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const EXECUTOR_ROOT = path.resolve(SCRIPT_DIR, "..");
+const REPO_ROOT = path.resolve(EXECUTOR_ROOT, "..");
 const DEFAULT_DOCKERFILE = path.join(EXECUTOR_ROOT, "Dockerfile");
 
 // Binaries that must never be reachable inside the shipped image, whether
@@ -440,6 +450,33 @@ export function describeDockerUnavailable({ error, status, stderr }) {
   return `DEFERRED: docker daemon unavailable (docker info exited ${String(status)})`;
 }
 
+/**
+ * Decides the `docker build` context directory and the `-f`/`--file` value
+ * to pass alongside it (design DD-19: pipeline-definitions/, schemas/ and
+ * deploy-scripts/ are packaged into the image at build time, and they live
+ * at the platform REPO ROOT, as siblings of executor/ — so the real,
+ * shipped Dockerfile must be built with the repo root as context, not
+ * executor/ itself).
+ *
+ * The DEFAULT Dockerfile (no `--dockerfile` override) is built with the
+ * repo root as context and a dockerfile path relative to it
+ * ("executor/Dockerfile"), matching exactly how its COPY instructions are
+ * now written.
+ *
+ * A `--dockerfile` OVERRIDE (used by the T-01 falsifier fixtures under
+ * executor/test/fixtures/dockerfiles/, which predate this change and still
+ * COPY paths relative to executor/) keeps the OLD behavior: context =
+ * executor/, dockerfile = the given path as-is. Those fixtures are
+ * deliberately not rewritten here (T-01's "do not fix this file" notice);
+ * this keeps them building exactly as before.
+ */
+export function resolveBuildContext(dockerfilePath) {
+  if (path.resolve(dockerfilePath) === path.resolve(DEFAULT_DOCKERFILE)) {
+    return { context: REPO_ROOT, dockerfileArg: path.relative(REPO_ROOT, DEFAULT_DOCKERFILE) };
+  }
+  return { context: EXECUTOR_ROOT, dockerfileArg: dockerfilePath };
+}
+
 function parseArgs(argv) {
   let dockerfile = DEFAULT_DOCKERFILE;
   for (let i = 0; i < argv.length; i++) {
@@ -517,11 +554,12 @@ function main() {
   }
 
   const tag = `cicd-executor-inspect:${Date.now()}-${randomBytes(4).toString("hex")}`;
+  const { context, dockerfileArg } = resolveBuildContext(dockerfile);
 
   console.log(`Building image ${tag}`);
-  console.log(`  Dockerfile: ${dockerfile}`);
-  console.log(`  Context:    ${EXECUTOR_ROOT}`);
-  const build = spawnSync("docker", ["build", "-f", dockerfile, "-t", tag, EXECUTOR_ROOT], {
+  console.log(`  Dockerfile: ${dockerfileArg}`);
+  console.log(`  Context:    ${context}`);
+  const build = spawnSync("docker", ["build", "-f", dockerfileArg, "-t", tag, context], {
     stdio: "inherit",
   });
   if (build.error || build.status !== 0) {

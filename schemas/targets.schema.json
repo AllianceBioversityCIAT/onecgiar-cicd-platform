@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://onecgiar-cicd-platform/schemas/targets.schema.json",
   "title": "Target Registry",
-  "$comment": "@akili-spec changes/cicd-executor-poc requirements FR-02; design 7.7 (amended 2026-10-05), DD-21, DD-23 (Forma versionada). Map of targetId -> entry. Every entry carries only logical identifiers and references (DD-23): connectionRef/hostKeyRef/imageRepositoryRef, never inline host/port/user/credential/secret values — additionalProperties:false at every level means an inline field such as `password` or `privateKey` is rejected as an unrecognized property. `deployWindowPolicy` and the external-deployers declaration have NO default (requirements FR-02 scenario 'politica de ventana obligatoria'): both are mandatory on every entry. The two valid, mutually exclusive shapes (design 7.7 'Forma versionada DD-23', amended 2026-10-05) are expressed as oneOf: externalDeployersRef present => deployWindowPolicy MUST be 'required' (and only 'required' — this is the ONLY shape that may declare `required`, since a resolved, non-empty external-deployers list is what a deploy window protects); externalDeployers literal 'none' present => deployWindowPolicy MUST be 'not-required'. Per the amended design 7.7 table, `none` and `not-required` are logically equivalent (an empty external-deployers list REQUIRES `not-required`, and `not-required` REQUIRES an empty list) and neither oneOf branch admits `required` + `none` — that combination is invalid by construction (owner-approved ruling, execution.md 2026-10-05): a window must cover a non-empty list of external deployers, so a target with none declared could never satisfy a `required` policy. `migrationCompatibility`/`attestedBy` are required together, only when the `migration` block (migrations enabled) is present (design DD-11).",
+  "$comment": "@akili-spec changes/cicd-executor-poc requirements FR-02; design 7.7 (amended 2026-10-05), DD-21, DD-23 (versioned form); owner ruling (execution.md 2026-10-05, 'existence without reading'). Map of targetId -> entry. Every entry carries only logical identifiers and references (DD-23): connectionRef/hostKeyRef/credentialRef/imageRepositoryRef, never inline host/port/user/credential/secret values — additionalProperties:false at every level means an inline field such as `password` or `privateKey` is rejected as an unrecognized property. `credentialRef` is the SSH credential reference (owner ruling, execution.md 2026-10-05): it is REQUIRED on every entry, kept separate from `connectionRef` (which now resolves to non-sensitive identity JSON only — host/port/user, never a credential), and is existence-checked only at startup, never read by definition-service. `deployWindowPolicy` and the external-deployers declaration have NO default (requirements FR-02 scenario 'mandatory window policy'): both are mandatory on every entry. The two valid, mutually exclusive shapes (design 7.7 'versioned form DD-23', amended 2026-10-05) are expressed as oneOf: externalDeployersRef present => deployWindowPolicy MUST be 'required' (and only 'required' — this is the ONLY shape that may declare `required`, since a resolved, non-empty external-deployers list is what a deploy window protects); externalDeployers literal 'none' present => deployWindowPolicy MUST be 'not-required'. Per the amended design 7.7 table, `none` and `not-required` are logically equivalent (an empty external-deployers list REQUIRES `not-required`, and `not-required` REQUIRES an empty list) and neither oneOf branch admits `required` + `none` — that combination is invalid by construction (owner-approved ruling, execution.md 2026-10-05): a window must cover a non-empty list of external deployers, so a target with none declared could never satisfy a `required` policy. `migrationCompatibility`/`attestedBy` are required together, only when the `migration` block (migrations enabled) is present (design DD-11).",
   "type": "object",
   "minProperties": 1,
   "additionalProperties": false,
@@ -31,14 +31,19 @@
       "pattern": "^[a-z][a-z0-9-]*#<[A-Z][A-Z0-9_]*>#[a-z][a-z0-9-]*$",
       "$comment": "Logical lock key, e.g. deployment#<PRMS_REPORTING_DEV_TARGET>#prms-reporting-dev-unit (proposal 10.4)."
     },
+    "scriptName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9:_-]*$",
+      "$comment": "T-03 forward pointer (T-02 review): migration.check/run restricted to a script-name pattern — a package-script-style identifier the target resolves (e.g. `migration:check:ci`), never free text/arguments/shell metacharacters reaching the target (requirements NFR-01; design DD-11, §6.4)."
+    },
     "migration": {
       "type": "object",
       "required": ["component", "check", "run", "migrationCompatibility", "attestedBy"],
       "additionalProperties": false,
       "properties": {
         "component": { "$ref": "#/$defs/semanticId" },
-        "check": { "type": "string", "minLength": 1 },
-        "run": { "type": "string", "minLength": 1 },
+        "check": { "$ref": "#/$defs/scriptName" },
+        "run": { "$ref": "#/$defs/scriptName" },
         "migrationCompatibility": {
           "const": "backward-compatible",
           "$comment": "requirements FR-13 precondition / design DD-11: the ONLY accepted value. A target with migrations enabled and no (or any other) value here is an invalid definition."
@@ -46,26 +51,32 @@
         "attestedBy": {
           "type": "string",
           "minLength": 1,
-          "$comment": "Who attests backward compatibility (application team, not the platform — design DD-11: 'la plataforma must NOT presentar esa propiedad como garantizada')."
+          "$comment": "Who attests backward compatibility (application team, not the platform — design DD-11: the platform must NOT present this property as guaranteed)."
         }
       }
     },
     "container": {
       "type": "object",
-      "required": ["name", "imageRepositoryRef"],
+      "required": ["name", "imageRepositoryRef", "portRef"],
       "additionalProperties": false,
+      "$comment": "T-03 (FR-02 'port or name conflict', DD-23): `portRef` is a reference, resolved by SecretProvider at startup to the real --port host:container mapping (design §6.4) — never an inline port value. Required so the duplicate-port rule has something to compare, at the logical-reference level in CI and at the resolved-value level at startup.",
       "properties": {
         "name": { "$ref": "#/$defs/containerName" },
         "imageRepositoryRef": { "$ref": "#/$defs/logicalRef" },
+        "portRef": { "$ref": "#/$defs/logicalRef" },
         "envSecretRef": { "$ref": "#/$defs/logicalRef" }
       }
     },
     "targetEntryBase": {
       "type": "object",
-      "required": ["connectionRef", "hostKeyRef", "lockKey", "containers"],
+      "required": ["connectionRef", "hostKeyRef", "credentialRef", "lockKey", "containers"],
       "properties": {
         "connectionRef": { "$ref": "#/$defs/logicalRef" },
         "hostKeyRef": { "$ref": "#/$defs/logicalRef" },
+        "credentialRef": {
+          "$ref": "#/$defs/logicalRef",
+          "$comment": "SSH credential reference (owner ruling, execution.md 2026-10-05): kept separate from connectionRef (non-sensitive identity only). Existence-checked only at startup, never read by definition-service — read only by the SSH handler at use time (design §7.5)."
+        },
         "lockKey": { "$ref": "#/$defs/lockKey" },
         "containers": {
           "type": "array",
@@ -86,6 +97,7 @@
           "properties": {
             "connectionRef": { "$ref": "#/$defs/logicalRef" },
             "hostKeyRef": { "$ref": "#/$defs/logicalRef" },
+            "credentialRef": { "$ref": "#/$defs/logicalRef" },
             "lockKey": { "$ref": "#/$defs/lockKey" },
             "containers": {
               "type": "array",
@@ -105,6 +117,7 @@
           "properties": {
             "connectionRef": { "$ref": "#/$defs/logicalRef" },
             "hostKeyRef": { "$ref": "#/$defs/logicalRef" },
+            "credentialRef": { "$ref": "#/$defs/logicalRef" },
             "lockKey": { "$ref": "#/$defs/lockKey" },
             "containers": {
               "type": "array",

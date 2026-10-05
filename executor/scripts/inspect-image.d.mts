@@ -46,3 +46,10 @@ export declare function describeDockerUnavailable(result: {
   readonly status?: number | null | undefined;
   readonly stderr?: string | null | undefined;
 }): string;
+
+export interface BuildContext {
+  readonly context: string;
+  readonly dockerfileArg: string;
+}
+
+export declare function resolveBuildContext(dockerfilePath: string): BuildContext;

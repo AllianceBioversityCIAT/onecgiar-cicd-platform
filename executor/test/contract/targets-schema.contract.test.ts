@@ -30,6 +30,13 @@ describe("schemas/targets.schema.json (FR-02)", () => {
     expect(ok, JSON.stringify(validate.errors)).toBe(true);
   });
 
+  it("accepts an entry that declares credentialRef alongside connectionRef (owner ruling, execution.md 2026-10-05: SSH credential kept separate from host identity)", () => {
+    const fixture = clone(validRegistry);
+    const entry = fixture["prms-reporting-dev"]!;
+    expect(typeof entry.credentialRef).toBe("string");
+    expect(validate(fixture), JSON.stringify(validate.errors)).toBe(true);
+  });
+
   it("accepts the not-required/none branch (design 7.7 amended: none ⇔ not-required)", () => {
     const fixture = clone(validRegistry);
     const entry = fixture["prms-reporting-dev"]!;
@@ -47,6 +54,13 @@ describe("schemas/targets.schema.json (FR-02)", () => {
       expect(validate(fixture)).toBe(false);
     });
 
+    it("rejects an entry missing credentialRef (owner ruling, execution.md 2026-10-05: SSH credential is required, kept separate from connectionRef)", () => {
+      const fixture = clone(validRegistry);
+      const entry = fixture["prms-reporting-dev"]!;
+      delete entry.credentialRef;
+      expect(validate(fixture)).toBe(false);
+    });
+
     it("rejects an entry that omits deployWindowPolicy entirely", () => {
       const fixture = clone(validRegistry);
       const entry = fixture["prms-reporting-dev"]!;
@@ -59,8 +73,8 @@ describe("schemas/targets.schema.json (FR-02)", () => {
       const entry = fixture["prms-reporting-dev"]!;
       entry.deployWindowPolicy = "not-required";
       // externalDeployersRef is still present — exactly the forbidden combination
-      // (requirements FR-02 'política de ventana obligatoria': "declara
-      // desplegadores externos con una política que no exige ventana").
+      // (requirements FR-02 'mandatory window policy': "declares external
+      // deployers with a policy that does not require a window").
       expect(validate(fixture)).toBe(false);
     });
 
@@ -68,9 +82,9 @@ describe("schemas/targets.schema.json (FR-02)", () => {
       const fixture = clone(validRegistry);
       const entry = fixture["prms-reporting-dev"]!;
       // deployWindowPolicy stays "required", but neither externalDeployersRef
-      // nor externalDeployers: none is declared — requirements FR-02 'política
-      // de ventana obligatoria': "omite la declaración de desplegadores
-      // externos ... se rechaza antes de cualquier deploy".
+      // nor externalDeployers: none is declared — requirements FR-02 'mandatory
+      // window policy': "omits the external-deployers declaration ...
+      // rejected before any deploy".
       delete entry.externalDeployersRef;
       expect(validate(fixture)).toBe(false);
     });
@@ -111,6 +125,33 @@ describe("schemas/targets.schema.json (FR-02)", () => {
       const entry = fixture["prms-reporting-dev"]!;
       const migration = entry.migration as Record<string, unknown>;
       delete migration.migrationCompatibility;
+      expect(validate(fixture)).toBe(false);
+    });
+
+    it("rejects a migration.run value outside the script-name pattern (T-03 forward pointer, T-02 review)", () => {
+      const fixture = clone(validRegistry);
+      const entry = fixture["prms-reporting-dev"]!;
+      const migration = entry.migration as Record<string, unknown>;
+      // Free text / shell-metacharacter-bearing value instead of a
+      // package-script-style identifier (schemas/targets.schema.json
+      // $defs/scriptName).
+      migration.run = "migration:run; rm -rf /";
+      expect(validate(fixture)).toBe(false);
+    });
+
+    it("rejects a migration.check value outside the script-name pattern", () => {
+      const fixture = clone(validRegistry);
+      const entry = fixture["prms-reporting-dev"]!;
+      const migration = entry.migration as Record<string, unknown>;
+      migration.check = "Migration Check CI"; // uppercase/spaces: not a script-name
+      expect(validate(fixture)).toBe(false);
+    });
+
+    it("rejects an entry missing portRef on a container", () => {
+      const fixture = clone(validRegistry);
+      const entry = fixture["prms-reporting-dev"]!;
+      const containers = entry.containers as Array<Record<string, unknown>>;
+      delete containers[0]!.portRef;
       expect(validate(fixture)).toBe(false);
     });
 

@@ -148,3 +148,45 @@
 | Estado final | **PASS** |
 | Requisitos | FR-11, FR-16 F17–F18 · DD-09, §7.6 |
 | spawns (intento 2) | implementer 23 calls, 81903 tokens, ended complete; reviewer ended complete |
+| Attempt 2 | Allowlists for resolved refs (`envSecretRef` never resolved); resolved-value duplicate detection by parsed `host`, resolved container `name`, published host port; `requireInjectedRef` in production; `BUILD_INFO.json` removed; `CICD_DEFINITIONS_ROOT`; end-to-end `validateForCi` cases; English translation of touched files. check:local 846/846. Evidence re-run: **VERIFIED** (T-03 suites 86/86, 0 type errors, 0 prod vulns) |
+| Reviewer attempt 2 | **FAIL** (`opus`). Attempt-1 findings resolved; §7.7 (amended) conformant. New: (1) three Spanish fragments left (`.dockerignore`, `definition-service/index.ts`, `reference-resolution.ts`); (2) `parseResolvedExternalDeployers` echoes resolved values into error text (NFR-02, DD-23); (3) **spec tension**: design §7 `definition-service` row prohibits reading secret values, while startup reads GitHub/Slack tokens and the SSH connection secret (host+user+credential) only to prove existence (DD-23) |
+| **Owner ruling (spec tension, 2026-10-05)** | **"Existence without reading" (least privilege).** `SecretProvider` gains an existence-only check (AWS: `DescribeSecret`, never the value). Credential refs (`repository.credentialRef`, Slack `tokenRef`, and the new SSH `credentialRef`) are existence-checked only at startup. `getSecret` is used at startup only for non-sensitive identifier refs. The Target Registry splits the connection into `connectionRef` (non-sensitive identity JSON `{host, port, user}`) and `credentialRef` (SSH key or password, read only by the SSH handler at use time and kept in memory). Spec amendment to DD-23 and design §7 to be applied once the in-progress English translation of `design.md` lands |
+| Attempt 3 (last) | In progress: the ruling above, plus findings 1–2 and the advisory (no resolved identifiers in error text, target IDs only) |
+| spawns (attempt 2) | implementer 137 calls, 236055 tokens, ended complete; reviewer 13 calls, 98641 tokens, ended complete |
+
+### Language normalization (owner directive, 2026-10-05)
+
+| Field | Value |
+|---|---|
+| Directive | Owner: all code, its documentation and commits must be in English (conversation stays in Spanish). Scope extended by the owner to the spec documents under `docs/specs/` |
+| Rule placement | `CLAUDE.md` ("Language"), `AGENTS.md`, `.agents/{leader,implementer,reviewer}.md` (Reviewer item 6: Spanish in committed code is a FAIL) |
+| Part 1 (code) | Translated comments, JSDoc and test titles in `domain/{state-machine,errors,lock-policy}`, their tests and `schemas/pipeline.schema.json`. No behavior change: identical test counts (646/30/43/41) green; zero Spanish by scan and manual read. Leader verified counts inline. Commit `7abda3c` |
+| Leader slip | Commit `7abda3c` staged `executor/src/domain` broadly and swept in the in-progress T-07 file `domain/events/index.ts` before its review. Not destructive; T-07's review covers the full content (diff vs `206ca9f`) and its final commit will land the rest. Lesson: stage explicit paths only |
+| Specs | `proposal`, `requirements`, `design`, `judgment` being translated (separate agent, fidelity checks on table rows/headings/IDs). `tasks.md` and `execution.md` translated at the end of Gate A; new `execution.md` entries already written in English |
+
+### T-07 — Event envelope, normalization and orphan events · in progress
+
+| Field | Value |
+|---|---|
+| Attempt 1 | Files: `domain/events/index.ts`, `application/event-router/{index,schema-validation}.ts`, `test/unit/event-{normalizers,router}.test.ts` (23), `test/fixtures/aws/*` (9 synthetic, marked provisional; P-1/P-17/P-18). Falsifier: disabling the externalRef check → STALE_ATTEMPT test red. Evidence re-run: **VERIFIED** (0 type errors, 23/23, lint clean) |
+| Reviewer attempt 1 | **FAIL** (`opus`): four Spanish comment fragments (English-only rule). Everything else conformant (schema via DefinitionSource, FR-09/§7.2 classification, orphan paths, poison error, provisional fixtures) |
+| Leader decisions for attempt 2 (execute-time, from advisories) | (B) a result for the current attempt arriving while the step is still DISPATCHING without `externalRef` returns `RETRY_LATER` (left unacknowledged for SQS redelivery) instead of being acked as orphan; Lambda correlates on the current `dispatchToken` per design §6.1 (FR-04 names `requestId`; the design is more specific and wins). (C) `environment` comes from the execution record, not hardcoded. (D) Ajv error details (no payload values) in `MalformedEventError` |
+| Forward pointers | **T-10 (dispatcher):** for lambda steps `externalRef` is the `dispatchToken`; write it consistently. **T-18 (consumer):** `RETRY_LATER` and `MalformedEventError` must not be acknowledged |
+| Attempt 2 | Translated fragments; `RETRY_LATER` for CodeBuild results arriving in DISPATCHING without `externalRef`; Lambda correlates on `dispatchToken`; `environment` from lookup; Ajv paths/messages in `MalformedEventError`; +4 router tests (27 total). Falsifiers: RETRY_LATER removed → red; Lambda by externalRef → red. Evidence re-run: **VERIFIED** |
+| Reviewer attempt 2 | **PASS** (`opus`). No Spanish; decisions B–D sound; RETRY_LATER bounded by maxReceiveCount→DLQ and reconciler T13/T12 |
+| ADVISORY | Log/metric for RETRY_LATER + DLQ triage note in runbook (T-22); EventBridge rule must filter terminal `build-status` (T-28 / infra inventory T-22); internal producers keep `attempt` current (T-10); `MalformedEventError.rawMessage` must not be dumped to logs (T-18) |
+| Final status | **PASS** |
+| Requirements | FR-04, FR-07, FR-09 · §6.1–§6.3, §7.2, DD-02, DD-19 |
+| spawns | implementer attempt 1 113 calls 211801 tokens complete; reviewer 10 calls 93792 tokens complete; implementer attempt 2 66 calls 154269 tokens complete; reviewer complete |
+
+### T-03 — final
+
+| Field | Value |
+|---|---|
+| Attempt 3 | Owner ruling implemented (`SecretProvider.exists()`; credential refs existence-only; `connectionRef` identity-only with credential-field rejection; required `credentialRef`); no resolved values in any error text; remaining Spanish translated. 93/93. Falsifiers: 4 mutations red, reverted. Evidence re-run: **VERIFIED** |
+| Reviewer attempt 3 | **PASS** (`opus`). Ruling conformant; earlier fixes intact; English-only clean; no internal identifiers |
+| ADVISORY | Sanitize provider `cause.message` (possible ARN/account ID) in the AWS adapter task; formal DD-23/§7 amendment pending (spec translation); prefer an allowlist `{host, port, user}` for the identity JSON over a credential-key denylist |
+| Forward pointers | **Secrets adapter (Gate B):** `exists()` via `DescribeSecret`; never surface ARNs in errors. **T-18:** call `validateForStartup` before consuming |
+| Final status | **PASS** |
+| Requirements | FR-01, FR-02, NFR-01, NFR-02, NFR-08 · DD-19, DD-23 (+ owner ruling), §7, §7.7 |
+| spawns | attempt 1 implementer 136 calls 318403 tokens complete (+1 continuation); attempt 2 implementer 137 calls 236055 tokens complete; attempt 3 implementer 112 calls 205463 tokens complete; 3 reviewers complete |

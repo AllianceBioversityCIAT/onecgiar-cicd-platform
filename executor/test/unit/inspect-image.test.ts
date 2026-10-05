@@ -46,6 +46,8 @@
 //   - dropping /run from isForbiddenVolumePath turns "FAILs when Volumes
 //     declares /run" red.
 
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   buildInContainerScript,
@@ -54,7 +56,12 @@ import {
   evaluateVolumes,
   FORBIDDEN_NAMES,
   parseInspectionOutput,
+  resolveBuildContext,
 } from "../../scripts/inspect-image.mjs";
+
+const EXECUTOR_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const REPO_ROOT = path.resolve(EXECUTOR_ROOT, "..");
+const DEFAULT_DOCKERFILE = path.join(EXECUTOR_ROOT, "Dockerfile");
 
 describe("buildInContainerScript (in-container POSIX sh boundary check)", () => {
   const script = buildInContainerScript();
@@ -318,5 +325,20 @@ describe("evaluateUser (host-side `docker image inspect .Config.User` check)", (
 
   it("passes when Config.User is a non-zero numeric UID", () => {
     expect(evaluateUser("1000")).toEqual({ ok: true, reasons: [] });
+  });
+});
+
+describe("resolveBuildContext (T-03, design DD-19: definitions live at the repo root, outside executor/)", () => {
+  it("builds the DEFAULT (real) Dockerfile with the REPO ROOT as context and a repo-root-relative -f path", () => {
+    const { context, dockerfileArg } = resolveBuildContext(DEFAULT_DOCKERFILE);
+    expect(context).toBe(REPO_ROOT);
+    expect(dockerfileArg).toBe(path.join("executor", "Dockerfile"));
+  });
+
+  it("keeps the OLD executor-root context for a --dockerfile override (T-01 falsifier fixtures)", () => {
+    const falsifierPath = path.join(EXECUTOR_ROOT, "test", "fixtures", "dockerfiles", "Dockerfile.falsifier-docker-cli");
+    const { context, dockerfileArg } = resolveBuildContext(falsifierPath);
+    expect(context).toBe(EXECUTOR_ROOT);
+    expect(dockerfileArg).toBe(falsifierPath);
   });
 });
