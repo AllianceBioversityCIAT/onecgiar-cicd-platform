@@ -96,13 +96,14 @@ Gate C: T-32 → T-33 → T-34 → T-35 → T-36
 ### T-01 — Esqueleto del proyecto Executor y puertos
 | Campo | Valor |
 |---|---|
-| Status / Size / Gate | pending · M · **A (ejecutable)** |
+| Status / Size / Gate | **[x] done (local)**, validación por entorno DIFERIDA (Docker) · M · **A** |
 | Objetivo | Proyecto TypeScript estricto con la estructura hexagonal de §4.2, interfaces de puertos y un `Dockerfile` mínimo **sin toolchains de build de aplicaciones** |
 | Depends on | T-00 |
 | Requisitos / Diseño | NFR-01, NFR-08 · DD-01, DD-05, DD-15, §4.2, §3.2 |
 | Archivos | `executor/package.json`, `tsconfig`, `executor/src/ports/*` (StateStore, ArtifactStore, QueuePublisher, DefinitionSource, SecretProvider, GitClient, StepHandler, NotificationProvider, Clock), `executor/Dockerfile`, configuración de lint y tests |
 | Alcance | Excluye implementaciones de adaptadores |
 | Tests / verificación | type-check + lint + suite vacía verde; build de la imagen; inspección de que la imagen no tiene `npm` de build de aplicaciones, `mvn`, CLI de Docker ni socket montado |
+| Validación por entorno (decisión del owner, 2026-10-05) | **Local, sin Docker (gate de T-01 en Gate A):** `npm install`, typecheck, lint, build de TypeScript, tests unitarios y de integración que no requieren Docker, chequeo de dependencias, inspección estática del Dockerfile y guardas NFR-01 con sus fixtures negativos. **Diferida por entorno, obligatoria antes de desplegar en el servidor de microservicios:** `docker build`, inspección de la imagen en ejecución (`npm run inspect:image`, incluidos los fixtures de falsificación), verificación NFR-01 en runtime, arranque y salud del contenedor. Los criterios de Docker **no se eliminan ni se debilitan**: se reclasifican como dependientes del entorno. No se añaden a la imagen runtime npm, CLI de Docker ni toolchains para facilitar el desarrollo local |
 | Falsifier | Añadir la CLI de Docker al `Dockerfile` → la inspección de frontera falla |
 | Red run | Ejecutar la inspección con una imagen base que incluya la CLI de Docker y citar la salida roja |
 | Disqualifier | Un type-check que pasa con `skipLibCheck` sobre puertos mal tipados no es evidencia: los puertos deben compilar sin desactivar la comprobación |

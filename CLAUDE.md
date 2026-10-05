@@ -16,7 +16,7 @@ No hay `docs/prd.md`, `docs/trd/trd.md` ni `docs/ux-ui/design.md` (constitución
 
 ## Stack
 
-- Node.js 20+ (LTS), TypeScript estricto, ESM. Sin framework web (design DD-15).
+- Node.js 22 LTS (runtime e imagen), TypeScript estricto, ESM. Sin framework web (design DD-15). Ver `executor/package.json` (`engines`).
 - Tests: `vitest`. Schemas: JSON Schema con `ajv`. AWS SDK v3. SSH: `ssh2`.
 - Script del target: `bash` (corre en Linux; design §6.4).
 
@@ -29,6 +29,8 @@ No hay `docs/prd.md`, `docs/trd/trd.md` ni `docs/ux-ui/design.md` (constitución
 | `npm run lint` | Lint |
 | `npm test` | Tests unitarios y de integración locales |
 | `npm run validate` | Valida definiciones y registro, y corre las guardas de frontera (T-21) |
+| `npm run check:local` | Gate local sin Docker: typecheck, lint, build, tests, `check:deps` |
+| `npm run inspect:image` | Inspección real de la imagen (**requiere Docker**; validación diferida por entorno, obligatoria antes de desplegar) |
 
 ## Reglas no negociables
 

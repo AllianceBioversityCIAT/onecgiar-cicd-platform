@@ -1,0 +1,77 @@
+# @akili-spec changes/cicd-executor-poc requirements NFR-01; design §4.2
+#
+# T-01 attempt 4 falsifier fixture: an otherwise-faithful copy of
+# ../../../Dockerfile with Maven (and the JDK it depends on) installed via
+# apt in the final (shipped) stage. This exists specifically to exercise the
+# blind spot the attempt 3 review found in scripts/inspect-image.mjs: on
+# Debian, `apt-get install maven` places /usr/bin/mvn and /usr/bin/java as
+# symlinks (through /etc/alternatives/) to their real binaries under
+# /usr/share/maven/bin and /usr/lib/jvm/..., neither of which was ever a
+# regular executable FILE in the old SCAN_DIRS-based `find` expression — so
+# the old gate produced a false PASS against exactly this mutation.
+#
+# The real, dynamic gate (scripts/inspect-image.mjs) MUST fail against this
+# fixture once a Docker daemon is reachable:
+#   npm run inspect:image -- --dockerfile test/fixtures/dockerfiles/Dockerfile.falsifier-maven
+# expected: non-zero exit, BOUNDARY_FAIL lines naming "mvn" and/or "java"
+# (via both the `command -v` check and the symlink-aware `find` sweep).
+#
+# Also caught today by the static scanner
+# (test/support/dockerfile-boundary-scanner.ts — "forbidden-package:maven
+# package" / "forbidden-package:JDK package").
+#
+# Do not "fix" this file — it exists to demonstrate the gate can go red.
+
+FROM node:22-slim AS builder
+
+WORKDIR /build
+
+COPY package.json package-lock.json tsconfig.json ./
+RUN npm ci
+
+COPY src ./src
+RUN npm run build
+
+FROM node:22-slim AS deps
+
+WORKDIR /build
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
+
+FROM node:22-slim AS runtime
+
+# Falsifier mutation: installs Maven (and transitively a JDK) into the
+# shipped stage via apt, which places symlinks in /usr/bin pointing at real
+# binaries under /usr/share/maven and /usr/lib/jvm.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates maven \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY package.json ./package.json
+COPY --from=deps /build/node_modules ./node_modules
+COPY --from=builder /build/dist ./dist
+
+RUN rm -rf \
+      /usr/local/lib/node_modules/npm \
+      /usr/local/lib/node_modules/corepack \
+      /usr/local/bin/npm \
+      /usr/local/bin/npx \
+      /usr/local/bin/corepack \
+      /usr/local/bin/yarn \
+      /usr/local/bin/yarnpkg \
+      /usr/local/bin/pnpm \
+      /usr/local/bin/pnpx \
+      /opt/yarn-*
+
+RUN groupadd --system executor \
+    && useradd --system --gid executor --home-dir /app --no-create-home executor \
+    && chown -R executor:executor /app
+
+USER executor
+
+ENV NODE_ENV=production
+
+CMD ["node", "dist/src/main/index.js"]
