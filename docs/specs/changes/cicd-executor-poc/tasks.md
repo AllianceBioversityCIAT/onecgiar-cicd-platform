@@ -430,7 +430,7 @@ Gate C: T-32 → T-33 → T-34 → T-35 → T-36
 ### T-20 — Ingress de webhook GitHub (código) · SHOULD
 | Campo | Valor |
 |---|---|
-| Status / Size / Gate | pending · M · **A (ejecutable; despliegue en T-30)** |
+| Status / Size / Gate | **[x] done** (deployment in T-30) · M · **A** |
 | Objetivo | Contrato de §6.6: HMAC en tiempo constante, eventos aceptados, mapeo rama → definiciones vía `DefinitionSource`, `requestId` por entrega y pipeline |
 | Depends on | T-03, T-07 |
 | Requisitos / Diseño | FR-20 (firma inválida, rama no configurada) · §6.6, DD-20 |

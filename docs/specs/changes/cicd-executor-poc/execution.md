@@ -205,3 +205,30 @@
 | Final status | **PASS** |
 | Requirements | FR-06, FR-16 F5 · DD-06, §7.3 |
 | spawns (attempt 2) | implementer 39 calls, 93178 tokens, complete; reviewer complete |
+
+### T-17 — Observability · in progress
+
+| Field | Value |
+|---|---|
+| Attempt 1 | Files: `observability/{logger,metrics,heartbeat}/*`, 5 test files (33). Falsifier: PEM pattern removed → red (an inert fixture was found and fixed first). Evidence re-run: **VERIFIED** |
+| Reviewer attempt 1 | **FAIL** (`opus`): redaction leaks — presigned URL security token and `ASIA` keys; key-only tokens and `Authorization` schemes; Error instances / null-prototype objects / non-string sensitive values; suffix keys (`db_password`), multi-word quoted values, truncated PEM |
+| Attempt 2 | In progress (also: fields cannot overwrite context; end-to-end corpus through the logger; heartbeat ticks on start, try/catch, atomic healthcheck write) |
+
+### T-20 — GitHub webhook ingress · in progress
+
+| Field | Value |
+|---|---|
+| Attempt 1 | New package `ingress/github-webhook/` (pure core + adapters; 25 tests). Falsifier: `timingSafeEqual` swapped → structural test red. Evidence re-run: **VERIFIED** |
+| Reviewer attempt 1 | **FAIL** (`opus`): §6.6 requires `WEBHOOK_UNMATCHED` and "ignored and logged" log entries; the package logs nothing |
+| Leader ruling (recorded) | The ingress uses its own minimal `PipelineDefinitionReader` (list capability) over the same bundled `pipeline-definitions/` instead of the Executor's `DefinitionSource` (no list capability; task scope limited to the ingress package). Acceptable; a future task may add a list capability to `DefinitionSource` and schema validation to the reader |
+| Attempt 2 | In progress (logger port + structured entries + no-secret test; truthful comments on ref resolution; environment from definition; omit empty `after`) |
+
+### Spec translation and amendment
+
+| Field | Value |
+|---|---|
+| Translation | `proposal`, `requirements`, `design`, `judgment` translated to English; fidelity review **PASS** (identical line/row/heading/ID counts; no meaning changes); review wording suggestions applied. Commit `8081bc8` |
+| Amendment applied | design v3.2: DD-23 and §7 `definition-service` row amended per the owner's "existence without reading" ruling (see T-03) |
+| T-20 attempt 2 | Logger port + `StdoutJsonLogger`; `WEBHOOK_UNMATCHED`, `EVENT_IGNORED`, `MALFORMED_PAYLOAD`, `MISSING_DELIVERY_ID` entries without payload contents; NFR-02 no-secret test; environment from definition; omit empty `after`; truthful ref-resolution comments. 30/30. Falsifiers: 2 red. Evidence re-run: **VERIFIED** |
+| T-20 reviewer attempt 2 | **PASS** (`opus`) |
+| T-20 final status | **PASS** · Requirements FR-20, FR-03, NFR-02 · §6.6, DD-20 · spawns: implementer a1 70 calls 136111 tokens; reviewer 14 calls 93037 tokens; implementer a2 73 calls 143413 tokens; reviewer complete |

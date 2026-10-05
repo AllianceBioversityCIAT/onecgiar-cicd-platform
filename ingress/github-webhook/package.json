@@ -1,0 +1,30 @@
+{
+  "name": "cicd-ingress-github-webhook",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GitHub webhook ingress (PoC, T-20) — design §6.6 / requirements FR-20 (SHOULD). Verifies X-Hub-Signature-256 and enqueues one PIPELINE_REQUESTED per matching github-push pipeline definition. Deployment is Gate B (T-30); this package is code-only. See docs/specs/changes/cicd-executor-poc/.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sqs": "^3.1146.0",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^22.7.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "eslint": "^9.12.0",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.8.1",
+    "vitest": "^2.1.2"
+  }
+}
