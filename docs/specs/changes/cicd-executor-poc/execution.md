@@ -206,7 +206,7 @@
 | Requirements | FR-06, FR-16 F5 · DD-06, §7.3 |
 | spawns (attempt 2) | implementer 39 calls, 93178 tokens, complete; reviewer complete |
 
-### T-17 — Observability · in progress
+### T-17 — Observability · done
 
 | Field | Value |
 |---|---|
@@ -234,7 +234,10 @@
 | T-20 final status | **PASS** · Requirements FR-20, FR-03, NFR-02 · §6.6, DD-20 · spawns: implementer a1 70 calls 136111 tokens; reviewer 14 calls 93037 tokens; implementer a2 73 calls 143413 tokens; reviewer complete |
 | T-17 attempt 2 | Widened presigned/AKIA|ASIA patterns, suffix-based sensitive keys with exemptions, Error normalization, generic object walk, suffix key/value and truncated PEM patterns; logger field-override fix; e2e corpus; heartbeat tick-on-start/try-catch; atomic healthcheck write. 83/83. 5 falsifiers red. Evidence re-run: **VERIFIED** |
 | T-17 reviewer attempt 2 | **FAIL** (`opus`): tokens inside string content leak (key=value, JSON bodies, `X-Amz-Security-Token:` header, `ghs_`/`github_pat_`); cyclic objects crash the logger (no cycle guard; BigInt throws); `idempotencyToken` (a correlation id per DD-04) over-redacted |
-| T-17 attempt 3 (last) | In progress, plus advisories (Error.cause, ARN over-redaction, SigV4/SigV2 signatures, URL credentials, extra keys, heartbeat separate try blocks) |
+| T-17 attempt 3 (last) | String-content vocabulary extended (`token`, `api_key`, `authorization`, `passwd`, `pwd`, `cookie`, `sshkey`, JSON-quoted keys, header-colon form), `gh[opusr]_`/`github_pat_`, standalone `Signature=`, URL basic-auth credentials, `secretsmanager` ARN over-redaction fixed; `WeakSet` ancestor-path cycle guard; `safeStringify` fallback (BigInt); `idempotencyToken`/`nextToken` exempted (DD-04); `Error.cause`/`AggregateError.errors`; heartbeat split try blocks. 115/115. 4 falsifiers red. Evidence re-run (Leader): typecheck + lint clean, 115/115 — **VERIFIED** |
+| T-17 reviewer attempt 3 | **PASS** (`opus`): all three findings resolved; corpus still covers every §12 secret type (PEM falsifier still red when removed); exemptions exact-match only (`xDispatchToken` still redacted); `executionId` cannot be overridden by callers; EMF set matches §12; NFR-01 clean |
+| Advisory (non-gating) | (1) add `private[-_]?key` / `secret[-_]?access[-_]?key` to the string-content vocabulary; (2) JSON values with escaped quotes leak the tail — use `"((?:\.|[^"\])*)"`; (3) treat Buffer/typed arrays as opaque; (4) minor over-redaction (`tokenCount=`, presigned tail); (5) test uses the AWS documentation account placeholder — prefer `<AWS_ACCOUNT_ID>`-style (relevant to T-21 guard 4); (6) Map/Set serialize to `{}` |
+| Status | **Done** |
 
 ### T-22 — Infrastructure inventory and base runbooks · done
 

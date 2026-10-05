@@ -378,7 +378,7 @@ Gate C: T-32 → T-33 → T-34 → T-35 → T-36
 ### T-17 — Observabilidad: logger con redacción, métricas y heartbeat
 | Campo | Valor |
 |---|---|
-| Status / Size / Gate | pending · S · **A (ejecutable)** |
+| Status / Size / Gate | **[x] done** · S · **A** |
 | Objetivo | Logger JSON con contexto y redacción (tokens, password, secret, PEM, URLs presignadas); métricas EMF de §12; heartbeat y archivo de healthcheck |
 | Depends on | T-01 |
 | Requisitos / Diseño | FR-17 (reconstrucción, redacción), NFR-02, NFR-05, NFR-06 · §12 |
