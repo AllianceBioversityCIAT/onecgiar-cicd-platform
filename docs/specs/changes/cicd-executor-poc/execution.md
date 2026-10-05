@@ -79,3 +79,33 @@
 | Decisiones | Adjudicación del Leader (el gate es la imagen real; el escáner es un pre-check); 4.º intento excepcional autorizado por el owner; reclasificación de la validación por entorno por decisión del owner; `CLAUDE.md` actualizado (Node 22 LTS, `check:local`, `inspect:image`) |
 | Budget | T-01 consumió 5 rondas de review (≈1,5 presupuestadas por tarea). Acumulado del spec: 7 rondas en 2 tareas. Dentro del total (~50), con una tendencia que se vigila |
 | spawns (intento 5) | implementer 62 calls, 157412 tokens, ended partial (Docker diferido por decisión del owner); reviewer ended complete |
+
+> **Modo de avance (2026-10-05):** la instrucción del owner ("ejecutar T-00 a T-22 y detenerse al final") se trata como aprobación del avance rutinario dentro del Gate A: los gates de continuar o pausar entre tareas se pasan con el registro `auto-approved (owner Gate A mandate)`. HALT, Pivot, budget tripwire, `FATAL_FAIL`, una decisión abierta o una validación diferida por entorno siguen deteniendo para el owner.
+
+### T-04 — Máquina de estados: lista cerrada T1–T13 · en curso
+
+| Campo | Valor |
+|---|---|
+| Intento 1 | Archivos: `executor/src/domain/state-machine/index.ts`, `executor/src/domain/errors/index.ts`, `executor/test/unit/state-machine.test.ts` (576 tests; cartesiano de 520 casos). Falsifier T9 50→40 → 5 rojos. Red run (rechazar todo) → 69 rojos. Re-run de evidencia: **VERIFIED** (576/576, 0 errores de tipos en sus archivos, lint limpio) |
+| Reviewer intento 1 | **FAIL** (`opus`). (1) Falta la máquina de estados de **ejecución** (QUEUED…CANCELLED), dentro del alcance de T-04 según FR-05. (2) Las guardas nunca se prueban con valores falsos: borrar casi cualquier guarda deja la suite en verde. (3) T7/T8 aceptan códigos que evitan §7.2 y la regla canónica (`FAILED(TARGET_BUSY)`, `LOCK_TIMEOUT`, `INVALID_TRANSITION`, `DEPLOY_WINDOW_CLOSED` en no-ssh, FAILED sin código) |
+| ADVISORY intento 1 | Tests tautológicos (L259, L489, L210); T3 no incrementa `attempt`; T6 de `ssh` sin entrada V4; deadlines a cargo de la capa de aplicación; `classifyDeployExitCode` lanza excepción con 0 |
+| Intento 2 | En curso. Esfuerzo xhigh. Guía del Leader: la cadena de ejecución está especificada en la fuente (proposal §10.6 y la tabla de FR-05): QUEUED→RUNNING→{SUCCEEDED, FAILED, TIMED_OUT, CANCELLED}. No inventar transiciones; un hueco se reporta como hueco de la spec |
+| spawns (intento 1) | implementer 49 calls, 184284 tokens, ended complete; reviewer 14 calls, 89825 tokens, ended complete |
+
+### T-02 — Schemas versionados y definición semántica · en curso
+
+| Campo | Valor |
+|---|---|
+| Intento 1 | Archivos: `schemas/{pipeline,targets,event}.schema.json`, `pipeline-definitions/prms/reporting-dev.yaml`, `pipeline-definitions/targets/dev.yaml`, `executor/test/contract/*` (25 tests), `executor/package.json` (ajv, ajv-formats y yaml como dev). Falsifier: quitar `deployWindowPolicy` de `oneOf[0].required` → rojo. Re-run de evidencia: **VERIFIED** (`check:local` 687/687; búsqueda de identificadores internos limpia) |
+| Reviewer intento 1 | **FAIL** (`opus`). (1) Falta un caso negativo para "omite la declaración de desplegadores externos" y un positivo de la rama `none` + `not-required`. (2) Tensión de spec: `none` ⇒ `not-required` en el schema frente a la tabla de §7.7, que permitía `required` + vacío. (3) `interpolableString` acepta `$(...)` y backticks (script embebido, FR-01 `AND IT MUST`) |
+| ADVISORY intento 1 | Mensaje "reservado, no habilitado" → T-03 (lista reutilizable en `$defs`); `STEP_RETRY`/`LOCK_RETRY` exigen `status` (validar con T-07); `openedBy`/`externalJobsDisabled` en el nivel superior y falta `closesAt`; ajv y yaml deberán pasar a dependencias de producción en T-03; sin caso dedicado para la omisión de `migrationCompatibility` |
+| **Enmienda de spec (tensión → owner)** | El owner aprobó "`none` ⇒ `not-required`". Edición de design §7.7 (tabla y "Forma versionada"): la lista vacía exige `not-required`, y `required` + vacío es inválido. Se registra para el brief del Reviewer de la próxima tarea |
+| Intento 2 | En curso: casos de corpus para (1), rechazo de `$(`, backticks y `$` suelto para (3), `$comment` alineado con la enmienda para (2) |
+| spawns (intento 1) | implementer 79 calls, 205259 tokens, ended complete; reviewer 12 calls, 92152 tokens, ended complete |
+| Intento 2 | Archivos: `schemas/pipeline.schema.json` (`interpolableString` estricto, `argString` sin `;|&<>`), `schemas/targets.schema.json` (`$comment` alineado con la enmienda), `executor/test/contract/{targets,pipeline}-schema.contract.test.ts` (33 tests). Falsifiers: quitar `externalDeployersRef` del `required` → rojo; permitir `$(` → rojo; permitir backtick → rojo. Re-run de evidencia: **VERIFIED** (33/33; búsqueda de identificadores internos limpia) |
+| Reviewer intento 2 | **PASS** (`opus`). Los 3 hallazgos resueltos; conforme a design §7.7 enmendado el 2026-10-05; sin regresiones en las interpolaciones permitidas |
+| ADVISORY final | (1) `\n`/`\r` no se excluyen en `argString`. (2) Los valores de `env` de CodeBuild aceptan texto con forma de bucle (no los evalúa el Executor). (3) `migration.check`/`run` son texto libre que llega al target. (4) Un solo caso por chequeo en ssh args |
+| Forward pointers (registrados) | **T-03:** limitar `migration.check`/`run` a un patrón de nombre de script y considerar cerrar las claves de `env` de CodeBuild; mensaje "tipo reservado, no habilitado"; `ajv`/`yaml` como dependencias de producción. **T-13:** cada arg SSH se pasa escapado (sin interpretación de shell); rechazar o escapar `\n`/`\r` |
+| Estado final | **PASS** |
+| Requisitos | FR-01, FR-02, FR-04 · §6.1, §7.7 (enmendado), DD-11, DD-21, DD-23 |
+| spawns (intento 2) | implementer 50 calls, 120796 tokens, ended complete; reviewer ended complete |

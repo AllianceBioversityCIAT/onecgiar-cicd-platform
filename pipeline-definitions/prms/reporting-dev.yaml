@@ -1,0 +1,82 @@
+# @akili-spec changes/cicd-executor-poc requirements FR-01; design DD-19, DD-23, proposal 10.4
+# Pipeline Definition: PRMS Reporting DEV. Only logical identifiers and
+# references are versioned here (DD-23): repository.url/branch/credentialRef,
+# the Lambda function and the Slack channel/token are references that resolve
+# outside Git. `project` (codebuild) and `target` (ssh) are semantic
+# identifiers (prms-reporting-dev), not references, per DD-23's distinction.
+
+schemaVersion: 1
+pipelineId: prms-reporting-dev
+project: prms-reporting
+environment: dev
+
+repository:
+  url: <PRMS_REPORTING_REPO_URL>
+  branch: <PRMS_REPORTING_DEV_BRANCH>
+  credentialRef: <GITHUB_CREDENTIAL_REF>
+
+triggers:
+  - type: manual
+
+notifications:
+  slack:
+    channel: <PRMS_REPORTING_SLACK_CHANNEL>
+    tokenRef: <SLACK_TOKEN_REF>
+
+source:
+  packages:
+    - name: server
+      path: <PRMS_REPORTING_SERVER_DIR>
+    - name: client
+      path: <PRMS_REPORTING_CLIENT_DIR>
+
+steps:
+  - id: server-quality
+    type: lambda
+    with:
+      function: <QUALITY_WORKER_FUNCTION>
+      task: backend-quality
+      package: server
+
+  - id: client-quality
+    type: lambda
+    with:
+      function: <QUALITY_WORKER_FUNCTION>
+      task: frontend-quality
+      package: client
+
+  - id: server-image
+    type: codebuild
+    needs: [server-quality]
+    with:
+      project: prms-reporting-dev
+      package: server
+      env:
+        COMPONENT: server
+
+  - id: client-image
+    type: codebuild
+    needs: [client-quality]
+    with:
+      project: prms-reporting-dev
+      package: client
+      env:
+        COMPONENT: client
+
+  - id: deploy
+    type: ssh
+    needs: [server-image, client-image]
+    timeoutMinutes: 20
+    with:
+      target: prms-reporting-dev
+      script: deploy-container.sh
+      args:
+        - --execution-id=${execution.id}
+        - --unit=prms-reporting-dev-unit
+        - --image=server=${steps.server-image.outputs.imageUri}
+        - --image=client=${steps.client-image.outputs.imageUri}
+        - --run-migrations
+
+finally:
+  - id: notify
+    type: notify

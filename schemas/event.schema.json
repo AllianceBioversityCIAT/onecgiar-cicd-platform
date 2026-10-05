@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecgiar-cicd-platform/schemas/event.schema.json",
+  "title": "Event envelope",
+  "$comment": "@akili-spec changes/cicd-executor-poc design 6.1 (event envelope). Field table read verbatim: specVersion/eventId/eventType/timestamp/source always required; executionId/pipelineId/environment required except for PIPELINE_REQUESTED, RECONCILE_TICK and DEPLOY_WINDOW_*; stepId/status/attempt required on step-result events; requestId required on PIPELINE_REQUESTED (dedupe key). DEPLOY_WINDOW_OPEN_REQUESTED/CLOSE_REQUESTED carry lockKey instead of pipelineId/environment (6.1); opening a window additionally requires openedBy and a non-empty externalJobsDisabled[] that must cover every externalDeployers entry (design 7.7, DD-21) — that coverage check itself is semantic (resolved list, not in the envelope), only presence/non-emptiness is schema-checkable here. RECONCILE_TICK carries no execution/pipeline/lockKey context (generic scheduler tick, design 7 DD-13).",
+  "type": "object",
+  "required": ["specVersion", "eventId", "eventType", "timestamp", "source"],
+  "additionalProperties": false,
+  "properties": {
+    "specVersion": { "const": 1 },
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": {
+      "enum": [
+        "PIPELINE_REQUESTED",
+        "QUALITY_COMPLETED",
+        "QUALITY_FAILED",
+        "QUALITY_TIMED_OUT",
+        "BUILD_COMPLETED",
+        "BUILD_FAILED",
+        "BUILD_TIMED_OUT",
+        "DEPLOYMENT_COMPLETED",
+        "DEPLOYMENT_FAILED",
+        "PIPELINE_COMPLETED",
+        "PIPELINE_FAILED",
+        "STEP_RETRY_REQUESTED",
+        "LOCK_RETRY_REQUESTED",
+        "RECONCILE_TICK",
+        "DEPLOY_WINDOW_OPEN_REQUESTED",
+        "DEPLOY_WINDOW_CLOSE_REQUESTED"
+      ]
+    },
+    "executionId": { "type": "string", "minLength": 1 },
+    "pipelineId": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "environment": { "enum": ["dev"] },
+    "lockKey": { "type": "string", "minLength": 1 },
+    "stepId": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "status": { "type": "string", "minLength": 1 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "source": { "enum": ["executor", "lambda", "codebuild", "ingress", "scheduler", "operator"] },
+    "payload": { "type": "object" },
+    "requestId": { "type": "string", "minLength": 1 },
+    "openedBy": { "type": "string", "minLength": 1 },
+    "externalJobsDisabled": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "not": {
+              "enum": ["PIPELINE_REQUESTED", "RECONCILE_TICK", "DEPLOY_WINDOW_OPEN_REQUESTED", "DEPLOY_WINDOW_CLOSE_REQUESTED"]
+            }
+          }
+        },
+        "required": ["eventType"]
+      },
+      "then": { "required": ["executionId", "pipelineId", "environment"] }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "enum": [
+              "QUALITY_COMPLETED", "QUALITY_FAILED", "QUALITY_TIMED_OUT",
+              "BUILD_COMPLETED", "BUILD_FAILED", "BUILD_TIMED_OUT",
+              "DEPLOYMENT_COMPLETED", "DEPLOYMENT_FAILED",
+              "STEP_RETRY_REQUESTED", "LOCK_RETRY_REQUESTED"
+            ]
+          }
+        },
+        "required": ["eventType"]
+      },
+      "then": { "required": ["stepId", "status", "attempt"] }
+    },
+    {
+      "if": {
+        "properties": { "eventType": { "const": "PIPELINE_REQUESTED" } },
+        "required": ["eventType"]
+      },
+      "then": { "required": ["pipelineId", "environment", "requestId"] }
+    },
+    {
+      "if": {
+        "properties": { "eventType": { "const": "DEPLOY_WINDOW_OPEN_REQUESTED" } },
+        "required": ["eventType"]
+      },
+      "then": { "required": ["lockKey", "openedBy", "externalJobsDisabled"] }
+    },
+    {
+      "if": {
+        "properties": { "eventType": { "const": "DEPLOY_WINDOW_CLOSE_REQUESTED" } },
+        "required": ["eventType"]
+      },
+      "then": { "required": ["lockKey"] }
+    }
+  ]
+}

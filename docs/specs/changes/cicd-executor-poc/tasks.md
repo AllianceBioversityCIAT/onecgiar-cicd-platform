@@ -115,7 +115,7 @@ Gate C: T-32 → T-33 → T-34 → T-35 → T-36
 ### T-02 — Schemas versionados y definición semántica de PRMS Reporting DEV
 | Campo | Valor |
 |---|---|
-| Status / Size / Gate | pending · M · **A (ejecutable)** |
+| Status / Size / Gate | **[x] done** · M · **A** |
 | Objetivo | `pipeline.schema.json`, `targets.schema.json` y `event.schema.json`, más `pipeline-definitions/prms/reporting-dev.yaml` y `targets/dev.yaml` **solo con referencias lógicas** (DD-23) |
 | Depends on | T-01 |
 | Requisitos / Diseño | FR-01, FR-02, FR-04 · design §6.1, §7.7, DD-11, DD-21, DD-23, proposal §10.4 |

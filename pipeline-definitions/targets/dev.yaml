@@ -1,0 +1,28 @@
+# @akili-spec changes/cicd-executor-poc requirements FR-02; design 7.7, DD-21, DD-23
+# Target Registry (DEV). Only logical identifiers and references are versioned here
+# (DD-23): connectionRef / hostKeyRef / imageRepositoryRef / externalDeployersRef
+# resolve to real values outside Git via SecretProvider/deployment config.
+#
+# prms-reporting-dev shares its host with Jenkins jobs today (FA 10.3, 23), so
+# deployWindowPolicy is "required" and externalDeployersRef points at the (not
+# published) list of those external job identifiers. Migrations are enabled for
+# the server component, so migrationCompatibility + attestedBy are declared.
+
+prms-reporting-dev:
+  connectionRef: <PRMS_REPORTING_DEV_CONNECTION_REF>
+  hostKeyRef: <PRMS_REPORTING_DEV_HOST_KEY_REF>
+  lockKey: deployment#<PRMS_REPORTING_DEV_TARGET>#prms-reporting-dev-unit
+  externalDeployersRef: <PRMS_REPORTING_DEV_EXTERNAL_DEPLOYERS_REF>
+  deployWindowPolicy: required
+  containers:
+    - name: <SERVER_CONTAINER>
+      imageRepositoryRef: <PRMS_REPORTING_SERVER_IMAGE_REPOSITORY_REF>
+      envSecretRef: <PRMS_REPORTING_SERVER_RUNTIME_SECRET_REF>
+    - name: <CLIENT_CONTAINER>
+      imageRepositoryRef: <PRMS_REPORTING_CLIENT_IMAGE_REPOSITORY_REF>
+  migration:
+    component: server
+    check: migration:check:ci
+    run: migration:run
+    migrationCompatibility: backward-compatible
+    attestedBy: PRMS Reporting application team
