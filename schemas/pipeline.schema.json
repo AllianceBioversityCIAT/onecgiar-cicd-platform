@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://onecgiar-cicd-platform/schemas/pipeline.schema.json",
   "title": "Pipeline Definition",
-  "$comment": "@akili-spec changes/cicd-executor-poc requirements FR-01, FR-02; design DD-19, DD-23, proposal 10.4. Closed step vocabulary (PoC: lambda, codebuild, ssh, notify). Reserved types (lambda-deploy, s3-sync, cloudfront-invalidate, cloudformation, http-check) and any other value are rejected by the SAME mechanism as an unknown type: `type` is a closed enum of only the 4 PoC-enabled values, so parsing already fails at the schema layer (documented choice: reject in schema, not 'parse then let T-03 reject' — simpler, single layer, no reserved value ever reaches a handler). T-03's semantic validator may still special-case the reserved identifiers to produce the friendlier message 'reserved, not enabled' for operators; that message is NOT produced here. `needs`/dependency-existence and DAG-cycle checks are semantic (T-03): JSON Schema cannot express cross-item graph constraints. Interpolation is restricted, where it can appear (step `with.args`, `with.env` values), to the whitelist `${execution.*}` / `${steps.<id>.outputs.*}` via a pattern; anything else (`${{ ... }}`, `${env.*}`, bare loops, a bare '$' not starting an allowed form, `$(...)` command substitution, backtick `` `...` `` substitution) fails to match and is rejected. `with.args` on the `ssh` step additionally closes off the shell metacharacters `;`, `|`, `&`, `<`, `>` (see `argString`), since those args are passed literally to the target's shell command line (design 6.4, DD-10). `environment` is a single-value enum (`dev`) for this PoC-scoped schema: the PoC only runs in DEV (requirements.md 4.2, NFR-09) and no multi-environment semantic layer exists yet, so restricting the enum is how 'ambiente fuera del alcance' is rejected at Gate A.",
+  "$comment": "@akili-spec changes/cicd-executor-poc requirements FR-01, FR-02; design DD-19, DD-23, proposal 10.4. Closed step vocabulary (PoC: lambda, codebuild, ssh, notify). Reserved types (lambda-deploy, s3-sync, cloudfront-invalidate, cloudformation, http-check) and any other value are rejected by the SAME mechanism as an unknown type: `type` is a closed enum of only the 4 PoC-enabled values, so parsing already fails at the schema layer (documented choice: reject in schema, not 'parse then let T-03 reject' — simpler, single layer, no reserved value ever reaches a handler). T-03's semantic validator may still special-case the reserved identifiers to produce the friendlier message 'reserved, not enabled' for operators; that message is NOT produced here. `needs`/dependency-existence and DAG-cycle checks are semantic (T-03): JSON Schema cannot express cross-item graph constraints. Interpolation is restricted, where it can appear (step `with.args`, `with.env` values), to the whitelist `${execution.*}` / `${steps.<id>.outputs.*}` via a pattern; anything else (`${{ ... }}`, `${env.*}`, bare loops, a bare '$' not starting an allowed form, `$(...)` command substitution, backtick `` `...` `` substitution) fails to match and is rejected. `with.args` on the `ssh` step additionally closes off the shell metacharacters `;`, `|`, `&`, `<`, `>` (see `argString`), since those args are passed literally to the target's shell command line (design 6.4, DD-10). `environment` is a single-value enum (`dev`) for this PoC-scoped schema: the PoC only runs in DEV (requirements.md 4.2, NFR-09) and no multi-environment semantic layer exists yet, so restricting the enum is how 'environment out of scope' is rejected at Gate A.",
   "type": "object",
   "required": ["schemaVersion", "pipelineId", "project", "environment", "repository", "triggers", "steps"],
   "additionalProperties": false,
@@ -12,7 +12,7 @@
     "project": { "$ref": "#/$defs/semanticId" },
     "environment": {
       "enum": ["dev"],
-      "$comment": "No default — must be declared explicitly. Closed to 'dev' in the PoC (requirements.md FR-01 scenario 'ambiente fuera del alcance'; 4.2 scope excludes staging/prod resources)."
+      "$comment": "No default — must be declared explicitly. Closed to 'dev' in the PoC (requirements.md FR-01 scenario 'environment out of scope'; 4.2 scope excludes staging/prod resources)."
     },
     "repository": {
       "type": "object",
@@ -107,7 +107,7 @@
     "interpolableString": {
       "type": "string",
       "pattern": "^(?:[^$`]|\\$\\{(?:execution\\.[A-Za-z0-9_]+|steps\\.[a-z][a-z0-9-]*\\.outputs\\.[A-Za-z0-9_]+)\\})*$",
-      "$comment": "Whitelist (requirements FR-01 'definición inválida': IT MUST reject cualquier construcción de expresión, bucle o script embebido; NFR-01). Only ${execution.*} and ${steps.<id>.outputs.*} are accepted; any other ${...} (expressions, ${{ }}, ${env.*}, loops) fails to match the whole-string pattern and is rejected. A bare '$' that does not start one of those two exact forms is REJECTED outright (no literal-'$' passthrough) — otherwise a non-whitelisted construct like command substitution `$(...)` could hide behind a '$' not immediately followed by '{'. Backtick (`) is rejected unconditionally, closing off the other POSIX command-substitution form `...`. Together these two rules reject $(rm -rf /) and `id` as well as the already-covered ${{ }} / ${env.*}."
+      "$comment": "Whitelist (requirements FR-01 'invalid definition': IT MUST reject any expression construct, loop, or embedded script; NFR-01). Only ${execution.*} and ${steps.<id>.outputs.*} are accepted; any other ${...} (expressions, ${{ }}, ${env.*}, loops) fails to match the whole-string pattern and is rejected. A bare '$' that does not start one of those two exact forms is REJECTED outright (no literal-'$' passthrough) — otherwise a non-whitelisted construct like command substitution `$(...)` could hide behind a '$' not immediately followed by '{'. Backtick (`) is rejected unconditionally, closing off the other POSIX command-substitution form `...`. Together these two rules reject $(rm -rf /) and `id` as well as the already-covered ${{ }} / ${env.*}."
     },
     "argString": {
       "type": "string",
@@ -156,7 +156,7 @@
           "type": "object",
           "required": ["project", "package"],
           "additionalProperties": false,
-          "$comment": "requirements FR-01 scenario 'proyecto CodeBuild por ambiente': project MUST be explicit per step, no implicit/shared default.",
+          "$comment": "requirements FR-01 scenario 'CodeBuild project per environment': project MUST be explicit per step, no implicit/shared default.",
           "properties": {
             "project": { "$ref": "#/$defs/semanticId" },
             "package": { "$ref": "#/$defs/semanticId" },

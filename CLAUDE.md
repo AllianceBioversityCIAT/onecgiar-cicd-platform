@@ -1,65 +1,69 @@
 # onecgiar-cicd-platform
 
-Plataforma CI/CD event-driven que reemplaza, por fases, las responsabilidades de Jenkins. Su pieza central es un **Executor liviano** que **coordina**: no compila, no construye imágenes y no se convierte en otro Jenkins.
+Event-driven CI/CD platform that replaces Jenkins responsibilities in phases. Its core is a **lightweight Executor** that **coordinates**: it does not compile, does not build images and must never become another Jenkins.
 
-## Fuentes de verdad
+## Language
 
-| Documento | Rol |
+**Everything committed to this repository is written in English**: identifiers, code comments, JSDoc, test titles, error and log messages, schema `$comment`s, Dockerfile comments, READMEs, runbooks, agent guides and commit messages. When a test maps to a spec scenario written in Spanish, translate the title (optionally append the reference, e.g. `FR-05`). The AKILI spec documents under `docs/specs/` are also maintained in English (owner decision, 2026-10-05; translation in progress).
+
+## Sources of truth
+
+| Document | Role |
 |---|---|
-| `docs/specs/changes/cicd-executor-poc/proposal.md` | Intención aprobada. Hace de PRD del PoC |
-| `docs/specs/changes/cicd-executor-poc/requirements.md` | Requisitos (FR/NFR) aprobados |
-| `docs/specs/changes/cicd-executor-poc/design.md` | Diseño aprobado (Judgment Day APPROVED). Hace de TRD del PoC |
-| `docs/specs/changes/cicd-executor-poc/tasks.md` | Plan por gates (A/B/C/D) |
-| `docs/specs/changes/cicd-executor-poc/execution.md` | Bitácora de ejecución |
+| `docs/specs/changes/cicd-executor-poc/proposal.md` | Approved intent (acts as the PoC PRD) |
+| `docs/specs/changes/cicd-executor-poc/requirements.md` | Approved requirements (FR/NFR) |
+| `docs/specs/changes/cicd-executor-poc/design.md` | Approved design (Judgment Day APPROVED; acts as the PoC TRD) |
+| `docs/specs/changes/cicd-executor-poc/tasks.md` | Plan by gate (A/B/C/D) |
+| `docs/specs/changes/cicd-executor-poc/execution.md` | Execution log |
 
-No hay `docs/prd.md`, `docs/trd/trd.md` ni `docs/ux-ui/design.md` (constitución mínima): los documentos de la spec cumplen ese papel. No hay UI.
+There is no `docs/prd.md`, `docs/trd/trd.md` or `docs/ux-ui/design.md` (minimal constitution); the spec documents play those roles. There is no UI.
 
 ## Stack
 
-- Node.js 22 LTS (runtime e imagen), TypeScript estricto, ESM. Sin framework web (design DD-15). Ver `executor/package.json` (`engines`).
-- Tests: `vitest`. Schemas: JSON Schema con `ajv`. AWS SDK v3. SSH: `ssh2`.
-- Script del target: `bash` (corre en Linux; design §6.4).
+- Node.js 22 LTS (runtime and image), strict TypeScript, ESM. No web framework (design DD-15). See `executor/package.json` (`engines`).
+- Tests: `vitest`. Schemas: JSON Schema with `ajv`. AWS SDK v3. SSH: `ssh2`.
+- Target-side script: `bash` (runs on Linux; design §6.4).
 
-## Comandos (dentro de `executor/`)
+## Commands (inside `executor/`)
 
-| Comando | Qué hace |
+| Command | What it does |
 |---|---|
-| `npm ci` | Instala dependencias del Executor |
+| `npm ci` | Install Executor dependencies |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | Lint |
-| `npm test` | Tests unitarios y de integración locales |
-| `npm run validate` | Valida definiciones y registro, y corre las guardas de frontera (T-21) |
-| `npm run check:local` | Gate local sin Docker: typecheck, lint, build, tests, `check:deps` |
-| `npm run inspect:image` | Inspección real de la imagen (**requiere Docker**; validación diferida por entorno, obligatoria antes de desplegar) |
+| `npm test` | Local unit and integration tests |
+| `npm run validate` | Validates definitions and registry and runs the boundary guards (T-21) |
+| `npm run check:local` | Local gate without Docker: typecheck, lint, build, tests, `check:deps` |
+| `npm run inspect:image` | Real image inspection (**requires Docker**; environment-dependent deferred validation, mandatory before deployment) |
 
-## Reglas no negociables
+## Non-negotiable rules
 
-1. **Frontera del Executor (NFR-01).** El Executor no compila, no construye imágenes, no instala dependencias de aplicaciones, no ejecuta migraciones, no se conecta a BD de aplicación, no lee secretos de aplicación, no contiene lógica por proyecto (PRMS, Tanzania, MARLO, AICCRA…) ni lógica de Jenkins, y no interpreta expresiones. Si una tarea lo exige: **detenerse y escalar**.
-2. **Máquina de estados cerrada** (design §7.3, T1–T13). Ninguna transición fuera de la lista.
-3. **Corrección por escrituras condicionales** en DynamoDB (DD-03). Nada de estado en memoria como fuente de verdad.
-4. **Dos capas de lock:** lock distribuido en DynamoDB y mutex local en el target. Ninguna reemplaza a la otra (DD-09, DD-22).
-5. **`DefinitionSource`** es la única vía del núcleo a las definiciones (DD-19).
-6. **Política de publicación** (design §4.1, DD-23): nunca commitear IDs de cuenta, hosts, IPs, IDs de credenciales, nombres de secretos reveladores, nombres de jobs de Jenkins, ni valores sensibles. Usar referencias lógicas (`<AWS_ACCOUNT_ID>`, `<PRMS_REPORTING_DEV_TARGET>`, …).
-7. **Archivos solo locales:** `JENKINS_REPLACEMENT_AKILI_CONTEXT.md` y `JENKINS_REPLACEMENT_FEASIBILITY_ANALYSIS.md` están en `.gitignore`. Antes de cada commit: `git status` y `git ls-files`, y comprobar que no aparecen.
-8. **Decisiones abiertas** (OD-Q5, OD-Q7, OD-Q11 a OD-Q15, OD-N1): nunca se resuelven por suposición.
-9. Commits con prefijo `[SPEC:changes/cicd-executor-poc]`.
+1. **Executor boundary (NFR-01).** The Executor does not compile, build images, install application dependencies, run migrations, connect to application databases, read application secrets, contain per-project logic (PRMS, Tanzania, MARLO, AICCRA…) or Jenkins logic, or interpret expressions. If a task requires it: **stop and escalate**.
+2. **Closed state machine** (design §7.3, T1–T13). No transition outside the list.
+3. **Correctness through conditional writes** in DynamoDB (DD-03). No in-memory state as source of truth.
+4. **Two lock layers:** distributed DynamoDB lock plus target-side local mutex. Neither replaces the other (DD-09, DD-22).
+5. **`DefinitionSource`** is the core's only path to definitions (DD-19).
+6. **Publication policy** (design §4.1, DD-23): never commit account IDs, hosts, IPs, credential IDs, revealing secret names, Jenkins job names or sensitive values. Use logical references (`<AWS_ACCOUNT_ID>`, `<PRMS_REPORTING_DEV_TARGET>`, …).
+7. **Local-only files:** `JENKINS_REPLACEMENT_AKILI_CONTEXT.md` and `JENKINS_REPLACEMENT_FEASIBILITY_ANALYSIS.md` are in `.gitignore`. Before every commit run `git status` and `git ls-files` and confirm neither appears.
+8. **Open decisions** (OD-Q5, OD-Q7, OD-Q11–Q15, OD-N1) are never resolved by assumption.
+9. Commit messages are prefixed with `[SPEC:changes/cicd-executor-poc]` and written in English.
 
 ## Model Routing
 
-| Tier | Rol | Modelo |
+| Tier | Role | Model |
 |---|---|---|
-| T1 | Leader / arquitectura / especificación | `opus` |
+| T1 | Leader / architecture / specification | `opus` |
 | T2 | Implementer | `sonnet` |
 | T3 | Reviewer (author ≠ auditor) | `opus` |
 
 ## Skill Map
 
-`tdd` (dominio y adaptadores) · `aws-serverless` (adaptadores AWS) · `error-handling-patterns` · `api-design-principles` (contratos y schemas) · `cognitive-doc-design` (documentación).
+`tdd` (domain and adapters) · `aws-serverless` (AWS adapters) · `error-handling-patterns` · `api-design-principles` (contracts and schemas) · `cognitive-doc-design` (documentation).
 
-## Agentes
+## Agents
 
-Personas en `.agents/` (`leader.md`, `implementer.md`, `reviewer.md`).
+Personas live in `.agents/` (`leader.md`, `implementer.md`, `reviewer.md`).
 
 ## Module Guides
 
-Ninguno todavía.
+None yet.

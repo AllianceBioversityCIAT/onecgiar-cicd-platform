@@ -12,25 +12,25 @@
 // returned are plain seconds, matching design §7.1/§7.6's own units.
 
 // ---------------------------------------------------------------------------
-// §7.6 — Espera de lock: calendario exacto
+// §7.6 — Lock wait: exact schedule
 // ---------------------------------------------------------------------------
 
-/** Presupuesto acumulado de espera de lock (§7.1, §7.6): 30 min. */
+/** Accumulated lock-wait budget (§7.1, §7.6): 30 min. */
 export const LOCK_WAIT_BUDGET_SECONDS = 1800;
 
-/** Retraso máximo publicable por mensaje SQS (§7.6, P-22). */
+/** Maximum publishable delay per SQS message (§7.6, P-22). */
 export const LOCK_WAIT_MAX_DELAY_SECONDS = 900;
 
-/** Calendario base de reencolados (§7.6), un valor por intento de adquisición fallido. */
+/** Base re-enqueue schedule (§7.6), one value per failed acquisition attempt. */
 export const LOCK_WAIT_SCHEDULE_SECONDS = [30, 60, 120, 240, 480, 900] as const;
 
 /**
- * Tope de seguridad (§7.6, DD-09): como máximo 10 intentos de adquisición en
- * total. Solo se alcanza con muchas re-entradas cortas por código 50 (T9).
+ * Safety cap (§7.6, DD-09): at most 10 acquisition attempts in total. Only
+ * reached through many short re-entries via exit code 50 (T9).
  */
 export const LOCK_WAIT_SAFETY_CAP_ATTEMPTS = 10;
 
-/** Cadencia de renovación del lease mientras dura el SSH (DD-09: "Renovar cada 60 s"). */
+/** Lease renewal cadence for the duration of the SSH session (DD-09: "Renew every 60 s"). */
 export const LOCK_RENEWAL_INTERVAL_SECONDS = 60;
 
 export type LockRetryDecision =
@@ -79,8 +79,8 @@ export function nextLockRetry(params: NextLockRetryParams): LockRetryDecision {
   const remainingSeconds = budgetSeconds - elapsedSeconds;
   const scheduledDelaySeconds =
     LOCK_WAIT_SCHEDULE_SECONDS[params.lockWaitAttempts] ?? LOCK_WAIT_MAX_DELAY_SECONDS;
-  // §7.6: "retraso = min(siguiente del calendario, presupuesto − espera
-  // acumulada)", and never more than 900 s per message regardless.
+  // §7.6: delay = min(next value from the schedule, budget − accumulated
+  // wait), and never more than 900 s per message regardless.
   const rawDelaySeconds = Math.min(scheduledDelaySeconds, remainingSeconds, LOCK_WAIT_MAX_DELAY_SECONDS);
   // SQS `DelaySeconds` is an integer: round up so a fractional remaining
   // budget never under-waits, but re-clip to the 900 s cap in case rounding
@@ -127,7 +127,7 @@ export type LockAcquisitionDecision =
     };
 
 /**
- * DD-09 "Decisión (lock)": acquire if the lock does not exist, if its lease
+ * DD-09 "Decision (lock)": acquire if the lock does not exist, if its lease
  * has expired, or if its owner is already `me` (re-entrant — a duplicate
  * message must not fail). `fencingToken` increments by exactly 1 only when
  * the owner actually changes (absent -> me, or a different expired owner ->
@@ -168,7 +168,7 @@ export function evaluateLockAcquisition(
 }
 
 // ---------------------------------------------------------------------------
-// FR-11 "Scenario: propiedad" — renewal/release are conditional to the owner
+// FR-11 "Scenario: ownership" — renewal/release are conditional to the owner
 // ---------------------------------------------------------------------------
 
 function isOwnedBy(currentLock: PersistedLockItem | undefined, me: string): boolean {

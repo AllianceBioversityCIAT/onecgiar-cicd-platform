@@ -11,7 +11,7 @@
 //   SSH_CONNECT, HOST_KEY_MISMATCH               — FR-16 F10, FR-12 (handlers/ssh, before exec)
 //   PULL, MIGRATION, START, HEALTH               — design §6.4/§7.2: deploy-container.sh
 //                                                   exit codes 10/20/30/40 (FR-13)
-//   UNKNOWN_TARGET_STATE                         — exit code "otro" / lost SSH session (§7.3 recovery table)
+//   UNKNOWN_TARGET_STATE                         — exit code "other" / lost SSH session (§7.3 recovery table)
 //   TARGET_BUSY                                  — exit code 50 (T9 guard); never itself a terminal
 //                                                   step outcome — it always routes back into
 //                                                   WAITING_LOCK (T9), never into FAILED directly
@@ -58,7 +58,7 @@ export function isDomainErrorCode(value: string): value is DomainErrorCode {
  * caller to special-case 0 before calling it at all, which defeats the point
  * of a single classification function. Any exit code outside the known table
  * (including negative or signal-derived values) maps to UNKNOWN_TARGET_STATE,
- * matching the "otro / sesión perdida" row of §7.2.
+ * matching the "other / lost session" row of §7.2.
  */
 export const DEPLOY_SCRIPT_EXIT_CODE_MAP: Readonly<Record<number, DomainErrorCode>> = {
   10: "PULL",

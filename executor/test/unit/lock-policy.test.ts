@@ -30,13 +30,13 @@ const SQS_MAX_DELAY_SECONDS_PER_MESSAGE = 900;
 
 describe("nextLockRetry — §7.6 exact schedule, no contention", () => {
   // design §7.6's table, transcribed literally:
-  //  attempt 1 (T2, immediate) -> retraso 30s  -> espera acumulada 30s
-  //  attempt 2                 -> retraso 60s  -> espera acumulada 90s
-  //  attempt 3                 -> retraso 120s -> espera acumulada 210s
-  //  attempt 4                 -> retraso 240s -> espera acumulada 450s
-  //  attempt 5                 -> retraso 480s -> espera acumulada 930s
-  //  attempt 6                 -> retraso 870s (recortado) -> espera acumulada 1800s
-  //  attempt 7                 -> si falla: espera >= 1800s -> LOCK_TIMEOUT
+  //  attempt 1 (T2, immediate) -> delay 30s  -> accumulated wait 30s
+  //  attempt 2                 -> delay 60s  -> accumulated wait 90s
+  //  attempt 3                 -> delay 120s -> accumulated wait 210s
+  //  attempt 4                 -> delay 240s -> accumulated wait 450s
+  //  attempt 5                 -> delay 480s -> accumulated wait 930s
+  //  attempt 6                 -> delay 870s (clipped) -> accumulated wait 1800s
+  //  attempt 7                 -> if it fails: wait >= 1800s -> LOCK_TIMEOUT
   const lockWaitStartedAt = 0;
 
   it("is RETRY 30s after attempt 1 fails immediately (lockWaitAttempts=0, now=0)", () => {
@@ -131,7 +131,7 @@ describe("nextLockRetry — budget exhaustion (R3-4 canonical LOCK_TIMEOUT)", ()
 });
 
 describe("nextLockRetry — safety cap of 10 total acquisition attempts (§7.6)", () => {
-  // Literal 9/8 (design §7.6: "Tope de seguridad: 10 intentos en total"),
+  // Literal 9/8 (design §7.6: "safety cap: 10 attempts in total"),
   // NOT derived from the module's own LOCK_WAIT_SAFETY_CAP_ATTEMPTS export —
   // deriving the input from that constant would make this tautological: a
   // mutation widening the cap to e.g. 11 would silently widen what the test
@@ -181,7 +181,7 @@ describe("nextLockRetry — delaySeconds is always a whole number of seconds (SQ
 });
 
 describe("LOCK_RENEWAL_INTERVAL_SECONDS — DD-09 lease renewal cadence", () => {
-  it("is 60s (DD-09: \"Renovar cada 60 s mientras dura el SSH\")", () => {
+  it("is 60s (DD-09: \"Renew every 60 s for the duration of the SSH session\")", () => {
     expect(LOCK_RENEWAL_INTERVAL_SECONDS).toBe(60);
   });
 });
@@ -193,7 +193,7 @@ describe("nextLockRetry — T9 (code 50) re-entry resumes the same calendar and 
     // WAITING_LOCK) itself took a further 7s of REAL wall-clock time before
     // this decision is made again, for a true elapsed of 217s — but
     // lockWaitStartedAt and lockWaitAttempts are UNCHANGED across T9 (design
-    // "detalle de T9": identidad preservada), so the calendar resumes
+    // "T9 detail": identity preserved), so the calendar resumes
         // exactly where it left off (index 3 => 240s), consuming the SAME budget.
     const decision = nextLockRetry({
       lockWaitStartedAt: 0,
@@ -298,7 +298,7 @@ describe("evaluateLockAcquisition — DD-09 acquire / reentrant / busy, fencing 
   });
 });
 
-describe("canRenewLock / canReleaseLock — FR-11 scenario: propiedad", () => {
+describe("canRenewLock / canReleaseLock — FR-11 scenario: ownership", () => {
   const me = "exec-184";
   const foreignOwner = "exec-100";
 

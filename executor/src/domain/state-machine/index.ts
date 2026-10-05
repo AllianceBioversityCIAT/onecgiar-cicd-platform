@@ -5,13 +5,12 @@
 // caller as part of the request — the application layer owns Clock/id
 // generation (design §3.2's "domain is pure" boundary).
 //
-// Regla general (design §7.3): SOLO son válidas las transiciones de la tabla
-// de abajo. Cada una se aplica, en la vida real, con una escritura
-// condicional sobre el estado de origen, el `attempt` y la `version`
-// vigentes (DD-03) — esa parte vive en el adaptador StateStore, no aquí.
-// Una transición pedida que no figura aquí se rechaza como
-// `INVALID_TRANSITION`, sin efectos. Los estados terminales
-// (SUCCEEDED, FAILED, TIMED_OUT, SKIPPED) son inmutables.
+// General rule (design §7.3): ONLY the transitions in the table below are
+// valid. Each one is applied, in real life, through a conditional write on
+// the source state and the current `attempt`/`version` (DD-03) — that part
+// lives in the StateStore adapter, not here. A requested transition not
+// listed here is rejected as `INVALID_TRANSITION`, with no side effects.
+// Terminal states (SUCCEEDED, FAILED, TIMED_OUT, SKIPPED) are immutable.
 import type { DomainErrorCode } from "../errors/index.js";
 
 export const STEP_TYPES = ["source", "lambda", "codebuild", "notify", "ssh"] as const;
@@ -51,7 +50,7 @@ export interface StepSnapshot {
   readonly externalRef?: string;
   /** T13 guard/counter (design §7.3): at most one idempotent re-dispatch per step. */
   readonly reconcileRedispatchCount: number;
-  /** Set by T2, carried unchanged across T9 (design "detalle de T9": "mismo lockWaitStartedAt"). */
+  /** Set by T2, carried unchanged across T9 (design "T9 detail": "same lockWaitStartedAt"). */
   readonly lockWaitStartedAt?: number;
   // NOTE on `deadlineAt` (design §5.1's Step item): this pure state machine
   // does not read or set it. Computing/renewing deadlines (T2's lock-wait
@@ -96,7 +95,7 @@ export type StepTransitionRequest =
       readonly reason: "NON_RETRYABLE" | "RETRIES_EXHAUSTED" | "DEPLOY_WINDOW_CLOSED";
       readonly failureCode: DomainErrorCode;
     }
-  /** T8: the vigent attempt's result arrives. */
+  /** T8: the current attempt's result arrives. */
   | {
       readonly kind: "STEP_RESULT";
       readonly outcome: "SUCCEEDED" | "FAILED" | "TIMED_OUT";
@@ -105,8 +104,8 @@ export type StepTransitionRequest =
     }
   /**
    * T9: the ONLY backward transition — deploy script exit code 50, ssh only,
-   * from RUNNING only, and only for the VIGENT attempt (design §7.3 "detalle
-   * de T9": "idempotencia" row — a redelivery of the original 50 must find
+   * from RUNNING only, and only for the CURRENT attempt (design §7.3 "T9
+   * detail": "idempotency" row — a redelivery of the original 50 must find
    * the step already moved on and do nothing). `matchesCurrentAttempt` is
    * the caller's identity check (externalRef/attempt of the inbound result
    * vs. the snapshot) — without it a stale 50 from a superseded attempt
@@ -156,31 +155,31 @@ const RECONCILE_REDISPATCH_TYPES: ReadonlySet<StepType> = new Set(["codebuild", 
 //   - source:    "Clone"/"ZIP"/"Subida" (§7.2 rows 1-3) can all fail before
 //                the handler's work starts.
 //   - lambda:    invoke-level INFRA (the lambda-invoke equivalent of
-//                codebuild's "StartBuild rechazado (API)" row).
-//   - codebuild: "StartBuild rechazado (API)" -> INFRA (§7.2 row 6).
-//   - ssh:       "Conexión SSH o host key" -> SSH_CONNECT/HOST_KEY_MISMATCH
-//                (§7.2 row 9, "antes de ejecutar" = still DISPATCHING), plus
+//                codebuild's "StartBuild rejected (API)" row).
+//   - codebuild: "StartBuild rejected (API)" -> INFRA (§7.2 row 6).
+//   - ssh:       "SSH connection or host key" -> SSH_CONNECT/HOST_KEY_MISMATCH
+//                (§7.2 row 9, "before executing" = still DISPATCHING), plus
 //                DEPLOY_WINDOW_CLOSED at V4 (§7.7, ssh-only).
-//   - notify:    NONE. FR-14 "fallo del proveedor": a notification failure
-//                is logged and "IT MUST NOT cambiar el estado de la
-//                ejecución" — notify never reports a step-level FAILED.
+//   - notify:    NONE. FR-14 "provider failure": a notification failure
+//                is logged and "IT MUST NOT change the execution
+//                state" — notify never reports a step-level FAILED.
 //
-// T8 = result-time failures (the vigent attempt's outcome arrives RUNNING):
+// T8 = result-time failures (the current attempt's outcome arrives RUNNING):
 //   - source:    same three codes — the clone/zip/upload can also fail once
 //                the handler has already started running.
-//   - lambda:    "status de fallo" -> QUALITY, "error de función" -> INFRA
+//   - lambda:    "failure status" -> QUALITY, "function error" -> INFRA
 //                (§7.2 rows 4-5, both arrive via the async Destination result).
 //   - codebuild: "Build FAILED/STOPPED" -> BUILD (§7.2 row 7). INFRA is
 //                NOT a codebuild T8 code — only StartBuild rejection (T7).
-//   - ssh:       deploy-script exit codes 10/20/30/40/otro -> PULL/
+//   - ssh:       deploy-script exit codes 10/20/30/40/other -> PULL/
 //                MIGRATION/START/HEALTH/UNKNOWN_TARGET_STATE (§7.2 row 10) —
 //                the script only runs after T6, so these can ONLY be T8.
 //   - notify:    NONE (same FR-14 reasoning as T7).
 //
 // Deliberately absent from BOTH lists, for every type (so rejected
 // unconditionally): TARGET_BUSY (exit 50 is never itself a terminal outcome
-// — it always routes back via T9), LOCK_TIMEOUT (T5-only, §7.3's regla
-// canónica), SUPERSEDED (T4-only, ssh WAITING_LOCK supersede), the
+// — it always routes back via T9), LOCK_TIMEOUT (T5-only, §7.3's canonical
+// rule), SUPERSEDED (T4-only, ssh WAITING_LOCK supersede), the
 // TIMED_OUT *code* (TIMED_OUT is only ever produced as T8/T12's `outcome`,
 // never as a FAILED outcome's failureCode — conflating the two would erase
 // the FAILED/TIMED_OUT distinction FR-16 depends on), and INVALID_TRANSITION
@@ -260,8 +259,8 @@ export function applyStepTransition(
         // attempt: consistent with T1's "0 while never dispatched" (field
         // doc) — the FIRST time a step is dispatched (T1 or T3) attempt goes
         // 0 -> 1. A later T3 (after bouncing back via T9) finds attempt
-        // already >= 1 because T9 itself incremented it (design "detalle de
-        // T9": "se incrementan attempt y contentionCount") — so T3 must NOT
+        // already >= 1 because T9 itself incremented it (design "T9 detail":
+        // "attempt and contentionCount are incremented") — so T3 must NOT
         // increment a second time, only carry it forward.
         attempt: current.attempt === 0 ? 1 : current.attempt,
         dispatchToken: request.newDispatchToken,
@@ -296,7 +295,7 @@ export function applyStepTransition(
 
     case "EXTERNAL_REF_REGISTERED": {
       // T6: DISPATCHING -> RUNNING, all types. For `ssh` the design places
-      // this call "justo antes del exec, tras V4" (§7.3) — the V4 window
+      // this call "right before exec, after V4" (§7.3) — the V4 window
       // revalidation itself is a live check (isDeployAllowed, a port call)
       // that this pure domain function does not and cannot perform (no I/O,
       // DD-15/§3.2). The caller (handlers/ssh, T-11/T-13) is responsible for
@@ -325,8 +324,8 @@ export function applyStepTransition(
       // other. Without this check {reason: NON_RETRYABLE, failureCode:
       // DEPLOY_WINDOW_CLOSED} and {reason: DEPLOY_WINDOW_CLOSED, failureCode:
       // INFRA} both slipped through attempt 2, bypassing T7's three named
-      // triggers ("Error de despacho no reintentable, o reintentos
-      // agotados, o DEPLOY_WINDOW_CLOSED en V4").
+      // triggers ("Non-retryable dispatch error, or retries exhausted, or
+      // DEPLOY_WINDOW_CLOSED at V4").
       const isWindowClosedCode = request.failureCode === "DEPLOY_WINDOW_CLOSED";
       const isWindowClosedReason = request.reason === "DEPLOY_WINDOW_CLOSED";
       if (isWindowClosedCode !== isWindowClosedReason) return rejected();
@@ -339,7 +338,7 @@ export function applyStepTransition(
 
     case "STEP_RESULT": {
       // T8: RUNNING -> SUCCEEDED/FAILED/TIMED_OUT, all types. A result that
-      // does not match the vigent attempt (orphan, §6.1) is rejected here —
+      // does not match the current attempt (orphan, §6.1) is rejected here —
       // the caller logs it as ORPHAN_EVENT, it never reaches the state.
       if (current.state !== "RUNNING") return rejected();
       if (!request.matchesCurrentAttempt) return rejected();
@@ -370,13 +369,13 @@ export function applyStepTransition(
     case "TARGET_BUSY": {
       // T9: the ONLY backward transition. RUNNING -> WAITING_LOCK, ssh only,
       // only on exit code 50. DISPATCHING can never receive a 50 (design
-      // "detalle de T9": the exit code only exists after exec, which starts
+      // "T9 detail": the exit code only exists after exec, which starts
       // after T6) — rejected here because current.state !== "RUNNING".
       if (current.state !== "RUNNING") return rejected();
       if (current.type !== "ssh") return rejected();
-      // Identity check (review round 3, finding 1; design §7.3 "detalle de
-      // T9" idempotency row): a redelivered/stale 50 from an attempt that is
-      // no longer vigent must be rejected, exactly like T8's
+      // Identity check (review round 3, finding 1; design §7.3 "T9 detail"
+      // idempotency row): a redelivered/stale 50 from an attempt that is
+      // no longer current must be rejected, exactly like T8's
       // matchesCurrentAttempt. Without this, a stale 50 could bounce a
       // LIVE later attempt back to WAITING_LOCK.
       if (!request.matchesCurrentAttempt) return rejected();
@@ -424,9 +423,9 @@ export function applyStepTransition(
       // in the fromState check below.
       if (current.state !== "DISPATCHING" && current.state !== "RUNNING") return rejected();
       if (!request.deadlineExceeded) return rejected();
-      // RUNNING redirect guard (design §7.3 "Recuperación de resultados
-      // perdidos por el reconciler" table; review round 3 advisory; Leader
-      // correction — the general T12 row applies to "todos" whenever
+      // RUNNING redirect guard (design §7.3 "recovery of results lost by
+      // the reconciler" table; review round 3 advisory; Leader
+      // correction — the general T12 row applies to "all" whenever
       // T13/adoption don't: only TWO RUNNING cases are carved out by the
       // recovery table, and only those two are excluded here:
       //   - RUNNING codebuild (always has an externalRef once RUNNING, see
@@ -435,7 +434,7 @@ export function applyStepTransition(
       //   - RUNNING ssh with an expired lease: closes with
       //     UNKNOWN_TARGET_STATE via T8, never T12 (runbook §12.1).
       // RUNNING lambda, source and notify have no such carve-out row, so
-      // the general "todos" rule applies and T12 IS valid for them
+      // the general "all" rule applies and T12 IS valid for them
       // ("RUNNING lambda sin resultado" -> T12 is the recovery table's own
       // explicit example; source/notify fall under the same general rule).
       if (current.state === "RUNNING" && (current.type === "ssh" || current.type === "codebuild")) {
@@ -486,9 +485,9 @@ export function applyStepTransition(
 }
 
 // ---------------------------------------------------------------------------
-// Execution-level state machine (requirements FR-05's "Ejecución" row;
+// Execution-level state machine (requirements FR-05's "Execution" row;
 // proposal §10.6's chain: "QUEUED → RUNNING → SUCCEEDED | FAILED | TIMED_OUT
-// | CANCELLED (terminales inmutables)").
+// | CANCELLED (immutable terminals)").
 //
 // This is a SEPARATE closed list from the step machine above (T1–T13 governs
 // steps only). Design §7.3 does not number or detail execution-level
@@ -536,7 +535,7 @@ export type ExecutionTransitionId = (typeof EXECUTION_TRANSITION_IDS)[number];
 /** Execution-terminal outcome, the four non-QUEUED/RUNNING states of FR-05's table. */
 export type ExecutionOutcome = Exclude<ExecutionState, "QUEUED" | "RUNNING">;
 
-/** Persisted execution fields the state machine reads and mutates (design §5.1's Ejecución item, domain-relevant subset). */
+/** Persisted execution fields the state machine reads and mutates (design §5.1's Execution item, domain-relevant subset). */
 export interface ExecutionSnapshot {
   readonly state: ExecutionState;
 }

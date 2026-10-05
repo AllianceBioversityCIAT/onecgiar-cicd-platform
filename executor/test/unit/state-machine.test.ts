@@ -150,7 +150,7 @@ for (const type of STEP_TYPES) {
 }
 // T7 (DISPATCH_FAILED): every type EXCEPT `notify` has at least one valid
 // dispatch-time failure code (T7_FAILURE_CODES allowlist, design §7.2).
-// `notify` is deliberately ABSENT — FR-14 "fallo del proveedor": a
+// `notify` is deliberately ABSENT — FR-14 "provider failure": a
 // notification failure is logged and never changes step state, so
 // DISPATCHING+notify+DISPATCH_FAILED must be rejected for ANY failure code
 // (review round 3, finding 2).
@@ -159,8 +159,8 @@ for (const type of ["source", "lambda", "codebuild", "ssh"] as const) {
 }
 PERMITTED.set(key("RUNNING", "ssh", "TARGET_BUSY"), { id: "T9", to: "WAITING_LOCK" });
 // T12 (RECONCILE_TIMEOUT) from RUNNING: the general §7.3 T12 row applies to
-// "todos" whenever T13/adoption don't — only TWO RUNNING cases are carved
-// out by the "Recuperación de resultados perdidos por el reconciler" table:
+// "all" whenever T13/adoption don't — only TWO RUNNING cases are carved
+// out by the "recovery of results lost by the reconciler" table:
 // RUNNING codebuild (always has an externalRef once RUNNING -> BatchGetBuilds
 // adopts via T8, or the deadline is extended) and RUNNING ssh (expired lease
 // -> T8 FAILED(UNKNOWN_TARGET_STATE)). RUNNING lambda/source/notify have no
@@ -210,7 +210,7 @@ describe("state machine — exhaustive cartesian product (fromState × type × e
   }
 });
 
-describe("terminal states are immutable (FR-05: estados terminales inmutables)", () => {
+describe("terminal states are immutable (FR-05: immutable terminal states)", () => {
   for (const state of STEP_STATES) {
     if (!TERMINAL_STEP_STATES.has(state)) continue;
     it(`no event kind moves a step out of ${state}`, () => {
@@ -224,13 +224,13 @@ describe("terminal states are immutable (FR-05: estados terminales inmutables)",
   }
 });
 
-describe("única vuelta atrás permitida (design §7.3, FR-05 scenario)", () => {
-  // Backward order used only to express "vuelta atrás": a transition is
-  // backward if `to` precedes `from` in the normal forward flow. DISPATCHING
+describe("only one backward transition permitted (design §7.3, FR-05 scenario)", () => {
+  // Backward order used only to express "backward transition": a transition
+  // is backward if `to` precedes `from` in the normal forward flow. DISPATCHING
   // and RUNNING share a rank: both mean "an attempt is in flight", and T10's
   // RUNNING/DISPATCHING -> DISPATCHING (same tier, new attempt) is a retry,
-  // not the "vuelta atrás" the design calls out — design §7.3 itself labels
-  // only T9 that way, precisely because T9 is the sole transition that
+  // not the backward transition the design calls out — design §7.3 itself
+  // labels only T9 that way, precisely because T9 is the sole transition that
   // leaves the dispatch/execution tier back into the lock-wait tier.
   const ORDER: Record<StepState, number> = {
     PENDING: 0,
@@ -521,7 +521,7 @@ describe("T8 outcome fan-out and the orphan-event guard (FR-07, §6.1)", () => {
     expect(result.next.resultCode).toBe("TIMED_OUT");
   });
 
-  it("a result from a superseded/orphan attempt (matchesCurrentAttempt=false) is rejected, never modifies the vigent attempt", () => {
+  it("a result from a superseded/orphan attempt (matchesCurrentAttempt=false) is rejected, never modifies the current attempt", () => {
     const result = applyStepTransition(baseSnapshot("RUNNING", "codebuild"), {
       kind: "STEP_RESULT",
       outcome: "SUCCEEDED",
@@ -532,7 +532,7 @@ describe("T8 outcome fan-out and the orphan-event guard (FR-07, §6.1)", () => {
 });
 
 describe("FR-05 scenarios (requirements.md verbatim scenario titles)", () => {
-  it("Scenario: transición válida — a RUNNING step whose finalization succeeds moves to SUCCEEDED", () => {
+  it("Scenario: valid transition — a RUNNING step whose finalization succeeds moves to SUCCEEDED", () => {
     const result = applyStepTransition(baseSnapshot("RUNNING", "lambda"), {
       kind: "STEP_RESULT",
       outcome: "SUCCEEDED",
@@ -543,7 +543,7 @@ describe("FR-05 scenarios (requirements.md verbatim scenario titles)", () => {
     expect(result.next.state).toBe("SUCCEEDED");
   });
 
-  it("Scenario: transición inválida — a terminal step ignores any incoming event (no-op)", () => {
+  it("Scenario: invalid transition — a terminal step ignores any incoming event (no-op)", () => {
     const terminalSnapshot = baseSnapshot("SUCCEEDED", "lambda");
     const result = applyStepTransition(terminalSnapshot, {
       kind: "STEP_RESULT",
@@ -554,9 +554,9 @@ describe("FR-05 scenarios (requirements.md verbatim scenario titles)", () => {
     expect(result).toEqual({ accepted: false, code: "INVALID_TRANSITION" });
   });
 
-  it("Scenario: única vuelta atrás permitida — BUT no other transition reopens an earlier state (real check, not a placeholder)", () => {
-    // The full exhaustive proof lives in the "única vuelta atrás permitida"
-    // describe block above; this restates the scenario's own BUT clause
+  it("Scenario: only one backward transition permitted — BUT no other transition reopens an earlier state (real check, not a placeholder)", () => {
+    // The full exhaustive proof lives in the "only one backward transition
+    // permitted" describe block above; this restates the scenario's own BUT clause
     // concretely instead of a vacuous assertion: take two transitions the
     // scenario text explicitly calls out as NOT allowed to go backward
     // (LOCK_WAIT_FAILED, STEP_RESULT) and confirm neither one ever lands on
@@ -576,7 +576,7 @@ describe("FR-05 scenarios (requirements.md verbatim scenario titles)", () => {
     expect(stepResult.accepted && stepResult.next.state).toBe("FAILED"); // forward (terminal), not backward to DISPATCHING
   });
 
-  it("Scenario: steps paralelos — applyStepTransition is pure: independent snapshots never share mutable state", () => {
+  it("Scenario: parallel steps — applyStepTransition is pure: independent snapshots never share mutable state", () => {
     const a = baseSnapshot("RUNNING", "lambda");
     const b = baseSnapshot("RUNNING", "codebuild");
     const resultA = applyStepTransition(a, { kind: "STEP_RESULT", outcome: "SUCCEEDED", matchesCurrentAttempt: true });
@@ -587,7 +587,7 @@ describe("FR-05 scenarios (requirements.md verbatim scenario titles)", () => {
     expect(resultB.accepted && resultB.next.state).toBe("FAILED");
   });
 
-  it("Scenario: reinicio del Executor — the function is a deterministic pure function of its inputs (no in-process memory)", () => {
+  it("Scenario: Executor restart — the function is a deterministic pure function of its inputs (no in-process memory)", () => {
     const snapshot = baseSnapshot("DISPATCHING", "codebuild");
     const event: StepTransitionRequest = { kind: "EXTERNAL_REF_REGISTERED", externalRef: "build-123" };
     const first = applyStepTransition(snapshot, event);
@@ -597,7 +597,7 @@ describe("FR-05 scenarios (requirements.md verbatim scenario titles)", () => {
 });
 
 describe("FR-11 scenarios mapped to transitions", () => {
-  it("Scenario: ocupado — tras agotar la espera de 30 min, el único resultado es LOCK_TIMEOUT", () => {
+  it("Scenario: busy — after exhausting the 30-min wait, the only outcome is LOCK_TIMEOUT", () => {
     const result = applyStepTransition(baseSnapshot("WAITING_LOCK", "ssh"), {
       kind: "LOCK_WAIT_FAILED",
       failureCode: "LOCK_TIMEOUT",
@@ -656,7 +656,7 @@ describe("FR-16 failure-behavior rows mapped to transitions", () => {
     expect(result.next.dispatchToken).toBe("tok-retry");
   });
 
-  it("F5: Quality rojo (Lambda business failure) -> FAILED, no retry path offered by the machine itself", () => {
+  it("F5: Quality red (Lambda business failure) -> FAILED, no retry path offered by the machine itself", () => {
     const result = applyStepTransition(baseSnapshot("RUNNING", "lambda"), {
       kind: "STEP_RESULT",
       outcome: "FAILED",
@@ -668,7 +668,7 @@ describe("FR-16 failure-behavior rows mapped to transitions", () => {
     expect(result.next.resultCode).toBe("QUALITY");
   });
 
-  it("F6: Lambda sin resultado al vencer el plazo -> T12 TIMED_OUT (recovery table)", () => {
+  it("F6: Lambda with no result when the deadline expires -> T12 TIMED_OUT (recovery table)", () => {
     const result = applyStepTransition(baseSnapshot("RUNNING", "lambda"), {
       kind: "RECONCILE_TIMEOUT",
       deadlineExceeded: true,
@@ -679,7 +679,7 @@ describe("FR-16 failure-behavior rows mapped to transitions", () => {
     expect(result.next.state).toBe("TIMED_OUT");
   });
 
-  it("F7: Build fallido -> FAILED (BUILD) sin reintento", () => {
+  it("F7: Build failed -> FAILED (BUILD), no retry", () => {
     const result = applyStepTransition(baseSnapshot("RUNNING", "codebuild"), {
       kind: "STEP_RESULT",
       outcome: "FAILED",
@@ -706,7 +706,7 @@ describe("FR-16 failure-behavior rows mapped to transitions", () => {
     }
   });
 
-  it("F16: ejecución atascada -> reconciliación -> TIMED_OUT (T12, DISPATCHING, non-redispatchable type)", () => {
+  it("F16: stuck execution -> reconciliation -> TIMED_OUT (T12, DISPATCHING, non-redispatchable type)", () => {
     const result = applyStepTransition(baseSnapshot("DISPATCHING", "source"), {
       kind: "RECONCILE_TIMEOUT",
       deadlineExceeded: true,
@@ -716,7 +716,7 @@ describe("FR-16 failure-behavior rows mapped to transitions", () => {
     expect(result.transitionId).toBe("T12");
   });
 
-  it("F17: lock huérfano con deploy en curso -> cierre con UNKNOWN_TARGET_STATE (T8 FAILED)", () => {
+  it("F17: orphaned lock with a deploy in progress -> closes with UNKNOWN_TARGET_STATE (T8 FAILED)", () => {
     const result = applyStepTransition(baseSnapshot("RUNNING", "ssh"), {
       kind: "STEP_RESULT",
       outcome: "FAILED",
@@ -728,7 +728,7 @@ describe("FR-16 failure-behavior rows mapped to transitions", () => {
     expect(result.next.resultCode).toBe("UNKNOWN_TARGET_STATE");
   });
 
-  it("F18: código 50 vuelve a WAITING_LOCK (T9); si se agota el presupuesto, LOCK_TIMEOUT (T5)", () => {
+  it("F18: exit code 50 returns to WAITING_LOCK (T9); if the budget is exhausted, LOCK_TIMEOUT (T5)", () => {
     const running: StepSnapshot = { ...baseSnapshot("RUNNING", "ssh"), lockWaitStartedAt: 0 };
     const busy = applyStepTransition(running, { kind: "TARGET_BUSY", exitCode: 50, matchesCurrentAttempt: true });
     expect(busy.accepted).toBe(true);
@@ -742,7 +742,7 @@ describe("FR-16 failure-behavior rows mapped to transitions", () => {
     expect(exhausted.next.resultCode).toBe("LOCK_TIMEOUT");
   });
 
-  it("F19: ventana cerrada sin abrir SSH -> FAILED(DEPLOY_WINDOW_CLOSED) desde WAITING_LOCK (V1/V2)", () => {
+  it("F19: window closed without ever opening SSH -> FAILED(DEPLOY_WINDOW_CLOSED) from WAITING_LOCK (V1/V2)", () => {
     const result = applyStepTransition(baseSnapshot("WAITING_LOCK", "ssh"), {
       kind: "LOCK_WAIT_FAILED",
       failureCode: "DEPLOY_WINDOW_CLOSED",
@@ -753,7 +753,7 @@ describe("FR-16 failure-behavior rows mapped to transitions", () => {
     expect(result.next.resultCode).toBe("DEPLOY_WINDOW_CLOSED");
   });
 
-  it("F19 (V4 variant): ventana cerrada justo antes del exec -> FAILED(DEPLOY_WINDOW_CLOSED) desde DISPATCHING", () => {
+  it("F19 (V4 variant): window closed right before exec -> FAILED(DEPLOY_WINDOW_CLOSED) from DISPATCHING", () => {
     const result = applyStepTransition(baseSnapshot("DISPATCHING", "ssh"), {
       kind: "DISPATCH_FAILED",
       reason: "DEPLOY_WINDOW_CLOSED",
@@ -1015,10 +1015,10 @@ describe("review round 3, finding 1: T9 rejects a stale/redelivered code-50 (ide
     const staleResult = applyStepTransition(liveLaterAttempt, {
       kind: "TARGET_BUSY",
       exitCode: 50,
-      matchesCurrentAttempt: false, // this 50 belongs to attempt n, not the vigent attempt n+1
+      matchesCurrentAttempt: false, // this 50 belongs to attempt n, not the current attempt n+1
     });
     expect(staleResult).toEqual({ accepted: false, code: "INVALID_TRANSITION" });
-    // Contrast: the SAME exitCode, but matching the vigent attempt, is accepted.
+    // Contrast: the SAME exitCode, but matching the current attempt, is accepted.
     const liveResult = applyStepTransition(liveLaterAttempt, {
       kind: "TARGET_BUSY",
       exitCode: 50,
@@ -1075,7 +1075,7 @@ describe("review round 3, finding 2: T7/T8 per-type allowlists reject codes from
     }
   });
 
-  it("falsifier: T7 rejects MIGRATION (exit code 20's classification) on ssh — the script hasn't run yet in DISPATCHING, it only runs after T6 (design §7.3 'detalle de T9': 'En DISPATCHING no existe ningún código de salida')", () => {
+  it("falsifier: T7 rejects MIGRATION (exit code 20's classification) on ssh — the script hasn't run yet in DISPATCHING, it only runs after T6 (design §7.3 'T9 detail': 'there is no exit code yet while DISPATCHING')", () => {
     const result = applyStepTransition(baseSnapshot("DISPATCHING", "ssh"), {
       kind: "DISPATCH_FAILED",
       reason: "NON_RETRYABLE",
@@ -1227,7 +1227,7 @@ describe("review round 3, finding 3: T7 reason/failureCode agreement for DEPLOY_
 
 describe("Leader correction: T12 (RECONCILE_TIMEOUT) from RUNNING is valid for lambda/source/notify, rejected only for ssh/codebuild (design §7.3 recovery table)", () => {
   // Correction to the previous round: the general T12 row applies to
-  // "todos" whenever T13/adoption don't — only the TWO recovery-table rows
+  // "all" whenever T13/adoption don't — only the TWO recovery-table rows
   // that explicitly name a different transition carve RUNNING out: RUNNING
   // codebuild (adopt via T8 / extend deadline) and RUNNING ssh (expired
   // lease -> T8 UNKNOWN_TARGET_STATE). lambda/source/notify fall under the
@@ -1262,7 +1262,7 @@ describe("Leader correction: T12 (RECONCILE_TIMEOUT) from RUNNING is valid for l
     expect(result.next.state).toBe("TIMED_OUT");
   });
 
-  it("positive control (Leader correction): T12 from RUNNING source IS accepted — no recovery-table row carves it out, so the general §7.3 T12 row ('todos') applies", () => {
+  it("positive control (Leader correction): T12 from RUNNING source IS accepted — no recovery-table row carves it out, so the general §7.3 T12 row ('all') applies", () => {
     const result = applyStepTransition(baseSnapshot("RUNNING", "source"), {
       kind: "RECONCILE_TIMEOUT",
       deadlineExceeded: true,
@@ -1372,7 +1372,7 @@ describe("classifyDeployExitCode (review advisory: no throw on exit 0)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Execution-level state machine (requirements FR-05's "Ejecución" row;
+// Execution-level state machine (requirements FR-05's "Execution" row;
 // proposal §10.6's closed chain). Review round 2, issue 1.
 // ---------------------------------------------------------------------------
 
@@ -1419,7 +1419,7 @@ describe("execution state machine — exhaustive cartesian product (fromState ×
   });
 });
 
-describe("execution terminal states are immutable (FR-05: estados terminales inmutables)", () => {
+describe("execution terminal states are immutable (FR-05: immutable terminal states)", () => {
   for (const state of EXECUTION_STATES) {
     if (!TERMINAL_EXECUTION_STATES.has(state)) continue;
     it(`no event kind moves an execution out of ${state}`, () => {
@@ -1448,7 +1448,7 @@ describe("execution terminal states are immutable (FR-05: estados terminales inm
 });
 
 describe("FR-05 execution scenarios mapped to the execution machine", () => {
-  it("Scenario: transición válida (execution) — QUEUED -> RUNNING on START", () => {
+  it("Scenario: valid transition (execution) — QUEUED -> RUNNING on START", () => {
     const result = applyExecutionTransition({ state: "QUEUED" }, { kind: "START" });
     expect(result.accepted).toBe(true);
     if (!result.accepted) return;
@@ -1456,12 +1456,12 @@ describe("FR-05 execution scenarios mapped to the execution machine", () => {
     expect(result.next.state).toBe("RUNNING");
   });
 
-  it("Scenario: transición inválida (execution) — a terminal execution ignores any incoming event (no-op)", () => {
+  it("Scenario: invalid transition (execution) — a terminal execution ignores any incoming event (no-op)", () => {
     const result = applyExecutionTransition({ state: "CANCELLED" }, { kind: "FINALIZE", outcome: "FAILED" });
     expect(result).toEqual({ accepted: false, code: "INVALID_TRANSITION" });
   });
 
-  it("Scenario: terminales inmutables (execution) — all four terminals accept nothing further, proven per-state above", () => {
+  it("Scenario: immutable terminals (execution) — all four terminals accept nothing further, proven per-state above", () => {
     expect([...TERMINAL_EXECUTION_STATES].sort()).toEqual(["CANCELLED", "FAILED", "SUCCEEDED", "TIMED_OUT"].sort());
   });
 });

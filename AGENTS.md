@@ -1,10 +1,11 @@
 # AGENTS.md
 
-Las instrucciones del proyecto para cualquier agente están en `CLAUDE.md`, que es canónico; este archivo existe para herramientas que leen `AGENTS.md`. Las personas del triad Leader → Implementer → Reviewer están en `.agents/`.
+The canonical project instructions for any agent are in `CLAUDE.md`. This file exists for tools that read `AGENTS.md`. The Leader → Implementer → Reviewer personas live in `.agents/`.
 
-Resumen operativo (si hay conflicto, manda `CLAUDE.md`):
+Operational summary (`CLAUDE.md` wins on any conflict):
 
-- El Executor **coordina**: sin builds, sin BD, sin secretos de aplicación, sin lógica por proyecto ni de Jenkins, sin expresiones (NFR-01).
-- La spec activa está en `docs/specs/changes/cicd-executor-poc/`.
-- Nunca commitear identificadores internos ni los dos archivos `JENKINS_REPLACEMENT_*.md`.
-- **Scope only grows through approval:** ningún agente amplía el alcance de una tarea sin aprobación del owner.
+- Everything committed to the repo (code, comments, tests, docs, commits) is in **English**.
+- The Executor **coordinates**: no builds, no databases, no application secrets, no per-project or Jenkins logic, no expressions (NFR-01).
+- The active spec is `docs/specs/changes/cicd-executor-poc/`.
+- Never commit internal identifiers or the two `JENKINS_REPLACEMENT_*.md` files.
+- **Scope only grows through approval:** no agent widens a task without the owner's approval.
