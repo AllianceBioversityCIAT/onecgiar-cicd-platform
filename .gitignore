@@ -1,0 +1,26 @@
+# Local-only analysis files (never versioned — design.md §4.1, premise P-26)
+JENKINS_REPLACEMENT_AKILI_CONTEXT.md
+JENKINS_REPLACEMENT_FEASIBILITY_ANALYSIS.md
+
+# Node / JS
+node_modules/
+dist/
+coverage/
+*.log
+npm-debug.log*
+
+# Env / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tooling
+.codegraph/
+
+# Local DynamoDB / ElasticMQ data and jars
+.local/

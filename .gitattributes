@@ -1,0 +1,3 @@
+# Line endings: always LF in the repo (shell scripts run on Linux targets).
+* text=auto eol=lf
+*.sh text eol=lf
