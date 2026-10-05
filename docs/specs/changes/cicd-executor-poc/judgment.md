@@ -1,183 +1,183 @@
 # Judgment Day — `design.md` (cicd-executor-poc)
 
-| Campo | Valor |
+| Field | Value |
 |---|---|
-| Target | `design.md` (borrador v1 del 2026-10-05) contrastado con `requirements.md` y `proposal.md` (aprobados) |
-| Modo | Dos jueces ciegos, de solo lectura y en paralelo. Modelo `sonnet` (el autor del diseño fue `opus`) |
-| Ronda | 1 de 2 |
-| Estado | **Abierto**: esperando la decisión del owner antes de la corrección de la ronda 1 |
-| Referencias de la skill | `references/` no está empaquetado; se aplicó el contrato de `SKILL.md` |
+| Target | `design.md` (draft v1 from 2026-10-05) checked against `requirements.md` and `proposal.md` (approved) |
+| Mode | Two blind judges, read-only and in parallel. Model `sonnet` (the design's author was `opus`) |
+| Round | 1 of 2 |
+| Status | **Open**: awaiting the owner's decision before the round 1 fix |
+| Skill references | `references/` is not packaged; the `SKILL.md` contract was applied |
 
-Leyenda: **A** = juez A; **B** = juez B.
+Legend: **A** = judge A; **B** = judge B.
 
-## Ledger congelado — ronda 1
+## Frozen ledger — round 1
 
-### Confirmados por ambos jueces (SEVERE → auto-fix elegible)
+### Confirmed by both judges (SEVERE → eligible for auto-fix)
 
-| ID | Hallazgo | A | B | Verificación del arquitecto |
+| ID | Finding | A | B | Architect verification |
 |---|---|---|---|---|
-| C-1 | DD-09: espera de lock "con `DelaySeconds` creciente hasta 30 min". SQS limita `DelaySeconds` a 900 s, así que el mecanismo no alcanza el `LOCK_TIMEOUT` de 30 min de FR-11 | J-02 | J1 | Correcto: límite documentado de SQS |
-| C-2 | P-21 "verificado" (`grep -rni "akilia" .` → 0 hits) es falso: el propio `design.md` contiene la cadena (Document Control y la fila P-21) | J-01 | J2 | Correcto: la fila se refuta a sí misma |
+| C-1 | DD-09: lock wait "with `DelaySeconds` increasing up to 30 min". SQS limits `DelaySeconds` to 900 s, so the mechanism does not reach the 30-minute `LOCK_TIMEOUT` of FR-11 | J-02 | J1 | Correct: documented SQS limit |
+| C-2 | P-21 "verified" (`grep -rni "akilia" .` → 0 hits) is false: `design.md` itself contains the string (Document Control and the P-21 row) | J-01 | J2 | Correct: the row refutes itself |
 
-### Sospechosos (SEVERE según un solo juez → sin auto-fix; decide el owner)
+### Suspected (SEVERE per a single judge → no auto-fix; owner decides)
 
-| ID | Hallazgo | Juez | Verificación del arquitecto |
+| ID | Finding | Judge | Architect verification |
 |---|---|---|---|
-| S-1 | DD-20: el dedupe en dos fases no tiene lease. Dos redeliveries concurrentes del mismo `requestId` en estado `CLAIMED` podrían completar ambas los pasos 2–4, consumir dos secuencias y crear dos ejecuciones (viola FR-03 y FR-07) | A (J-03) | **De acuerdo**: carrera real |
-| S-2 | Lease vencido con la sesión SSH viva: si falla la renovación del lock (partición con DynamoDB) mientras el script sigue corriendo, otra ejecución puede adquirir el lock y lanzar un segundo deploy o migración. El `fencingToken` protege solo la escritura en DynamoDB, no el efecto físico | B (J5) | **De acuerdo**: requiere un mutex del lado del target o un riesgo aceptado explícito |
-| S-3 | Falta la premisa "las migraciones son compatibles hacia atrás". Estaba en el proposal §10.11 y desaparece en requirements y design; el rollback del código 40 depende de ella | B (J3) | **De acuerdo** |
-| S-4 | FR-18 (coexistencia con Jenkins) no tiene respaldo de diseño: no hay mecanismo que impida un deploy real sin una ventana confirmada | B (J6) | **De acuerdo**: se puede respaldar con un gate de configuración |
+| S-1 | DD-20: the two-phase dedupe has no lease. Two concurrent redeliveries of the same `requestId` in `CLAIMED` state could both complete steps 2–4, consume two sequences and create two executions (violates FR-03 and FR-07) | A (J-03) | **Agreed**: real race condition |
+| S-2 | Lease expired with the SSH session still alive: if the lock renewal fails (partition with DynamoDB) while the script keeps running, another execution can acquire the lock and launch a second deployment or migration. The `fencingToken` protects only the write to DynamoDB, not the physical effect | B (J5) | **Agreed**: requires a target-side mutex or an explicit accepted risk |
+| S-3 | The premise "migrations are backward compatible" is missing. It was in proposal §10.11 and disappears in requirements and design; the code 40 rollback depends on it | B (J3) | **Agreed** |
+| S-4 | FR-18 (coexistence with Jenkins) has no design backing: there is no mechanism that prevents a real deployment without a confirmed window | B (J6) | **Agreed**: can be backed with a configuration gate |
 
-### Hallado por ambos con severidad distinta → decide el owner
+### Found by both with different severity → owner decides
 
-| ID | Hallazgo | A | B | Verificación del arquitecto |
+| ID | Finding | A | B | Architect verification |
 |---|---|---|---|---|
-| D-1 | El riesgo R9 del proposal (BD DEV compartida con variantes de Jenkins de otras ramas) no aparece en el Premise Ledger (shared-state) ni en los riesgos del diseño | SUGGESTION (J-09) | SEVERE (J4) | Disparador de clase `shared-state` sin fila → por la regla de la skill, **severo** |
+| D-1 | Risk R9 from the proposal (DEV DB shared with Jenkins variants from other branches) does not appear in the Premise Ledger (shared-state) nor in the design's risks | SUGGESTION (J-09) | SEVERE (J4) | `shared-state` class trigger without a row → per the skill's rule, **severe** |
 
-### WARNING (info, sin auto-fix)
+### WARNING (info, no auto-fix)
 
-| ID | Hallazgo | Juez |
+| ID | Finding | Judge |
 |---|---|---|
-| W-1 | `handlers/ssh` sin semáforo global de sesiones (NFR-04; el proposal fijaba un default de 4) | A (J-06), B (J11) |
-| W-2 | FR-20 (webhook) sin módulo ni contrato (firma, rama) | A (J-07), B (J7) |
-| W-3 | FR-04 "evento huérfano" sin manejo explícito en `event-router` | A (J-04) |
-| W-4 | Barrido de `/work` al arrancar (FR-08) sin módulo asignado | A (J-05) |
-| W-5 | DD-19 (redesplegar por cada definición nueva) en tensión con la redacción de NFR-08 y QAS-5 | B (J8) |
-| W-6 | P-15: la cita no establece que las invocaciones actuales sean síncronas (es una inferencia) | B (J9) |
+| W-1 | `handlers/ssh` has no global session semaphore (NFR-04; the proposal set a default of 4) | A (J-06), B (J11) |
+| W-2 | FR-20 (webhook) has no module or contract (signature, branch) | A (J-07), B (J7) |
+| W-3 | FR-04 "orphan event" has no explicit handling in `event-router` | A (J-04) |
+| W-4 | `/work` sweep at startup (FR-08) has no assigned module | A (J-05) |
+| W-5 | DD-19 (redeploy for every new definition) is in tension with the wording of NFR-08 and QAS-5 | B (J8) |
+| W-6 | P-15: the quote does not establish that current invocations are synchronous (it is an inference) | B (J9) |
 
 ### SUGGESTION (info)
 
-| ID | Hallazgo | Juez |
+| ID | Finding | Judge |
 |---|---|---|
-| I-1 | Ruta temporal renombrada (`/tmp/deploy-{id}.env` → `/tmp/cicd-{id}/runtime.env`) sin explicar | A (J-08) |
-| I-2 | P-14 debería citar FA §9.3.5 en vez de L1123 | A (J-10) |
-| I-3 | P-8: "tags no numéricos" no tiene pista en el FA | A (J-11) |
-| I-4 | P-10: su impacto High es condicional | B (J10) |
+| I-1 | Temp path renamed (`/tmp/deploy-{id}.env` → `/tmp/cicd-{id}/runtime.env`) without explanation | A (J-08) |
+| I-2 | P-14 should cite FA §9.3.5 instead of L1123 | A (J-10) |
+| I-3 | P-8: "non-numeric tags" has no trace in the FA | A (J-11) |
+| I-4 | P-10: its High impact is conditional | B (J10) |
 
-### Controles que pasaron (ambos jueces)
+### Checks that passed (both judges)
 
-Conteo del Premise Ledger consistente. Filas `shared-state` y `consumer` presentes. Ninguna decisión abierta (OD-Q5, Q7, Q11–Q15) asumida. Números (retención, plazos, códigos de salida, F1–F17) consistentes. Frontera NFR-01 sin desviaciones.
+Premise Ledger count consistent. `shared-state` and `consumer` rows present. No open decision (OD-Q5, Q7, Q11–Q15) assumed. Numbers (retention, deadlines, exit codes, F1–F17) consistent. NFR-01 boundary with no deviations.
 
-## Veredictos
+## Verdicts
 
-| Juez | Veredicto |
+| Judge | Verdict |
 |---|---|
 | A | FAIL |
 | B | FAIL |
 
-## Correcciones — ronda 1 (aprobadas por el owner el 2026-10-05: opción "Fix and Re-judge")
+## Fixes — round 1 (approved by the owner on 2026-10-05: "Fix and Re-judge" option)
 
-Instrucciones del owner: aplicar C-1, C-2, S-1 a S-4, D-1 y los informativos. S-2 con dos capas (DynamoDB sigue siendo el lock; el mutex local es una segunda barrera, no un reemplazo). S-4 transitorio y por target, sin lógica Jenkins en el núcleo. C-1 con reencolados acotados y espera acumulada. S-3 como precondición explícita. DD-19 como simplificación del PoC detrás de una abstracción.
+Owner's instructions: apply C-1, C-2, S-1 through S-4, D-1 and the informational items. S-2 with two layers (DynamoDB remains the lock; the local mutex is a second barrier, not a replacement). S-4 transient and per-target, with no Jenkins logic in the core. C-1 with bounded requeues and accumulated wait. S-3 as an explicit precondition. DD-19 as a PoC simplification behind an abstraction.
 
-| ID | Corrección (delta) | Dónde |
+| ID | Fix (delta) | Where |
 |---|---|---|
-| C-1 | Espera de lock con una cadena de `LOCK_RETRY_REQUESTED` de como máximo 900 s cada uno, `lockWaitStartedAt` y `lockWaitAttempts` en el step, presupuesto de 30 min acumulados, tope de 10 intentos y red de seguridad del reconciler. Nueva premisa P-22 | design DD-09, §5.1, §7, §7.1, §7.2, §11 |
-| C-2 | P-21 reformulada y re-ejecutada (2 archivos dentro de la spec, 0 fuera) | design §11, Document Control |
-| S-1 | Dedupe con `claimToken` + `claimLeaseExpiresAt` + `sequence` guardada. Tabla de redelivery por estado | design DD-20, §5.1 |
-| S-2 | DD-22: mutex local no bloqueante por `lockKey` en el target, código 50 `TARGET_BUSY` (vuelve a la espera), `lockLostDuringRun`, rollback desde la imagen que realmente corre. FR-13 añade el código 50 y su escenario | design DD-22, DD-11, §5.3, §6.4, §7, §7.2; requirements FR-13, FR-16 F18 |
-| S-3 | Precondición atestada `migrationCompatibility: backward-compatible` en el registro; validación; premisa P-23 (High, Gate C) | design DD-11, §7 `definition-service`, §11, §12; requirements FR-13, FR-02 |
-| S-4 | DD-21: ventanas de deploy genéricas y transitorias por target (`requiresDeployWindow`), eventos `DEPLOY_WINDOW_*`, `deploy-window-service`, CLI en `tools/`, ítem `WINDOW#`, formato del log de coexistencia, `DEPLOY_WINDOW_CLOSED` | design DD-21, §2, §3.3, §4, §5.1, §6.1, §7, §7.2; requirements FR-18, FR-16 F19 |
-| D-1 | Premisa `shared-state` P-24 (BD DEV compartida) y fila de riesgo con mitigaciones | design §11, §12 |
-| W-1 | Semáforo global de sesiones SSH (default 4) | design §7 `handlers/ssh` |
-| W-2 | Contrato del webhook §6.6 | design §6.6, §4 |
-| W-3 | Eventos huérfanos (`ORPHAN_EVENT`) | design §6.1, §7 `event-router` |
-| W-4 | Barrido de `/work` asignado a `main` (volumen exclusivo por instancia) | design §4, §7 |
-| W-5 | Puerto `DefinitionSource` y empaquetado como simplificación del PoC; QAS-5 y NFR-08 aclarados | design DD-19, §2, §4, §7, QAS-5; requirements NFR-08 |
-| W-6 | P-15 sin afirmar el modo de invocación | design §11 |
-| I-1…I-4 | Ruta temporal explicada; P-14 cita §9.3.5; P-8 dividida en P-8 y P-8b; P-10 marcada como High condicional | design §5.3, §11 |
+| C-1 | Lock wait with a chain of `LOCK_RETRY_REQUESTED` of at most 900 s each, `lockWaitStartedAt` and `lockWaitAttempts` on the step, a budget of 30 accumulated minutes, a cap of 10 attempts and a reconciler safety net. New premise P-22 | design DD-09, §5.1, §7, §7.1, §7.2, §11 |
+| C-2 | P-21 reworded and re-run (2 files within the spec, 0 outside) | design §11, Document Control |
+| S-1 | Dedupe with `claimToken` + `claimLeaseExpiresAt` + stored `sequence`. Redelivery table by state | design DD-20, §5.1 |
+| S-2 | DD-22: non-blocking local mutex by `lockKey` on the target, code 50 `TARGET_BUSY` (returns to waiting), `lockLostDuringRun`, rollback from the image that is actually running. FR-13 adds code 50 and its scenario | design DD-22, DD-11, §5.3, §6.4, §7, §7.2; requirements FR-13, FR-16 F18 |
+| S-3 | Attested precondition `migrationCompatibility: backward-compatible` in the registry; validation; premise P-23 (High, Gate C) | design DD-11, §7 `definition-service`, §11, §12; requirements FR-13, FR-02 |
+| S-4 | DD-21: generic, transient per-target deploy windows (`requiresDeployWindow`), `DEPLOY_WINDOW_*` events, `deploy-window-service`, CLI in `tools/`, `WINDOW#` item, coexistence log format, `DEPLOY_WINDOW_CLOSED` | design DD-21, §2, §3.3, §4, §5.1, §6.1, §7, §7.2; requirements FR-18, FR-16 F19 |
+| D-1 | `shared-state` premise P-24 (shared DEV DB) and risk row with mitigations | design §11, §12 |
+| W-1 | Global SSH session semaphore (default 4) | design §7 `handlers/ssh` |
+| W-2 | Webhook contract §6.6 | design §6.6, §4 |
+| W-3 | Orphan events (`ORPHAN_EVENT`) | design §6.1, §7 `event-router` |
+| W-4 | `/work` sweep assigned to `main` (volume exclusive per instance) | design §4, §7 |
+| W-5 | `DefinitionSource` port and packaging as a PoC simplification; QAS-5 and NFR-08 clarified | design DD-19, §2, §4, §7, QAS-5; requirements NFR-08 |
+| W-6 | P-15 without asserting the invocation mode | design §11 |
+| I-1…I-4 | Temp path explained; P-14 cites §9.3.5; P-8 split into P-8 and P-8b; P-10 marked as conditional High | design §5.3, §11 |
 
-Barrido de cierre de correcciones ejecutado (grep de `0/10/20/30/40`, `hasta 30 min`, `DelaySeconds`, `sin cambios al Executor`, `/tmp/deploy-`): sin restos de valores reemplazados en design ni requirements. `proposal.md` (aprobado) no se reescribe: conserva su texto histórico.
+Closing sweep of fixes executed (grep of `0/10/20/30/40`, `up to 30 min`, `DelaySeconds`, `no changes to the Executor`, `/tmp/deploy-`): no remnants of replaced values in design or requirements. `proposal.md` (approved) is not rewritten: it keeps its historical text.
 
-## Ronda 2 — re-juicio acotado (ledger congelado + delta)
+## Round 2 — bounded re-judgment (frozen ledger + delta)
 
-| Juez | Veredicto | Ítems de la ronda 1 |
+| Judge | Verdict | Round 1 items |
 |---|---|---|
-| A | **PASS** (condicionado a cerrar R2-1, R2-W2 y R2-W3 antes del Gate C) | Todos RESOLVED |
-| B | **PASS** (recomienda una enmienda acotada para R2-1) | Todos RESOLVED |
+| A | **PASS** (conditioned on closing R2-1, R2-W2 and R2-W3 before Gate C) | All RESOLVED |
+| B | **PASS** (recommends a bounded amendment for R2-1) | All RESOLVED |
 
-Ambos jueces volvieron a ejecutar el grep de P-21 (2 archivos dentro de la spec, 0 fuera) y recontaron el Premise Ledger a mano: 25 filas, 2 verificadas y 23 `UNVERIFIED` (10 High y 13 Low). Coincide. Ninguno encontró un **problema arquitectónico crítico**. La frontera NFR-01 se mantiene y ninguna OD quedó resuelta en silencio.
+Both judges re-ran the P-21 grep (2 files within the spec, 0 outside) and manually recounted the Premise Ledger: 25 rows, 2 verified and 23 `UNVERIFIED` (10 High and 13 Low). It matches. Neither found a **critical architectural issue**. The NFR-01 boundary holds and no OD was silently resolved.
 
-### Hallazgos nuevos causados por las correcciones
+### New findings caused by the fixes
 
-| ID | Severidad | Hallazgo | A | B |
+| ID | Severity | Finding | A | B |
 |---|---|---|---|---|
-| R2-1 | **SEVERE (confirmado por ambos)** | El código 50 (DD-22) exige la transición hacia atrás `DISPATCHING/RUNNING → WAITING_LOCK` del step `ssh`, que no está en la tabla de transiciones (FR-05 / `state-machine`). Una implementación literal la rechazaría | J-01 | R2-1 |
-| R2-W1 | WARNING | No dice que la comprobación de ventana se repite en cada reintento de lock y tras el código 50; una ventana cerrada durante la espera podría no detectarse | — | R2-2 |
-| R2-W2 | WARNING | `requiresDeployWindow` es opt-in. Si falta en un target compartido conocido (P-13), la protección de S-4 se anula en silencio | J-02 | — |
-| R2-W3 | WARNING | El cierre de ventanas vencidas por el reconciler no tiene una ruta de consulta indexada (los ítems `WINDOW#` no están en GSI2) | J-03 | — |
-| R2-W4 | WARNING | El barrido de `/work` es seguro solo si el volumen es exclusivo de cada instancia; eso se afirma, pero no se exige en DD-18 | J-04 | — |
-| R2-I1 | SUGGESTION | DD-09 dice "unos 7 reencolados": con el calendario indicado son 6 | J-06 | R2-3 |
-| R2-I2 | SUGGESTION | Liberación del semáforo SSH también ante el código 50 (evitar la fuga de cupos) | — | R2-4 |
-| R2-I3 | SUGGESTION | Falta una fila en la tabla de redelivery de DD-20: el mismo `claimToken` con lease vigente | J-05 | — |
-| R2-I4 | SUGGESTION | Runbook para liberar un mutex local atascado tras `UNKNOWN_TARGET_STATE` | J-07 | — |
+| R2-1 | **SEVERE (confirmed by both)** | Code 50 (DD-22) requires the backward transition `DISPATCHING/RUNNING → WAITING_LOCK` of the `ssh` step, which is not in the transition table (FR-05 / `state-machine`). A literal implementation would reject it | J-01 | R2-1 |
+| R2-W1 | WARNING | It does not say that the window check repeats on every lock retry and after code 50; a window closed during the wait might go undetected | — | R2-2 |
+| R2-W2 | WARNING | `requiresDeployWindow` is opt-in. If it is missing on a known shared target (P-13), S-4's protection is silently nullified | J-02 | — |
+| R2-W3 | WARNING | The reconciler's closing of expired windows has no indexed query path (the `WINDOW#` items are not in GSI2) | J-03 | — |
+| R2-W4 | WARNING | The `/work` sweep is safe only if the volume is exclusive to each instance; that is asserted, but not enforced in DD-18 | J-04 | — |
+| R2-I1 | SUGGESTION | DD-09 says "about 7 requeues": with the schedule given, it is 6 | J-06 | R2-3 |
+| R2-I2 | SUGGESTION | SSH semaphore release also on code 50 (avoid slot leakage) | — | R2-4 |
+| R2-I3 | SUGGESTION | A row is missing in DD-20's redelivery table: the same `claimToken` with a valid lease | J-05 | — |
+| R2-I4 | SUGGESTION | Runbook to release a stuck local mutex after `UNKNOWN_TARGET_STATE` | J-07 | — |
 
-### Estado del ciclo
+### Cycle status
 
-- Rondas de corrección usadas: **1 de 2**. Re-juicios usados: **1 de 2**.
-- R2-1 está confirmado por ambos jueces → elegible para la **ronda final de corrección** (con aprobación del owner), seguida del último re-juicio acotado.
-- Estado de la transacción: **abierta**, esperando la decisión del owner (no está `approved` ni `escalated`).
+- Fix rounds used: **1 of 2**. Re-judgments used: **1 of 2**.
+- R2-1 is confirmed by both judges → eligible for the **final fix round** (with owner approval), followed by the last bounded re-judgment.
+- Transaction status: **open**, awaiting the owner's decision (it is neither `approved` nor `escalated`).
 
-## Correcciones — ronda 2 (final; aprobada por el owner el 2026-10-05)
+## Fixes — round 2 (final; approved by the owner on 2026-10-05)
 
-Instrucciones del owner: corregir R2-1, R2-W1 a R2-W4 y R2-I1 a R2-I4. T9 solo para el código 50 (no es una vuelta atrás genérica). Revalidar la ventana en cada punto. Configuración segura por construcción y sin lógica Jenkins en el núcleo. Reconciliación de ventanas sin scans. `/work` con propiedad explícita. Preservar las dos capas, la precondición de migraciones, `DefinitionSource`, el runtime en el servidor existente, CodeBuild por app y ambiente y NFR-01. Añadir el repositorio canónico y la exclusión de los dos archivos de análisis.
+Owner's instructions: fix R2-1, R2-W1 through R2-W4 and R2-I1 through R2-I4. T9 only for code 50 (not a generic backward transition). Revalidate the window at every point. Configuration safe by construction and with no Jenkins logic in the core. Window reconciliation without scans. `/work` with explicit ownership. Preserve the two layers, the migration precondition, `DefinitionSource`, the runtime on the existing server, CodeBuild per app and environment, and NFR-01. Add the canonical repository and the exclusion of the two analysis files.
 
-| ID | Corrección (delta) | Dónde |
+| ID | Fix (delta) | Where |
 |---|---|---|
-| R2-1 | Nueva §7.3: lista cerrada T1–T12. **T9 `RUNNING → WAITING_LOCK` solo `ssh` y solo con código 50.** Detalle: estados que lo reciben (solo `RUNNING`; se explica por qué no `DISPATCHING`), recursos liberados, identidad preservada, reintento, revalidación V3, idempotencia. Cualquier otra transición se rechaza (`INVALID_TRANSITION`). Los reintentos de `source`/`lambda`/`codebuild` quedan formalizados como T10 (nunca `ssh`) | design §7.3, §7 (`state-machine`, `step-dispatcher`), §2; requirements FR-05 (escenario nuevo) |
-| R2-W1 | Revalidación en V1 (primer intento), V2 (cada reintento de lock), V3 (tras el 50) y V4 (justo antes del exec, con todo tomado). La ventana debe cubrir `now + timeout del step`. Motivos `NO_WINDOW`/`EXPIRED`/`INSUFFICIENT_REMAINING`. Ventana vencida durante un script en curso: no se aborta; `windowClosedDuringRun` | design §7.7, DD-09, DD-21, §7.2; requirements FR-18 (escenario nuevo) |
-| R2-W2 | `externalDeployers` y `deployWindowPolicy` **obligatorios y sin default**. Desplegadores externos no vacíos ⇒ solo `required`. La apertura de ventana debe cubrir todos los `externalDeployers`. Validación en CI y al arrancar | design §7.7, DD-21, §7 (`definition-service`, `deploy-window-service`), P-13; requirements FR-02 (escenario nuevo) |
-| R2-W3 | Ventanas `OPEN` con `activeStatus = WINDOW` y `deadlineAt = closesAt` en GSI2 disperso. Una `Query` por partición. Cierre condicional `EXPIRED`. Interacción con steps documentada | design §5.1, §7 (`reconciler`), §7.7 |
-| R2-W4 | `instanceId` estable y único con lease `INSTANCE#` (no arranca si está duplicado). `/work/{instanceId}/{executionId}/{stepId}-{attempt}/`. Limpieza por ejecución, al arrancar (solo el propio subárbol) y de rezagados. Seguro con varias instancias | design §7.4, §5.1, DD-18, §7 (`main`) |
-| R2-I1 | Calendario exacto en §7.6: 7 intentos y 6 reencolados como máximo sin contención, último retraso recortado a 870 s; decisión por espera real persistida | design §7.6, DD-09 |
-| R2-I2 | Tabla de adquisición y liberación del handler SSH para cada salida; con el 50 se liberan el semáforo y el lock | design §7.5, DD-22 |
-| R2-I3 | DD-20: filas "mismo `claimToken` con lease vigente" y "toma condicional fallida". Garantías de idempotencia reafirmadas | design DD-20 |
-| R2-I4 | Runbook §12.1: el mutex es el bloqueo del kernel, no el archivo; evidencia por pasos; distingue deploy activo de estancado; nunca borrar el archivo; escalar si hay una migración en curso | design §12.1, §5.3 |
-| Repo | §4.1: repositorio canónico; la raíz del repo reemplaza a `cicd-platform/`; `.gitignore` primero con los dos archivos de análisis; verificación con `git status`/`git ls-files` antes de cada commit; sin push en especificación; revisión del owner sobre detalles internos en specs antes del primer commit. P-25 verificada (`git ls-remote`), P-26 `UNVERIFIED` | design §4.1, §4.2, §11, Document Control |
-| Gates | Nueva §14: bloqueos por gate A/B/C/D | design §14 |
+| R2-1 | New §7.3: closed list T1–T12. **T9 `RUNNING → WAITING_LOCK` only `ssh` and only with code 50.** Detail: states that receive it (only `RUNNING`; explains why not `DISPATCHING`), released resources, preserved identity, retry, V3 revalidation, idempotency. Any other transition is rejected (`INVALID_TRANSITION`). Retries of `source`/`lambda`/`codebuild` are formalized as T10 (never `ssh`) | design §7.3, §7 (`state-machine`, `step-dispatcher`), §2; requirements FR-05 (new scenario) |
+| R2-W1 | Revalidation at V1 (first attempt), V2 (every lock retry), V3 (after the 50) and V4 (right before exec, with everything acquired). The window must cover `now + step timeout`. Reasons `NO_WINDOW`/`EXPIRED`/`INSUFFICIENT_REMAINING`. Window expired during a script in progress: it is not aborted; `windowClosedDuringRun` | design §7.7, DD-09, DD-21, §7.2; requirements FR-18 (new scenario) |
+| R2-W2 | `externalDeployers` and `deployWindowPolicy` **mandatory and without a default**. Non-empty external deployers ⇒ `required` only. The window opening must cover all `externalDeployers`. Validation in CI and at startup | design §7.7, DD-21, §7 (`definition-service`, `deploy-window-service`), P-13; requirements FR-02 (new scenario) |
+| R2-W3 | `OPEN` windows with `activeStatus = WINDOW` and `deadlineAt = closesAt` in sparse GSI2. One `Query` per partition. Conditional `EXPIRED` closure. Interaction with steps documented | design §5.1, §7 (`reconciler`), §7.7 |
+| R2-W4 | Stable and unique `instanceId` with `INSTANCE#` lease (does not start if duplicated). `/work/{instanceId}/{executionId}/{stepId}-{attempt}/`. Cleanup per execution, at startup (only its own subtree) and of stragglers. Safe with multiple instances | design §7.4, §5.1, DD-18, §7 (`main`) |
+| R2-I1 | Exact schedule in §7.6: 7 attempts and 6 requeues at most with no contention, last delay capped at 870 s; decision based on persisted actual wait | design §7.6, DD-09 |
+| R2-I2 | Acquisition and release table for the SSH handler for each exit; with the 50, both the semaphore and the lock are released | design §7.5, DD-22 |
+| R2-I3 | DD-20: rows "same `claimToken` with a valid lease" and "failed conditional take". Idempotency guarantees reaffirmed | design DD-20 |
+| R2-I4 | Runbook §12.1: the mutex is the kernel lock, not the file; step-by-step evidence; distinguishes an active deployment from a stalled one; never delete the file; escalate if a migration is in progress | design §12.1, §5.3 |
+| Repo | §4.1: canonical repository; the repo root replaces `cicd-platform/`; `.gitignore` first with the two analysis files; verification with `git status`/`git ls-files` before every commit; no push during specification; owner review of internal details in specs before the first commit. P-25 verified (`git ls-remote`), P-26 `UNVERIFIED` | design §4.1, §4.2, §11, Document Control |
+| Gates | New §14: blocks per gate A/B/C/D | design §14 |
 
-Barrido de cierre: sin restos de `requiresDeployWindow` como mecanismo, `cicd-platform/` como raíz, "unos 7 reencolados" ni "quitando la marca". P-21 re-ejecutada tras la v3: `grep -rnil "akilia" .` → 2 archivos dentro de la spec y 0 fuera (exit 1).
+Closing sweep: no remnants of `requiresDeployWindow` as a mechanism, `cicd-platform/` as the root, "about 7 requeues" nor "removing the tag". P-21 re-run after v3: `grep -rnil "akilia" .` → 2 files within the spec and 0 outside (exit 1).
 
-## Ronda 3 — re-juicio final
+## Round 3 — final re-judgment
 
-| Juez | Veredicto | Ítems de la ronda 2 |
+| Judge | Verdict | Round 2 items |
 |---|---|---|
-| A | **PASS** | R2-1, R2-W1 a R2-W4 y R2-I1 a R2-I4: todos RESOLVED |
-| B | **PASS** | R2-1, R2-W1 a R2-W4 y R2-I1 a R2-I4: todos RESOLVED |
+| A | **PASS** | R2-1, R2-W1 through R2-W4 and R2-I1 through R2-I4: all RESOLVED |
+| B | **PASS** | R2-1, R2-W1 through R2-W4 and R2-I1 through R2-I4: all RESOLVED |
 
-Ambos jueces volvieron a ejecutar `git ls-remote` (P-25: hash exacto `41f4c3e…`) y el grep de P-21 (2 archivos dentro de la spec, 0 fuera), y recontaron el Premise Ledger (27 filas: 3 verificadas y 24 `UNVERIFIED`, 10 High y 14 Low). Coincide. Ambos validaron que el código 50 **no** puede llegar en `DISPATCHING` (T6 ocurre justo antes del exec) y que T10 no reabre una vuelta atrás genérica ni aplica a `ssh`.
+Both judges re-ran `git ls-remote` (P-25: exact hash `41f4c3e…`) and the P-21 grep (2 files within the spec, 0 outside), and recounted the Premise Ledger (27 rows: 3 verified and 24 `UNVERIFIED`, 10 High and 14 Low). It matches. Both validated that code 50 **cannot** arrive in `DISPATCHING` (T6 occurs right before exec) and that T10 does not reopen a generic backward transition nor apply to `ssh`.
 
-**Sin hallazgos CRITICAL ni SEVERE. Nada bloquea el Gate A.**
+**No CRITICAL or SEVERE findings. Nothing blocks Gate A.**
 
-### Hallazgos informativos (sin auto-fix: se agotaron las rondas de corrección)
+### Informational findings (no auto-fix: the fix rounds were exhausted)
 
-| ID | Severidad | Hallazgo | A | B |
+| ID | Severity | Finding | A | B |
 |---|---|---|---|---|
-| R3-1 | WARNING | En `design.md` la §14 "Gates" está físicamente antes de la §13 "Budget" (orden 12 → 14 → 13). Solo estructural | J-01 | R3-1 |
-| R3-2 | WARNING | La lista cerrada de §7.3 no deja explícito cómo la recuperación de un build perdido por el reconciler (`BatchGetBuilds`, DD-04) se descompone en transiciones: `RUNNING` con `externalRef` → T8 es claro; `DISPATCHING` sin `externalRef` (re-despacho con el **mismo** token, DD-04) no tiene fila propia. Conviene explicitarlo antes de escribir el reconciler | J-02 | — |
-| R3-3 | SUGGESTION | La fila "Revisión" de `requirements.md` menciona solo la ronda 1, aunque el cuerpo ya contiene los escenarios de la ronda 2 (FR-02, FR-05, FR-18) | — | R3-2 |
-| R3-4 | SUGGESTION | Cerca del límite de 30 min, T5 (`LOCK_TIMEOUT`, en el handler) y T12 (`TIMED_OUT`, en el reconciler) compiten. La concurrencia optimista garantiza un único estado terminal, pero el código final no es determinista. Documentarlo como inocuo | — | R3-3 |
+| R3-1 | WARNING | In `design.md`, §14 "Gates" is physically before §13 "Budget" (order 12 → 14 → 13). Structural only | J-01 | R3-1 |
+| R3-2 | WARNING | The closed list in §7.3 does not make explicit how recovery of a build lost by the reconciler (`BatchGetBuilds`, DD-04) decomposes into transitions: `RUNNING` with `externalRef` → T8 is clear; `DISPATCHING` without `externalRef` (re-dispatch with the **same** token, DD-04) has no row of its own. It should be made explicit before the reconciler is written | J-02 | — |
+| R3-3 | SUGGESTION | The "Review" row of `requirements.md` mentions only round 1, although the body already contains the round 2 scenarios (FR-02, FR-05, FR-18) | — | R3-2 |
+| R3-4 | SUGGESTION | Near the 30-minute limit, T5 (`LOCK_TIMEOUT`, in the handler) and T12 (`TIMED_OUT`, in the reconciler) compete. Optimistic concurrency guarantees a single terminal state, but the final code is not deterministic. Document this as harmless | — | R3-3 |
 
-## Recibo terminal
+## Terminal receipt
 
-| Campo | Valor |
+| Field | Value |
 |---|---|
-| Target | `design.md` v3 (+ `requirements.md` ajustado) de `changes/cicd-executor-poc` |
-| Rondas | 3 juicios (1 inicial + 2 re-juicios acotados) · 2 rondas de corrección (el máximo) |
-| Confirmados SEVERE | Ronda 1: 2 (C-1, C-2) + 5 aprobados por el owner (S-1 a S-4, D-1) · Ronda 2: 1 (R2-1) · Ronda 3: 0 |
-| Pendientes | 0 SEVERE · 4 informativos (R3-1 a R3-4), cuya aplicación como ajuste editorial decide el owner |
-| Estado | **approved** |
+| Target | `design.md` v3 (+ adjusted `requirements.md`) from `changes/cicd-executor-poc` |
+| Rounds | 3 judgments (1 initial + 2 bounded re-judgments) · 2 fix rounds (the maximum) |
+| Confirmed SEVERE | Round 1: 2 (C-1, C-2) + 5 approved by the owner (S-1 through S-4, D-1) · Round 2: 1 (R2-1) · Round 3: 0 |
+| Pending | 0 SEVERE · 4 informational (R3-1 through R3-4), whose application as an editorial adjustment is decided by the owner |
+| Status | **approved** |
 
 **JUDGMENT: APPROVED ✅**
 
-## Posterior al APPROVED — ajustes editoriales autorizados por el owner (2026-10-05)
+## After APPROVED — editorial adjustments authorized by the owner (2026-10-05)
 
-No reabren el juicio: aplican los informativos R3-1 a R3-4 y la política de publicación.
+These do not reopen the judgment: they apply the informational items R3-1 through R3-4 and the publication policy.
 
-| ID | Cambio |
+| ID | Change |
 |---|---|
-| R3-1 | En `design.md`, §13 "Budget" ahora precede a §14 "Gates" |
-| R3-2 | §7.3: nueva **T13**, re-despacho idempotente con el **mismo** `attempt` y `dispatchToken` (solo `codebuild` y `lambda`, una vez, controlado por `reconcileRedispatchCount`), más una tabla de recuperación del reconciler (T8/T13/T12). Ajustadas T12 y DD-04 |
-| R3-3 | La fila "Revisión" de `requirements.md` refleja el Judgment Day completo (3 rondas, APPROVED) |
-| R3-4 | **Regla canónica:** agotar la espera de lock termina **siempre** en `FAILED (LOCK_TIMEOUT)` por T5, la detecte el handler o el reconciler. T12 ya no aplica a `WAITING_LOCK`. Nuevo `AND IT MUST` en FR-11 |
-| Publicación | Specs saneadas: ID de cuenta, región, hosts, IDs de credenciales, nombres de secretos, contenedores, puertos, repos ECR, función y bucket del PoC previo, tabla de Jenkins, canal de Slack, nombres y rutas de jobs de Jenkins, scripts residentes y detalles de vulnerabilidades de otros sistemas → referencias lógicas (`<…>`). Nueva DD-23: los valores reales se resuelven fuera de Git |
-| Budget | Re-estimado en Phase 3: 37 tareas (antes 25) y ~50 rondas; LOC sin cambios (~8.700) |
+| R3-1 | In `design.md`, §13 "Budget" now precedes §14 "Gates" |
+| R3-2 | §7.3: new **T13**, idempotent re-dispatch with the **same** `attempt` and `dispatchToken` (only `codebuild` and `lambda`, once, controlled by `reconcileRedispatchCount`), plus a reconciler recovery table (T8/T13/T12). T12 and DD-04 adjusted |
+| R3-3 | The "Review" row of `requirements.md` reflects the full Judgment Day (3 rounds, APPROVED) |
+| R3-4 | **Canonical rule:** exhausting the lock wait **always** ends in `FAILED (LOCK_TIMEOUT)` via T5, whether detected by the handler or the reconciler. T12 no longer applies to `WAITING_LOCK`. New `AND IT MUST` in FR-11 |
+| Publication | Specs sanitized: account ID, region, hosts, credential IDs, secret names, containers, ports, ECR repos, the previous PoC's function and bucket, Jenkins table, Slack channel, Jenkins job names and paths, resident scripts and vulnerability details of other systems → logical references (`<…>`). New DD-23: real values are resolved outside Git |
+| Budget | Re-estimated in Phase 3: 37 tasks (previously 25) and ~50 rounds; LOC unchanged (~8,700) |

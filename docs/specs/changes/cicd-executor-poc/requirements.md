@@ -1,100 +1,100 @@
 # Requirements — CI/CD Executor PoC (PRMS Reporting DEV)
 
-> **En una línea:** un Executor liviano debe ejecutar PRMS Reporting DEV de punta a punta sin Jenkins: coordinar Lambda, CodeBuild y SSH a partir de definiciones declarativas, con idempotencia ante entrega at-least-once, locks por target y estado persistente. **No puede compilar, conectarse a bases de datos, leer secretos de aplicación ni contener lógica por proyecto.**
+> **In one line:** a lightweight Executor must run PRMS Reporting DEV end to end without Jenkins: coordinating Lambda, CodeBuild and SSH from declarative definitions, with idempotency under at-least-once delivery, per-target locks and persistent state. **It cannot compile, connect to databases, read application secrets, or contain per-project logic.**
 
 ---
 
 ## 1. Document Control
 
-| Campo | Valor |
+| Field | Value |
 |---|---|
 | Spec Path | `changes/cicd-executor-poc` |
-| Fase | Phase 1: Requirements |
-| Depth | **Full** (infraestructura nueva, concurrencia, seguridad, despliegue y migraciones) |
+| Phase | Phase 1: Requirements |
+| Depth | **Full** (new infrastructure, concurrency, security, deployment and migrations) |
 | Type | Change |
-| Approval Mode | `gated` (heredado del proposal) |
-| Fuente de intención | `proposal.md` v2, **aprobado** por el owner el 2026-10-05 |
-| Evidencia | **FA** = `JENKINS_REPLACEMENT_FEASIBILITY_ANALYSIS.md`; **ctx** = `JENKINS_REPLACEMENT_AKILI_CONTEXT.md` |
-| Plantillas | No existe `docs/specs/general-setup/` ni baseline (`CLAUDE.md`, PRD o TRD). Comprobado con `ls -R docs` el 2026-10-05: solo `docs/specs/changes/cicd-executor-poc/proposal.md`. Se usa la estructura mínima del comando `/akili-specify` |
-| Patrón de IDs | No hay uno previo. Se adopta `FR-nn` (funcional), `NFR-nn` (no funcional) y `OD-xx` (decisión abierta) |
-| Fecha | 2026-10-05 |
+| Approval Mode | `gated` (inherited from the proposal) |
+| Source of intent | `proposal.md` v2, **approved** by the owner on 2026-10-05 |
+| Evidence | **FA** = `JENKINS_REPLACEMENT_FEASIBILITY_ANALYSIS.md`; **ctx** = `JENKINS_REPLACEMENT_AKILI_CONTEXT.md` |
+| Templates | `docs/specs/general-setup/` does not exist, nor does a baseline (`CLAUDE.md`, PRD or TRD). Checked with `ls -R docs` on 2026-10-05: only `docs/specs/changes/cicd-executor-poc/proposal.md`. The minimal structure of the `/akili-specify` command is used |
+| ID pattern | There is no previous one. `FR-nn` (functional), `NFR-nn` (non-functional) and `OD-xx` (open decision) are adopted |
+| Date | 2026-10-05 |
 | Owner | CI/CD Platform Team |
-| Revisión | Judgment Day **completo** (3 rondas; resultado **APPROVED**; `judgment.md`). Ajustes aprobados por el owner. **Ronda 1:** código 50 y precondición de migraciones (FR-13), respaldo técnico de FR-18, F18–F19 (FR-16), alcance de FR-02, aclaración de NFR-08. **Ronda 2:** única vuelta atrás permitida (FR-05), política de ventana obligatoria (FR-02), revalidación de la ventana (FR-18). **Posterior:** resultado canónico `LOCK_TIMEOUT` al agotar la espera de lock (FR-11) y saneamiento de identificadores internos para publicar en Git |
+| Review | **Full** Judgment Day (3 rounds; **APPROVED** result; `judgment.md`). Adjustments approved by the owner. **Round 1:** code 50 and migration precondition (FR-13), technical backing of FR-18, F18–F19 (FR-16), scope of FR-02, clarification of NFR-08. **Round 2:** single allowed backward transition (FR-05), mandatory window policy (FR-02), window revalidation (FR-18). **After:** canonical `LOCK_TIMEOUT` outcome when the lock wait is exhausted (FR-11) and sanitization of internal identifiers for publishing to Git |
 
-**Regla de esta especificación:** Q5, Q7 y Q11–Q15 son **decisiones abiertas**. Se identifican como `OD-Qn` (§9). Ningún requisito asume su respuesta. Donde una de ellas condiciona un requisito, se declara la dependencia y el requisito queda escrito sin depender de esa elección.
+**Rule for this specification:** Q5, Q7 and Q11–Q15 are **open decisions**. They are identified as `OD-Qn` (§9). No requirement assumes their answer. Where one of them conditions a requirement, the dependency is declared and the requirement is written without depending on that choice.
 
 ---
 
 ## 2. Executive Summary
 
-| Pregunta | Respuesta |
+| Question | Answer |
 |---|---|
-| ¿Qué se construye? | Un Executor en contenedor que consume eventos de SQS y avanza ejecuciones de pipeline a partir de definiciones YAML versionadas. Despacha trabajo a Lambda (quality), CodeBuild (imágenes) y SSH (deploy en el target) |
-| ¿Para qué? | Demostrar que las responsabilidades de un pipeline representativo de Jenkins se reemplazan **sin otro servidor CI y sin otro Jenkins** |
-| ¿Con qué pipeline? | PRMS Reporting DEV (patrón P1, que comparten ~57 pipelines; FA §4, §23) |
-| ¿Qué lo hace correcto? | Idempotencia con entrega at-least-once, locks por unidad de deploy, estado persistente, migración antes de detener la versión vieja y conservación de la imagen previa |
-| ¿Qué lo hace "no Jenkins"? | Vocabulario cerrado de steps, sin expresiones ni lógica de proyecto, sin toolchains, sin acceso a BD ni a secretos de aplicación (NFR-01) |
-| ¿Qué queda fuera? | Builds sin Docker (B1), deploys por SDK (S3, CloudFront, Lambda, CloudFormation), Jira, el retiro de Jenkins y la remediación de la deuda de seguridad histórica |
+| What is being built? | A containerized Executor that consumes SQS events and advances pipeline executions from versioned YAML definitions. It dispatches work to Lambda (quality), CodeBuild (images) and SSH (deploy on the target) |
+| What for? | To demonstrate that the responsibilities of a pipeline representative of Jenkins can be replaced **without another CI server and without another Jenkins** |
+| With which pipeline? | PRMS Reporting DEV (pattern P1, shared by ~57 pipelines; FA §4, §23) |
+| What makes it correct? | Idempotency under at-least-once delivery, per-deploy-unit locks, persistent state, migration before stopping the old version, and retention of the previous image |
+| What makes it "not Jenkins"? | A closed vocabulary of steps, with no expressions or project logic, no toolchains, no access to DBs or application secrets (NFR-01) |
+| What is out of scope? | Non-Docker builds (B1), SDK-based deploys (S3, CloudFront, Lambda, CloudFormation), Jira, the retirement of Jenkins, and remediation of historical security debt |
 
 ---
 
 ## 3. Glossary
 
-| Término | Definición |
+| Term | Definition |
 |---|---|
-| Executor | Servicio coordinador. Recibe, resuelve la definición, coordina, despacha, registra y notifica |
-| Pipeline Definition | Documento YAML versionado que describe repositorio, steps, dependencias y notificaciones de un pipeline |
-| Target Registry | Documento versionado que describe los destinos de deploy: host, usuario, referencias a credencial y host key, contenedores, puertos y clave de lock |
-| Ejecución | Una corrida de un pipeline, identificada por `executionId` |
-| `executionId` | `<pipelineId>-<sequence>`, con secuencia monotónica por pipeline (p. ej. `prms-reporting-dev-184`) |
-| Step | Unidad declarada de trabajo de un tipo del vocabulario (`lambda`, `codebuild`, `ssh`, `notify`). `source` es implícito |
-| Capacidad | Implementación genérica de un tipo de step en el Executor |
-| Unidad de deploy | Conjunto de contenedores de un host que se despliegan juntos y comparten un lock |
-| Lock | Exclusión mutua con lease sobre una unidad de deploy |
-| Supersede | Regla por la que un deploy de una secuencia más vieja se omite si el target ya tiene una más nueva |
-| Evento | Mensaje en SQS con el sobre definido (FR-04) |
-| Reconciler | Proceso periódico que cierra ejecuciones atascadas y recupera eventos perdidos |
-| Ventana de prueba | Periodo en que los jobs de Jenkins que tocan el target del PoC están deshabilitados |
-| Deploy script | Script versionado que el target ejecuta: pull, migración, swap, health check y limpieza |
-| OD | Decisión abierta (Open Decision), heredada de las preguntas del proposal |
+| Executor | Coordinating service. Receives, resolves the definition, coordinates, dispatches, logs and notifies |
+| Pipeline Definition | Versioned YAML document that describes a pipeline's repository, steps, dependencies and notifications |
+| Target Registry | Versioned document that describes deploy destinations: host, user, credential and host key references, containers, ports and lock key |
+| Execution | A run of a pipeline, identified by `executionId` |
+| `executionId` | `<pipelineId>-<sequence>`, with a monotonic sequence per pipeline (e.g. `prms-reporting-dev-184`) |
+| Step | Declared unit of work of a type from the vocabulary (`lambda`, `codebuild`, `ssh`, `notify`). `source` is implicit |
+| Capability | Generic implementation of a step type in the Executor |
+| Deploy unit | Set of containers on a host that are deployed together and share a lock |
+| Lock | Mutual exclusion with a lease over a deploy unit |
+| Supersede | Rule by which a deploy of an older sequence is skipped if the target already has a newer one |
+| Event | Message in SQS with the defined envelope (FR-04) |
+| Reconciler | Periodic process that closes stuck executions and recovers lost events |
+| Test window | Period during which the Jenkins jobs that touch the PoC's target are disabled |
+| Deploy script | Versioned script that the target executes: pull, migration, swap, health check and cleanup |
+| OD | Open Decision, inherited from the proposal's questions |
 
 ---
 
 ## 4. System Context & Scope
 
-### 4.1 Contexto actual (citado)
+### 4.1 Current context (cited)
 
-| Afirmación | Evidencia |
+| Statement | Evidence |
 |---|---|
-| PRMS V2 Reporting DEV clona `<PRMS_REPORTING_REPO>`, escribe secretos en el árbol, crea ZIPs para quality en Lambda (`<QUALITY_WORKER_FUNCTION>`, ×2 en paralelo), construye con Docker y despliega por SSH con password en `<PRMS_REPORTING_DEV_TARGET>`, con migraciones condicionales | FA §23 (referencia `<JENKINS_JOB_ID>`). El Jenkinsfile no está en este workspace: `UNVERIFIED — confirm at source before relying on it` para detalles no citados por línea |
-| Contenedores `<SERVER_CONTAINER>` (<SERVER_PORT_MAPPING>) y `<CLIENT_CONTAINER>` (<CLIENT_PORT_MAPPING>). Hasta 8 jobs despliegan sobre ellos desde ramas distintas | FA §10.3, §23 |
-| Los ZIPs de quality incluyen secretos. La key S3 del CodeBuild es fija (`codebuild/frontend.zip`) | FA §1.5, §23 (puntos 1 y 2) |
-| Ante una migración fallida el contenedor viejo ya fue eliminado. `rmi N-1` elimina la imagen previa. No hay rollback | FA §11.4, §16 |
-| El target recibe llaves AWS por `aws configure set` y otros jobs dependen de ellas | FA §9.3.5, §12.2.1, §23 (punto 4) |
-| Hay una sola cuenta AWS (`<AWS_ACCOUNT_ID>`, `<AWS_REGION>`) | FA §2 |
-| Contrato de salida del worker: `status, failedCommand, exitCode, error, logS3Uri, logUrl` | FA §21.7. El formato de entrada es `UNVERIFIED — confirm at source before relying on it` |
-| Los triggers, nombres de job y la concurrencia de Jenkins no están en el repo | FA §19 B2 |
+| PRMS V2 Reporting DEV clones `<PRMS_REPORTING_REPO>`, writes secrets into the tree, creates ZIPs for quality in Lambda (`<QUALITY_WORKER_FUNCTION>`, ×2 in parallel), builds with Docker and deploys via SSH with a password on `<PRMS_REPORTING_DEV_TARGET>`, with conditional migrations | FA §23 (reference `<JENKINS_JOB_ID>`). The Jenkinsfile is not in this workspace: `UNVERIFIED — confirm at source before relying on it` for details not cited by line |
+| Containers `<SERVER_CONTAINER>` (<SERVER_PORT_MAPPING>) and `<CLIENT_CONTAINER>` (<CLIENT_PORT_MAPPING>). Up to 8 jobs deploy onto them from different branches | FA §10.3, §23 |
+| The quality ZIPs include secrets. The CodeBuild's S3 key is fixed (`codebuild/frontend.zip`) | FA §1.5, §23 (points 1 and 2) |
+| If a migration fails, the old container has already been removed. `rmi N-1` removes the previous image. There is no rollback | FA §11.4, §16 |
+| The target receives AWS keys via `aws configure set` and other jobs depend on them | FA §9.3.5, §12.2.1, §23 (point 4) |
+| There is a single AWS account (`<AWS_ACCOUNT_ID>`, `<AWS_REGION>`) | FA §2 |
+| Worker output contract: `status, failedCommand, exitCode, error, logS3Uri, logUrl` | FA §21.7. The input format is `UNVERIFIED — confirm at source before relying on it` |
+| Jenkins triggers, job names and concurrency are not in the repo | FA §19 B2 |
 
-### 4.2 Alcance
+### 4.2 Scope
 
-| Dentro | Fuera |
+| In | Out |
 |---|---|
-| Definiciones y Target Registry con validación | Builds sin Docker (B1). Steps `lambda-deploy`, `s3-sync`, `cloudfront-invalidate`, `cloudformation`, `http-check` (solo reservados en el schema) |
-| Trigger manual y, como SHOULD, webhook de GitHub | Trigger `schedule`, parámetros tipados, re-run, `when` (reservados) |
-| Capacidades `source`, `lambda`, `codebuild`, `ssh`, `notify` (Slack) | Jira Builds API, Teams, email |
-| Estado, idempotencia, locks, supersede, reconciler | Retiro de jobs de Jenkins; cambios en Jenkinsfiles |
-| Contrato del deploy script en el target, incluida la migración | Migración SSH → SSM |
-| Procedimiento de coexistencia con Jenkins | Remediación de seguridad histórica (track paralelo) |
-| Recursos AWS DEV del PoC | Recursos STAGING o PROD |
+| Definitions and Target Registry with validation | Non-Docker builds (B1). Steps `lambda-deploy`, `s3-sync`, `cloudfront-invalidate`, `cloudformation`, `http-check` (reserved in the schema only) |
+| Manual trigger and, as a SHOULD, GitHub webhook | `schedule` trigger, typed parameters, re-run, `when` (reserved) |
+| `source`, `lambda`, `codebuild`, `ssh`, `notify` capabilities (Slack) | Jira Builds API, Teams, email |
+| State, idempotency, locks, supersede, reconciler | Retirement of Jenkins jobs; changes to Jenkinsfiles |
+| Deploy script contract on the target, including migration | SSH → SSM migration |
+| Coexistence procedure with Jenkins | Remediation of historical security debt (parallel track) |
+| PoC's DEV AWS resources | STAGING or PROD resources |
 
-### 4.3 Diagrama de contexto
+### 4.3 Context diagram
 
 ```text
-Operador / GitHub ──> SQS ──> Executor ──> Lambda (quality) ──┐
-                       ▲         │  ├────> CodeBuild (imagen) ─┤ eventos de finalización
+Operator / GitHub ──> SQS ──> Executor ──> Lambda (quality) ──┐
+                       ▲         │  ├────> CodeBuild (image) ─┤ completion events
                        └─────────┼──┴──────────────────────────┘
-                                 ├──> SSH ──> target ──> deploy script ──> (migración → BD DEV)
-                                 ├──> DynamoDB (estado, locks)   S3 (artefactos)
+                                 ├──> SSH ──> target ──> deploy script ──> (migration → DEV DB)
+                                 ├──> DynamoDB (state, locks)   S3 (artifacts)
                                  └──> Slack · CloudWatch · Secrets Manager
 ```
 
@@ -102,620 +102,620 @@ Operador / GitHub ──> SQS ──> Executor ──> Lambda (quality) ──�
 
 ## 5. Stakeholders / Personas
 
-| Persona | Necesita | Requisitos clave |
+| Persona | Needs | Key requirements |
 |---|---|---|
-| Operador de plataforma (DevOps) | Disparar, observar y diagnosticar ejecuciones sin Jenkins | FR-03, FR-15, FR-17, NFR-06 |
-| Autor de pipelines | Describir un pipeline solo con YAML | FR-01, FR-02, NFR-08 |
-| Equipo PRMS Reporting | Que DEV quede desplegado correctamente y se entere de fallos | FR-12, FR-13, FR-14 |
-| Administrador de Jenkins | Pausar y reanudar de forma controlada los jobs que tocan el target | FR-18 |
-| Responsable de seguridad | Sin secretos en artefactos ni llaves de larga vida; separación de ambientes | NFR-02, NFR-09 |
-| Arquitectura | Que el Executor no derive hacia un motor de workflows | NFR-01, NFR-08 |
+| Platform operator (DevOps) | Trigger, observe and diagnose executions without Jenkins | FR-03, FR-15, FR-17, NFR-06 |
+| Pipeline author | Describe a pipeline using only YAML | FR-01, FR-02, NFR-08 |
+| PRMS Reporting team | DEV deployed correctly and informed of failures | FR-12, FR-13, FR-14 |
+| Jenkins administrator | Pause and resume, in a controlled way, the jobs that touch the target | FR-18 |
+| Security owner | No secrets in artifacts nor long-lived keys; environment separation | NFR-02, NFR-09 |
+| Architecture | The Executor must not drift into a workflow engine | NFR-01, NFR-08 |
 
 ---
 
 ## 6. Functional Requirements
 
-### FR-01 — Pipeline Definitions declarativas
+### FR-01 — Declarative Pipeline Definitions
 
-El sistema SHALL determinar el comportamiento de cada pipeline exclusivamente a partir de una Pipeline Definition versionada y validada contra un schema. El vocabulario de tipos de step es cerrado: PoC `lambda`, `codebuild`, `ssh`, `notify`; reservados y rechazados en tiempo de ejecución en el PoC: `lambda-deploy`, `s3-sync`, `cloudfront-invalidate`, `cloudformation`, `http-check`.
+The system SHALL determine each pipeline's behavior exclusively from a versioned Pipeline Definition validated against a schema. The vocabulary of step types is closed: PoC `lambda`, `codebuild`, `ssh`, `notify`; reserved and rejected at runtime in the PoC: `lambda-deploy`, `s3-sync`, `cloudfront-invalidate`, `cloudformation`, `http-check`.
 
-#### Scenario: definición válida
-- GIVEN una definición que cumple el schema
-- WHEN se crea una ejecución de ese pipeline
-- THEN la ejecución registra el identificador de versión de la definición usada
-- AND todos los steps de la ejecución provienen de esa versión, aunque la definición cambie durante la ejecución
+#### Scenario: valid definition
+- GIVEN a definition that satisfies the schema
+- WHEN an execution of that pipeline is created
+- THEN the execution records the version identifier of the definition used
+- AND every step in the execution comes from that version, even if the definition changes during the execution
 
-#### Scenario: definición inválida
-- GIVEN una definición con un tipo de step desconocido, una dependencia inexistente, un ciclo en `needs` o una interpolación fuera de la lista blanca
-- WHEN se valida
-- THEN se rechaza con un error que nombra el campo y la regla incumplida
-- BUT it must NOT crear la ejecución ni despachar ningún step
-- AND IT MUST rechazar cualquier construcción de expresión, bucle o script embebido
+#### Scenario: invalid definition
+- GIVEN a definition with an unknown step type, a nonexistent dependency, a cycle in `needs`, or an interpolation outside the allowlist
+- WHEN it is validated
+- THEN it is rejected with an error that names the field and the violated rule
+- BUT it must NOT create the execution or dispatch any step
+- AND IT MUST reject any expression construct, loop, or embedded script
 
-#### Scenario: proyecto CodeBuild por ambiente
-- GIVEN un step `codebuild`
-- WHEN se valida la definición
-- THEN el proyecto CodeBuild está declarado de forma explícita en ese step
-- BUT it must NOT existir un proyecto implícito ni compartido por defecto entre ambientes
+#### Scenario: CodeBuild project per environment
+- GIVEN a `codebuild` step
+- WHEN the definition is validated
+- THEN the CodeBuild project is explicitly declared on that step
+- BUT there must NOT be an implicit project or one shared by default across environments
 
-#### Scenario: tipo reservado
-- GIVEN una definición con un step `s3-sync`
-- WHEN se valida en el PoC
-- THEN se rechaza como "tipo reservado, no habilitado"
+#### Scenario: reserved type
+- GIVEN a definition with an `s3-sync` step
+- WHEN it is validated in the PoC
+- THEN it is rejected as "reserved type, not enabled"
 
-#### Scenario: ambiente fuera del alcance
-- GIVEN una definición con `environment` distinto de `dev`
-- WHEN el Executor DEV la carga
-- THEN la rechaza
+#### Scenario: environment out of scope
+- GIVEN a definition with `environment` other than `dev`
+- WHEN the DEV Executor loads it
+- THEN it rejects it
 
 ### FR-02 — Target Registry
 
-El sistema SHALL resolver todo destino de deploy a través de un Target Registry versionado que declara host, usuario, referencia a la credencial, referencia al host key, contenedores, puertos y clave de lock. Cuando aplique, declara también si el target requiere ventana de deploy (FR-18) y la atestación de compatibilidad de migraciones (FR-13).
+The system SHALL resolve every deploy destination through a versioned Target Registry that declares host, user, credential reference, host key reference, containers, ports and lock key. When applicable, it also declares whether the target requires a deploy window (FR-18) and the migration-compatibility attestation (FR-13).
 
-#### Scenario: conflicto de puertos o nombres
-- GIVEN dos entradas del registro sobre el mismo host que publican el mismo puerto o el mismo nombre de contenedor
-- WHEN se valida el registro
-- THEN se rechaza nombrando ambas entradas
+#### Scenario: port or name conflict
+- GIVEN two registry entries on the same host that publish the same port or the same container name
+- WHEN the registry is validated
+- THEN it is rejected, naming both entries
 
-#### Scenario: host key ausente
-- GIVEN una entrada sin referencia a host key
-- WHEN se valida
-- THEN se rechaza
-- AND IT MUST considerarse inválida aunque la credencial exista
+#### Scenario: missing host key
+- GIVEN an entry without a host key reference
+- WHEN it is validated
+- THEN it is rejected
+- AND IT MUST be considered invalid even if the credential exists
 
-#### Scenario: política de ventana obligatoria (añadido tras Judgment Day ronda 2, R2-W2)
-- GIVEN una entrada del registro que omite la declaración de desplegadores externos o la política de ventana, o que declara desplegadores externos con una política que no exige ventana
-- WHEN se valida (en CI o al arrancar el Executor)
-- THEN se rechaza antes de cualquier deploy
-- BUT it must NOT existir un valor por defecto que deje desprotegido un target compartido
+#### Scenario: mandatory window policy (added after Judgment Day round 2, R2-W2)
+- GIVEN a registry entry that omits the declaration of external deployers or the window policy, or that declares external deployers with a policy that does not require a window
+- WHEN it is validated (in CI or when the Executor starts)
+- THEN it is rejected before any deploy
+- BUT there must NOT be a default value that leaves a shared target unprotected
 
-#### Scenario: secretos en el registro
-- GIVEN el registro
-- THEN contiene solo **referencias** a secretos
-- BUT it must NOT contener valores de credenciales
+#### Scenario: secrets in the registry
+- GIVEN the registry
+- THEN it contains only **references** to secrets
+- BUT it must NOT contain credential values
 
-### FR-03 — Solicitud de ejecución e identidad
+### FR-03 — Execution request and identity
 
-El sistema SHALL crear una ejecución por cada solicitud válida, asignándole un `executionId` `<pipelineId>-<sequence>` con secuencia monotónica por pipeline, y SHALL deduplicar solicitudes repetidas.
+The system SHALL create one execution per valid request, assigning it an `executionId` `<pipelineId>-<sequence>` with a monotonic sequence per pipeline, and SHALL deduplicate repeated requests.
 
-#### Scenario: disparo manual
-- GIVEN un operador con permiso para enviar mensajes a la cola
-- WHEN envía `PIPELINE_REQUESTED` con `pipelineId`, `requestId` y, opcionalmente, un commit
-- THEN se crea una ejecución con un `executionId` nuevo, en estado `QUEUED`
-- AND se resuelve y registra el commit exacto que se usará
+#### Scenario: manual trigger
+- GIVEN an operator with permission to send messages to the queue
+- WHEN they send `PIPELINE_REQUESTED` with `pipelineId`, `requestId` and, optionally, a commit
+- THEN an execution is created with a new `executionId`, in `QUEUED` state
+- AND the exact commit to be used is resolved and recorded
 
-#### Scenario: solicitud duplicada
-- GIVEN una solicitud con el mismo `requestId` (o el mismo id de entrega del webhook) ya procesada
-- WHEN llega de nuevo
-- THEN no se crea otra ejecución
-- AND IT MUST NOT consumir un número de secuencia nuevo
+#### Scenario: duplicate request
+- GIVEN a request with the same `requestId` (or the same webhook delivery id) already processed
+- WHEN it arrives again
+- THEN no other execution is created
+- AND IT MUST NOT consume a new sequence number
 
-#### Scenario: pipeline desconocido
-- GIVEN un `pipelineId` sin definición
-- WHEN llega la solicitud
-- THEN se registra el rechazo en los logs y el mensaje se confirma
-- BUT it must NOT crear la ejecución
+#### Scenario: unknown pipeline
+- GIVEN a `pipelineId` with no definition
+- WHEN the request arrives
+- THEN the rejection is logged and the message is acknowledged
+- BUT it must NOT create the execution
 
-### FR-04 — Recepción de eventos
+### FR-04 — Event reception
 
-El sistema SHALL consumir trabajo y resultados desde una cola SQS Standard con DLQ, asumiendo entrega **at-least-once** y sin orden garantizado. Los mensajes llevan identificadores y referencias, nunca artefactos ni logs.
+The system SHALL consume work and results from a Standard SQS queue with a DLQ, assuming **at-least-once** delivery with no guaranteed order. Messages carry identifiers and references, never artifacts or logs.
 
-#### Scenario: sobre válido
-- GIVEN un mensaje con `specVersion, eventId, eventType, executionId, pipelineId, environment, timestamp, source` y, cuando aplica, `stepId, status, attempt, payload`
-- WHEN el Executor lo recibe
-- THEN lo procesa según su `eventType`
+#### Scenario: valid envelope
+- GIVEN a message with `specVersion, eventId, eventType, executionId, pipelineId, environment, timestamp, source` and, when applicable, `stepId, status, attempt, payload`
+- WHEN the Executor receives it
+- THEN it processes it according to its `eventType`
 
-#### Scenario: resultados nativos de AWS
-- GIVEN un registro de Lambda Destinations o un evento de estado de CodeBuild vía EventBridge
-- WHEN llega a la cola
-- THEN el Executor lo normaliza al sobre antes de procesarlo
-- AND IT MUST correlacionarlo con un step existente por su identificador externo (`requestId` o `buildId`)
+#### Scenario: native AWS results
+- GIVEN a Lambda Destinations record or a CodeBuild status event via EventBridge
+- WHEN it arrives at the queue
+- THEN the Executor normalizes it to the envelope before processing it
+- AND IT MUST correlate it with an existing step by its external identifier (`requestId` or `buildId`)
 
-#### Scenario: mensaje envenenado
-- GIVEN un mensaje malformado o cuyo procesamiento falla de forma persistente
-- WHEN se recibió 5 veces
-- THEN termina en la DLQ y se dispara una alarma
-- BUT it must NOT bloquear el procesamiento de los demás mensajes
+#### Scenario: poison message
+- GIVEN a malformed message, or one whose processing fails persistently
+- WHEN it has been received 5 times
+- THEN it ends up in the DLQ and an alarm fires
+- BUT it must NOT block processing of the other messages
 
-#### Scenario: evento huérfano
-- GIVEN un evento de finalización sin ejecución ni step correlacionable
-- WHEN llega
-- THEN se registra como huérfano y se confirma, sin efectos
+#### Scenario: orphan event
+- GIVEN a completion event with no correlatable execution or step
+- WHEN it arrives
+- THEN it is logged as an orphan and acknowledged, with no effects
 
-### FR-05 — Estado de ejecución persistente
+### FR-05 — Persistent execution state
 
-El sistema SHALL persistir el estado de cada ejecución y de cada step fuera del proceso del Executor, con transiciones válidas explícitas y estados terminales inmutables.
+The system SHALL persist the state of each execution and each step outside the Executor's process, with explicit valid transitions and immutable terminal states.
 
-| Entidad | Estados | Terminales |
+| Entity | States | Terminal |
 |---|---|---|
-| Ejecución | `QUEUED, RUNNING, SUCCEEDED, FAILED, TIMED_OUT, CANCELLED` | `SUCCEEDED, FAILED, TIMED_OUT, CANCELLED` |
+| Execution | `QUEUED, RUNNING, SUCCEEDED, FAILED, TIMED_OUT, CANCELLED` | `SUCCEEDED, FAILED, TIMED_OUT, CANCELLED` |
 | Step | `PENDING, WAITING_LOCK, DISPATCHING, RUNNING, SUCCEEDED, FAILED, TIMED_OUT, SKIPPED` | `SUCCEEDED, FAILED, TIMED_OUT, SKIPPED` |
 
-#### Scenario: transición válida
-- GIVEN un step en `RUNNING`
-- WHEN llega su finalización exitosa
-- THEN pasa a `SUCCEEDED` con hora de fin, salidas y referencia externa
+#### Scenario: valid transition
+- GIVEN a step in `RUNNING`
+- WHEN its successful completion arrives
+- THEN it moves to `SUCCEEDED` with an end time, outputs and an external reference
 
-#### Scenario: transición inválida
-- GIVEN un step en un estado terminal
-- WHEN llega cualquier evento que intente cambiarlo
-- THEN el estado no cambia y el evento se registra como no-op
+#### Scenario: invalid transition
+- GIVEN a step in a terminal state
+- WHEN any event arrives attempting to change it
+- THEN the state does not change and the event is logged as a no-op
 
-#### Scenario: única vuelta atrás permitida (añadido tras Judgment Day ronda 2, R2-1)
-- GIVEN un step de deploy en ejecución cuyo script informa que el target está ocupado por otra operación de deploy (código 50)
-- WHEN se procesa ese resultado
-- THEN el step vuelve a esperar el lock, con el mismo `executionId` y la misma identidad de step, liberando los recursos del intento
-- BUT it must NOT existir ninguna otra transición hacia atrás: cualquier otra se rechaza
+#### Scenario: single allowed backward transition (added after Judgment Day round 2, R2-1)
+- GIVEN a running deploy step whose script reports that the target is busy with another deploy operation (code 50)
+- WHEN that result is processed
+- THEN the step goes back to waiting for the lock, with the same `executionId` and the same step identity, releasing the attempt's resources
+- BUT there must NOT be any other backward transition: any other one is rejected
 
-#### Scenario: steps paralelos
-- GIVEN dos steps en curso al mismo tiempo
-- THEN cada uno tiene su propio registro de estado
-- BUT it must NOT existir un único "step actual" del que dependa la corrección
+#### Scenario: parallel steps
+- GIVEN two steps in progress at the same time
+- THEN each one has its own state record
+- BUT there must NOT be a single "current step" on which correctness depends
 
-#### Scenario: reinicio del Executor
-- GIVEN un reinicio del Executor
-- WHEN vuelve a procesar
-- THEN continúa desde el estado persistido
-- AND IT MUST NOT depender de memoria del proceso anterior
+#### Scenario: Executor restart
+- GIVEN an Executor restart
+- WHEN it resumes processing
+- THEN it continues from the persisted state
+- AND IT MUST NOT depend on memory from the previous process
 
-### FR-06 — Planificación de steps
+### FR-06 — Step scheduling
 
-El sistema SHALL despachar cada step cuando sus dependencias (`needs`) están en `SUCCEEDED`, ejecutando en paralelo los steps independientes, y SHALL ejecutar los steps `finally` en cualquier desenlace.
+The system SHALL dispatch each step when its dependencies (`needs`) are in `SUCCEEDED`, running independent steps in parallel, and SHALL execute `finally` steps on any outcome.
 
-#### Scenario: paralelismo
-- GIVEN `server-quality` y `client-quality` sin dependencias
-- WHEN la fuente está preparada
-- THEN ambos se despachan sin esperar el uno al otro
+#### Scenario: parallelism
+- GIVEN `server-quality` and `client-quality` with no dependencies
+- WHEN the source is prepared
+- THEN both are dispatched without waiting for each other
 
-#### Scenario: fan-in exactamente una vez
-- GIVEN `deploy` depende de `server-image` y `client-image`
-- WHEN ambos terminan (en cualquier orden, incluso con eventos duplicados o simultáneos)
-- THEN `deploy` se despacha exactamente una vez
+#### Scenario: fan-in exactly once
+- GIVEN `deploy` depends on `server-image` and `client-image`
+- WHEN both finish (in any order, even with duplicate or simultaneous events)
+- THEN `deploy` is dispatched exactly once
 
-#### Scenario: fallo de dependencia
-- GIVEN un step en `FAILED` o `TIMED_OUT`
-- WHEN se replanifica
-- THEN todos sus dependientes directos y transitivos pasan a `SKIPPED`
-- AND la ejecución termina en `FAILED` (o `TIMED_OUT`) tras completar los steps ya en curso y los `finally`
+#### Scenario: dependency failure
+- GIVEN a step in `FAILED` or `TIMED_OUT`
+- WHEN it is rescheduled
+- THEN all of its direct and transitive dependents move to `SKIPPED`
+- AND the execution ends in `FAILED` (or `TIMED_OUT`) after completing the steps already in progress and the `finally` steps
 
 #### Scenario: finally
-- GIVEN cualquier desenlace terminal
-- THEN los steps `finally` se ejecutan una vez
-- BUT el fallo de un step `finally` must NOT cambiar el estado terminal ya determinado de la ejecución
+- GIVEN any terminal outcome
+- THEN the `finally` steps run once
+- BUT the failure of a `finally` step must NOT change the execution's already-determined terminal state
 
-### FR-07 — Procesamiento idempotente
+### FR-07 — Idempotent processing
 
-El sistema SHALL garantizar que recibir el mismo evento más de una vez no produce efectos adicionales: ni dos despachos del mismo intento de step, ni dos deploys, ni dos migraciones, ni transiciones inválidas.
+The system SHALL guarantee that receiving the same event more than once produces no additional effects: no two dispatches of the same step attempt, no two deploys, no two migrations, and no invalid transitions.
 
-#### Scenario: BUILD_COMPLETED duplicado
-- GIVEN `server-image` ya en `SUCCEEDED` y `deploy` ya despachado
-- WHEN llega otra vez el `BUILD_COMPLETED` de ese build
-- THEN no cambia ningún estado
-- BUT it must NOT despachar `deploy` otra vez, ni abrir otra sesión SSH, ni ejecutar otra migración
+#### Scenario: duplicate BUILD_COMPLETED
+- GIVEN `server-image` already in `SUCCEEDED` and `deploy` already dispatched
+- WHEN that build's `BUILD_COMPLETED` arrives again
+- THEN no state changes
+- BUT it must NOT dispatch `deploy` again, open another SSH session, or run another migration
 
-#### Scenario: concurrencia entre instancias
-- GIVEN dos procesos del Executor reciben a la vez copias del mismo evento
-- WHEN ambos intentan la misma transición
-- THEN solo uno la aplica y el otro la trata como ya procesada
+#### Scenario: concurrency between instances
+- GIVEN two Executor processes receive copies of the same event at the same time
+- WHEN both attempt the same transition
+- THEN only one applies it and the other treats it as already processed
 
-#### Scenario: fallo entre registrar y despachar
-- GIVEN el Executor registró la intención de despacho y falló antes de confirmar el mensaje
-- WHEN el mensaje se re-entrega
-- THEN el despacho de CodeBuild no crea un segundo build para el mismo intento
-- AND IT MUST usar un token de idempotencia del intento
+#### Scenario: failure between recording and dispatching
+- GIVEN the Executor recorded the dispatch intent and failed before acknowledging the message
+- WHEN the message is redelivered
+- THEN the CodeBuild dispatch does not create a second build for the same attempt
+- AND IT MUST use an idempotency token for the attempt
 
-### FR-08 — Preparación de fuente
+### FR-08 — Source preparation
 
-El sistema SHALL obtener el commit exacto de la ejecución, empaquetar los paquetes declarados y subirlos a rutas con alcance de ejecución, sin instalar dependencias ni compilar.
+The system SHALL fetch the execution's exact commit, package the declared packages and upload them to execution-scoped paths, without installing dependencies or compiling.
 
-#### Scenario: preparación exitosa
-- GIVEN una ejecución con commit resuelto
-- WHEN corre la preparación de fuente
-- THEN cada paquete queda en `executions/{executionId}/source/{package}.zip`
-- AND el workspace local `/work/{executionId}` se elimina al terminar
+#### Scenario: successful preparation
+- GIVEN an execution with a resolved commit
+- WHEN source preparation runs
+- THEN each package ends up at `executions/{executionId}/source/{package}.zip`
+- AND the local workspace `/work/{executionId}` is removed when it finishes
 
-#### Scenario: exclusiones obligatorias
-- GIVEN el árbol del repositorio
-- WHEN se empaqueta
-- THEN se excluyen `.git`, `node_modules` y los archivos de secretos (`.env*` y archivos de configuración de entorno no versionados)
-- BUT it must NOT haber valores de secretos en ningún ZIP
+#### Scenario: mandatory exclusions
+- GIVEN the repository tree
+- WHEN it is packaged
+- THEN `.git`, `node_modules` and secret files (`.env*` and unversioned environment configuration files) are excluded
+- BUT it must NOT have secret values in any ZIP
 
-#### Scenario: keys fijas
-- GIVEN dos ejecuciones concurrentes del mismo pipeline
-- THEN sus objetos S3 y sus workspaces son disjuntos
-- AND IT MUST NOT usarse ninguna key fija (p. ej. `codebuild/frontend.zip`)
+#### Scenario: fixed keys
+- GIVEN two concurrent executions of the same pipeline
+- THEN their S3 objects and their workspaces are disjoint
+- AND IT MUST NOT use any fixed key (e.g. `codebuild/frontend.zip`)
 
-#### Scenario: fallo y huérfanos
-- GIVEN un fallo en clone, empaquetado o subida
-- THEN el step falla con un código que distingue `SOURCE_CLONE`, `SOURCE_PREP` y `ARTIFACT_UPLOAD`
-- AND el workspace se elimina igualmente
-- AND al arrancar, el Executor elimina workspaces huérfanos
+#### Scenario: failure and orphans
+- GIVEN a failure in clone, packaging, or upload
+- THEN the step fails with a code that distinguishes `SOURCE_CLONE`, `SOURCE_PREP` and `ARTIFACT_UPLOAD`
+- AND the workspace is removed regardless
+- AND on startup, the Executor removes orphan workspaces
 
-#### Scenario: concurrencia acotada
-- GIVEN más preparaciones solicitadas que el límite configurado
-- THEN las excedentes esperan
-- BUT it must NOT superarse el límite
+#### Scenario: bounded concurrency
+- GIVEN more preparations requested than the configured limit
+- THEN the excess ones wait
+- BUT it must NOT exceed the limit
 
-### FR-09 — Quality en Lambda
+### FR-09 — Quality in Lambda
 
-El sistema SHALL despachar las tareas de quality a Lambda de forma asíncrona y SHALL recibir su resultado como evento, clasificándolo.
+The system SHALL dispatch quality tasks to Lambda asynchronously and SHALL receive its result as an event, classifying it.
 
-| Resultado | Clasificación |
+| Result | Classification |
 |---|---|
-| El worker devuelve `status` de éxito | `QUALITY_COMPLETED` |
-| El worker devuelve `status` de fallo (lint o test rojo) | `QUALITY_FAILED` (de negocio, sin reintento) |
-| Error de función | `QUALITY_FAILED` con clase `INFRA` (1 re-despacho) |
-| Timeout de la función | `QUALITY_TIMED_OUT` (distinto de FAILED) |
+| The worker returns a success `status` | `QUALITY_COMPLETED` |
+| The worker returns a failure `status` (lint or a red test) | `QUALITY_FAILED` (business-level, no retry) |
+| Function error | `QUALITY_FAILED` with class `INFRA` (1 re-dispatch) |
+| Function timeout | `QUALITY_TIMED_OUT` (distinct from FAILED) |
 
-#### Scenario: no bloqueo
-- GIVEN dos tareas de quality despachadas
-- WHEN están en curso
-- THEN el Executor sigue procesando otros eventos
-- BUT it must NOT mantener una invocación síncrona abierta esperando el resultado
+#### Scenario: no blocking
+- GIVEN two quality tasks dispatched
+- WHEN they are in progress
+- THEN the Executor keeps processing other events
+- BUT it must NOT keep an open synchronous invocation waiting for the result
 
-#### Scenario: enlace a logs
-- GIVEN un resultado con `logUrl` o `logS3Uri`
-- THEN se guarda en el step y aparece en la notificación de fallo
+#### Scenario: link to logs
+- GIVEN a result with `logUrl` or `logS3Uri`
+- THEN it is saved on the step and appears in the failure notification
 
-### FR-10 — Build en CodeBuild por ambiente
+### FR-10 — Build in CodeBuild per environment
 
-El sistema SHALL iniciar builds en el proyecto CodeBuild declarado para el ambiente del pipeline, con la fuente de la ejecución y un tag de imagen único, y SHALL recibir la finalización como evento.
+The system SHALL start builds in the CodeBuild project declared for the pipeline's environment, with the execution's source and a unique image tag, and SHALL receive the completion as an event.
 
-#### Scenario: tag único
-- GIVEN un build de la ejecución `prms-reporting-dev-184`
-- THEN la imagen queda etiquetada `prms-reporting-dev-184`, con el commit y el `executionId` como metadatos
-- AND IT MUST NOT reutilizar `latest` ni tags enteros que Jenkins pueda producir
+#### Scenario: unique tag
+- GIVEN a build of the execution `prms-reporting-dev-184`
+- THEN the image is tagged `prms-reporting-dev-184`, with the commit and the `executionId` as metadata
+- AND IT MUST NOT reuse `latest` or integer tags that Jenkins might produce
 
-#### Scenario: finalización por evento
-- GIVEN un build en curso
-- WHEN termina con `SUCCEEDED`, `FAILED`, `STOPPED` o `TIMED_OUT`
-- THEN el step se actualiza por el evento correspondiente
-- BUT el Executor must NOT sondear el build en el camino normal (solo el reconciler puede consultarlo)
+#### Scenario: completion by event
+- GIVEN a build in progress
+- WHEN it finishes with `SUCCEEDED`, `FAILED`, `STOPPED` or `TIMED_OUT`
+- THEN the step is updated by the corresponding event
+- BUT the Executor must NOT poll the build on the normal path (only the reconciler may query it)
 
-#### Scenario: fuente de la ejecución
-- GIVEN un build
-- THEN su fuente es el ZIP de esa ejecución
-- BUT it must NOT clonar el repositorio dentro de CodeBuild
+#### Scenario: execution's source
+- GIVEN a build
+- THEN its source is that execution's ZIP
+- BUT it must NOT clone the repository inside CodeBuild
 
-#### Scenario: salidas
-- GIVEN un build exitoso
-- THEN el step expone `imageUri` y `digest` como salidas utilizables por steps posteriores
+#### Scenario: outputs
+- GIVEN a successful build
+- THEN the step exposes `imageUri` and `digest` as outputs usable by later steps
 
-### FR-11 — Lock de deploy y supersede
+### FR-11 — Deploy lock and supersede
 
-El sistema SHALL impedir que dos ejecuciones del Executor desplieguen al mismo tiempo sobre la misma unidad de deploy, mediante un lock con propietario y lease, y SHALL omitir deploys de secuencias más viejas que la ya desplegada.
+The system SHALL prevent two Executor executions from deploying at the same time onto the same deploy unit, by means of a lock with an owner and a lease, and SHALL skip deploys of sequences older than the one already deployed.
 
-#### Scenario: adquisición
-- GIVEN una unidad de deploy sin lock o con el lease vencido
-- WHEN un step `ssh` la solicita
-- THEN obtiene el lock con propietario = su `executionId` y un vencimiento
+#### Scenario: acquisition
+- GIVEN a deploy unit with no lock or with an expired lease
+- WHEN an `ssh` step requests it
+- THEN it obtains the lock with owner = its `executionId` and an expiration
 
-#### Scenario: ocupado
-- GIVEN un lock vigente de otra ejecución
-- WHEN se solicita
-- THEN el step queda en `WAITING_LOCK` y reintenta con backoff
-- AND tras 30 minutos de espera falla con `LOCK_TIMEOUT` y se notifica
-- AND IT MUST ser `LOCK_TIMEOUT` el único resultado de agotar la espera, sea quien sea quien la detecte (el propio reintento o la reconciliación)
+#### Scenario: busy
+- GIVEN a valid lock held by another execution
+- WHEN it is requested
+- THEN the step stays in `WAITING_LOCK` and retries with backoff
+- AND after 30 minutes of waiting it fails with `LOCK_TIMEOUT` and a notification is sent
+- AND `LOCK_TIMEOUT` MUST be the only outcome of exhausting the wait, whoever detects it (the retry itself or the reconciliation)
 
-#### Scenario: propiedad
-- GIVEN un lock de la ejecución A
-- WHEN la ejecución B intenta renovarlo o liberarlo
-- THEN la operación no tiene efecto
+#### Scenario: ownership
+- GIVEN a lock held by execution A
+- WHEN execution B attempts to renew or release it
+- THEN the operation has no effect
 
-#### Scenario: renovación y liberación
-- GIVEN un deploy en curso
-- THEN el lease se renueva periódicamente mientras dura
-- AND al terminar (éxito, fallo o finally) el lock se libera
+#### Scenario: renewal and release
+- GIVEN a deploy in progress
+- THEN the lease is renewed periodically while it lasts
+- AND when it finishes (success, failure, or finally) the lock is released
 
-#### Scenario: lock huérfano
-- GIVEN un propietario que dejó de renovar
-- WHEN vence el lease
-- THEN otra ejecución puede adquirirlo
-- AND IT MUST decidirse por el vencimiento del lease, no por la eliminación automática del registro
+#### Scenario: orphan lock
+- GIVEN an owner that stopped renewing
+- WHEN the lease expires
+- THEN another execution can acquire it
+- AND IT MUST be decided by the lease's expiration, not by automatic deletion of the record
 
 #### Scenario: supersede
-- GIVEN el target ya tiene desplegada la secuencia 186
-- WHEN la ejecución 184 obtiene el lock
-- THEN su deploy pasa a `SKIPPED` con motivo `SUPERSEDED`, sin abrir SSH
-- AND se libera el lock
+- GIVEN the target already has sequence 186 deployed
+- WHEN execution 184 obtains the lock
+- THEN its deploy moves to `SKIPPED` with reason `SUPERSEDED`, without opening SSH
+- AND the lock is released
 
-### FR-12 — Deploy por SSH
+### FR-12 — Deploy via SSH
 
-El sistema SHALL desplegar a través de SSH ejecutando, en el target resuelto por el registro, una versión fijada y versionada del deploy script con argumentos declarados, y SHALL capturar su resultado.
+The system SHALL deploy via SSH by executing, on the target resolved by the registry, a pinned and versioned version of the deploy script with declared arguments, and SHALL capture its result.
 
 #### Scenario: host key
-- GIVEN un target
-- WHEN el host key presentado no coincide con el registrado
-- THEN la conexión se aborta y el step falla con `HOST_KEY_MISMATCH`
-- BUT it must NOT aceptarse ningún host key no registrado
+- GIVEN a target
+- WHEN the presented host key does not match the registered one
+- THEN the connection is aborted and the step fails with `HOST_KEY_MISMATCH`
+- BUT it must NOT accept any unregistered host key
 
-#### Scenario: credenciales
-- GIVEN la credencial SSH
-- THEN se obtiene en el momento de uso desde el gestor de secretos y se mantiene solo en memoria
-- BUT it must NOT escribirse en disco, imagen ni logs
-- AND IT MUST admitir llave privada y, solo si la entrada lo marca como temporal, password
+#### Scenario: credentials
+- GIVEN the SSH credential
+- THEN it is fetched at the point of use from the secrets manager and kept in memory only
+- BUT it must NOT be written to disk, image, or logs
+- AND IT MUST support a private key and, only if the entry marks it as temporary, a password
 
-#### Scenario: versión del script
-- GIVEN un deploy
-- THEN el script ejecutado es el de la versión de la definición de esa ejecución y su checksum queda registrado
-- AND los archivos remotos temporales llevan el `executionId` en su ruta y se eliminan al final
+#### Scenario: script version
+- GIVEN a deploy
+- THEN the script executed is the one from that execution's definition version, and its checksum is recorded
+- AND the remote temporary files carry the `executionId` in their path and are removed at the end
 
-#### Scenario: argumentos
-- GIVEN los argumentos del step
-- THEN se pasan escapados, sin interpretación de shell adicional
-- BUT it must NOT construirse comandos concatenando texto de la definición
+#### Scenario: arguments
+- GIVEN the step's arguments
+- THEN they are passed escaped, with no additional shell interpretation
+- BUT it must NOT build commands by concatenating text from the definition
 
-#### Scenario: resultado
-- GIVEN el script termina
-- THEN se registran el código de salida, la cola de la salida y la línea estructurada final
-- AND el código se mapea según FR-13
+#### Scenario: result
+- GIVEN the script finishes
+- THEN the exit code, the tail of the output, and the final structured line are recorded
+- AND the code is mapped per FR-13
 
-#### Scenario: reintentos de conexión
-- GIVEN una conexión fallida
-- THEN se reintenta hasta 2 veces **antes** de iniciar el script
-- BUT it must NOT reintentarse automáticamente un script que ya empezó
+#### Scenario: connection retries
+- GIVEN a failed connection
+- THEN it is retried up to 2 times **before** starting the script
+- BUT it must NOT automatically retry a script that has already started
 
-### FR-13 — Contrato del deploy script (lado target)
+### FR-13 — Deploy script contract (target side)
 
-El deploy script SHALL realizar, en este orden: autenticación en el registro de imágenes y pull de las nuevas; materialización temporal de la configuración de runtime; migración (cuando se solicita) con la imagen nueva **mientras la versión anterior sigue en servicio**; reemplazo de contenedores; health check; limpieza. Además SHALL conservar la imagen anterior.
+The deploy script SHALL perform, in this order: authentication to the image registry and pull of the new ones; temporary materialization of the runtime configuration; migration (when requested) with the new image **while the previous version remains in service**; container replacement; health check; cleanup. It SHALL also retain the previous image.
 
-| Código | Significado | Versión anterior |
+| Code | Meaning | Previous version |
 |---|---|---|
-| 0 | Éxito | Reemplazada |
-| 10 | Falló el login o el pull | Intacta |
-| 20 | Falló la migración | Intacta (sin detener) |
-| 30 | Falló el arranque; se restauró la anterior | Restaurada |
-| 40 | Falló el health check; se restauró la anterior | Restaurada |
-| 50 | Target ocupado: otra operación de deploy tiene el mutex local; **no se hizo nada** | Intacta |
-| otro / sesión perdida | Desconocido | `UNKNOWN_TARGET_STATE` |
+| 0 | Success | Replaced |
+| 10 | Login or pull failed | Intact |
+| 20 | Migration failed | Intact (not stopped) |
+| 30 | Startup failed; the previous one was restored | Restored |
+| 40 | Health check failed; the previous one was restored | Restored |
+| 50 | Target busy: another deploy operation holds the local mutex; **nothing was done** | Intact |
+| other / lost session | Unknown | `UNKNOWN_TARGET_STATE` |
 
-*(Revisión tras Judgment Day ronda 1, S-2, aprobada por el owner: se añade el código 50.)*
+*(Revised after Judgment Day round 1, S-2, approved by the owner: code 50 is added.)*
 
-#### Scenario: segunda barrera en el target
-- GIVEN una operación de deploy en curso en la unidad (aunque el lock distribuido haya vencido)
-- WHEN se inicia otro deploy sobre la misma unidad
-- THEN el segundo sale con 50 sin pull, migración ni swap
-- BUT it must NOT reemplazar al lock distribuido de FR-11: ambos coexisten
+#### Scenario: second barrier on the target
+- GIVEN a deploy operation in progress on the unit (even if the distributed lock has expired)
+- WHEN another deploy is started on the same unit
+- THEN the second one exits with 50, with no pull, migration, or swap
+- BUT it must NOT replace the distributed lock from FR-11: both coexist
 
-#### Scenario: precondición de compatibilidad de migraciones
-- GIVEN un target con migraciones habilitadas
-- THEN su entrada del registro declara que las migraciones son compatibles hacia atrás, con quién lo atesta
-- AND IT MUST considerarse inválida la definición que pide migrar sobre un target sin esa declaración
-- BUT la plataforma must NOT presentar esa propiedad como garantizada: es responsabilidad del equipo de la aplicación
+#### Scenario: migration-compatibility precondition
+- GIVEN a target with migrations enabled
+- THEN its registry entry declares that migrations are backward compatible, along with who attests it
+- AND a definition that requests migrating onto a target without that declaration MUST be considered invalid
+- BUT the platform must NOT present that property as guaranteed: it is the application team's responsibility
 
-#### Scenario: migración fallida
-- GIVEN la versión N sirviendo y la migración de N+1 falla
-- WHEN corre el script
-- THEN sale con 20 y N sigue sirviendo
-- BUT it must NOT detener ni eliminar los contenedores de N
+#### Scenario: failed migration
+- GIVEN version N in service and the migration of N+1 fails
+- WHEN the script runs
+- THEN it exits with 20 and N keeps serving
+- BUT it must NOT stop or remove N's containers
 
-#### Scenario: health check fallido
-- GIVEN N+1 arrancó pero no pasa el health check
-- THEN el script restaura N y sale con 40
+#### Scenario: failed health check
+- GIVEN N+1 started but does not pass the health check
+- THEN the script restores N and exits with 40
 
-#### Scenario: imagen previa
-- GIVEN cualquier desenlace
-- THEN la imagen de N permanece disponible en el host
-- BUT it must NOT ejecutarse limpieza de la imagen previa
+#### Scenario: previous image
+- GIVEN any outcome
+- THEN N's image remains available on the host
+- BUT it must NOT run cleanup of the previous image
 
-#### Scenario: configuración temporal
-- GIVEN la configuración de runtime materializada en un archivo temporal
-- THEN su nombre contiene el `executionId`, solo lo lee el usuario de deploy y se elimina **en el target** en cualquier desenlace
+#### Scenario: temporary configuration
+- GIVEN the runtime configuration materialized in a temporary file
+- THEN its name contains the `executionId`, only the deploy user reads it, and it is removed **on the target** on any outcome
 
-#### Scenario: credenciales AWS del target
-- GIVEN el target
-- THEN el script obtiene sus permisos AWS sin depender de credenciales estáticas dejadas por ejecuciones previas
-- AND IT MUST NOT escribir credenciales AWS en el host (dependencia: OD-Q5)
+#### Scenario: target's AWS credentials
+- GIVEN the target
+- THEN the script obtains its AWS permissions without depending on static credentials left by previous executions
+- AND IT MUST NOT write AWS credentials on the host (dependency: OD-Q5)
 
-#### Scenario: idempotencia del script
-- GIVEN el script ejecutado dos veces con las mismas imágenes
-- THEN el segundo resultado es equivalente al primero y no hay una segunda migración con efectos
+#### Scenario: script idempotency
+- GIVEN the script run twice with the same images
+- THEN the second result is equivalent to the first and there is no second migration with effects
 
-### FR-14 — Notificaciones
+### FR-14 — Notifications
 
-El sistema SHALL notificar desde el Executor, a través de un servicio de notificación con proveedores intercambiables (Slack en el PoC), los eventos: inicio, fallo de quality, fallo de build, fallo de deploy (incluido `UNKNOWN_TARGET_STATE`), timeout de lock, timeout de ejecución y éxito.
+The system SHALL notify, from the Executor, through a notification service with interchangeable providers (Slack in the PoC), the following events: start, quality failure, build failure, deploy failure (including `UNKNOWN_TARGET_STATE`), lock timeout, execution timeout, and success.
 
-#### Scenario: contenido
-- GIVEN una notificación
-- THEN incluye `executionId`, pipeline, commit, step afectado (si aplica) y un enlace a logs
-- BUT it must NOT incluir valores de secretos
+#### Scenario: content
+- GIVEN a notification
+- THEN it includes `executionId`, pipeline, commit, affected step (if applicable), and a link to logs
+- BUT it must NOT include secret values
 
-#### Scenario: fallo del proveedor
-- GIVEN Slack no disponible
-- WHEN se intenta notificar
-- THEN se registra el error y el pipeline continúa
-- AND IT MUST NOT cambiar el estado de la ejecución por un fallo de notificación
+#### Scenario: provider failure
+- GIVEN Slack unavailable
+- WHEN notification is attempted
+- THEN the error is logged and the pipeline continues
+- AND IT MUST NOT change the execution's state because of a notification failure
 
-#### Scenario: separación
-- GIVEN Lambda y CodeBuild
-- THEN ninguno envía notificaciones directamente
+#### Scenario: separation
+- GIVEN Lambda and CodeBuild
+- THEN neither sends notifications directly
 
-### FR-15 — Reconciliación
+### FR-15 — Reconciliation
 
-El sistema SHALL ejecutar periódicamente (cada 5 minutos o menos) una reconciliación que detecte ejecuciones y steps vivos más allá de su plazo, recupere finalizaciones perdidas de CodeBuild y cierre locks huérfanos.
+The system SHALL periodically run (every 5 minutes or less) a reconciliation that detects executions and steps alive past their deadline, recovers lost CodeBuild completions, and closes orphan locks.
 
-#### Scenario: evento de CodeBuild perdido
-- GIVEN un step `codebuild` vencido cuyo build ya terminó
-- WHEN corre la reconciliación
-- THEN el step adopta el resultado real del build
+#### Scenario: lost CodeBuild event
+- GIVEN an expired `codebuild` step whose build has already finished
+- WHEN the reconciliation runs
+- THEN the step adopts the build's actual result
 
-#### Scenario: step atascado
-- GIVEN un step sin resultado tras su plazo
-- THEN pasa a `TIMED_OUT`, se ejecutan los `finally` y se notifica
+#### Scenario: stuck step
+- GIVEN a step with no result past its deadline
+- THEN it moves to `TIMED_OUT`, the `finally` steps run, and a notification is sent
 
-#### Scenario: sesión SSH interrumpida
-- GIVEN un deploy cuyo propietario dejó de renovar el lock
-- THEN la ejecución termina con `UNKNOWN_TARGET_STATE` y se notifica para verificación manual
-- BUT it must NOT re-ejecutarse el deploy automáticamente
+#### Scenario: interrupted SSH session
+- GIVEN a deploy whose owner stopped renewing the lock
+- THEN the execution ends with `UNKNOWN_TARGET_STATE` and a notification is sent for manual verification
+- BUT it must NOT automatically re-run the deploy
 
-### FR-16 — Comportamiento ante fallos
+### FR-16 — Failure behavior
 
-El sistema SHALL comportarse como indica esta tabla. Cada fila es verificable de forma independiente.
+The system SHALL behave as this table indicates. Each row is independently verifiable.
 
-| # | Fallo | Comportamiento obligatorio |
+| # | Failure | Mandatory behavior |
 |---|---|---|
-| F1 | Falla el git clone | 2 reintentos con backoff, luego `FAILED (SOURCE_CLONE)`; limpieza; notificación |
-| F2 | Falla la preparación de fuente | `FAILED (SOURCE_PREP)`; limpieza |
-| F3 | Falla la subida a S3 | 1 reintento del step, luego `FAILED (ARTIFACT_UPLOAD)` |
-| F4 | Error de la función Lambda | `INFRA`; 1 re-despacho; luego `FAILED` |
-| F5 | Quality rojo | `FAILED`, sin reintento; dependientes en `SKIPPED` |
-| F6 | Timeout de Lambda | `TIMED_OUT`, sin reintento |
-| F7 | Build fallido | `FAILED` con enlace al log; sin reintento |
-| F8 | Falla el push de imagen | `FAILED` (ocurre dentro del build) |
-| F9 | Redelivery de SQS | No-op (FR-07) |
-| F10 | Falla la conexión SSH | 2 reintentos antes del script; luego `FAILED`; se libera el lock |
-| F11 | Falla la migración | Código 20 → `FAILED (MIGRATION)`; versión anterior sirviendo; sin reintento |
-| F12 | Falla el deploy script | Código ≠ 0 → `FAILED` con código y cola de salida; sin reintento |
-| F13 | Falla el health check | Código 40 → `FAILED (HEALTH)`; versión anterior restaurada |
-| F14 | Falla Slack | Se registra y se continúa |
-| F15 | Reinicio del Executor | Reanuda desde el estado persistido; barrido de workspaces |
-| F16 | Ejecución atascada | Reconciliación → `TIMED_OUT` |
-| F17 | Lock huérfano | El lease vence; reconciliación; `UNKNOWN_TARGET_STATE` si había un deploy en curso |
-| F18 | Target ocupado (código 50) | Vuelve a la espera de lock dentro del mismo presupuesto de 30 min; al agotarlo, `LOCK_TIMEOUT` |
-| F19 | El target exige una ventana de deploy y no hay ninguna abierta | `FAILED (DEPLOY_WINDOW_CLOSED)` sin abrir SSH; notificación |
+| F1 | git clone fails | 2 retries with backoff, then `FAILED (SOURCE_CLONE)`; cleanup; notification |
+| F2 | Source preparation fails | `FAILED (SOURCE_PREP)`; cleanup |
+| F3 | S3 upload fails | 1 step retry, then `FAILED (ARTIFACT_UPLOAD)` |
+| F4 | Lambda function error | `INFRA`; 1 re-dispatch; then `FAILED` |
+| F5 | Red quality | `FAILED`, no retry; dependents in `SKIPPED` |
+| F6 | Lambda timeout | `TIMED_OUT`, no retry |
+| F7 | Failed build | `FAILED` with a link to the log; no retry |
+| F8 | Image push fails | `FAILED` (occurs inside the build) |
+| F9 | SQS redelivery | No-op (FR-07) |
+| F10 | SSH connection fails | 2 retries before the script; then `FAILED`; the lock is released |
+| F11 | Migration fails | Code 20 → `FAILED (MIGRATION)`; previous version serving; no retry |
+| F12 | Deploy script fails | Code ≠ 0 → `FAILED` with code and output tail; no retry |
+| F13 | Health check fails | Code 40 → `FAILED (HEALTH)`; previous version restored |
+| F14 | Slack fails | It is logged and processing continues |
+| F15 | Executor restart | Resumes from the persisted state; workspace sweep |
+| F16 | Stuck execution | Reconciliation → `TIMED_OUT` |
+| F17 | Orphan lock | The lease expires; reconciliation; `UNKNOWN_TARGET_STATE` if there was a deploy in progress |
+| F18 | Target busy (code 50) | Returns to the lock wait within the same 30-minute budget; when exhausted, `LOCK_TIMEOUT` |
+| F19 | The target requires a deploy window and none is open | `FAILED (DEPLOY_WINDOW_CLOSED)` without opening SSH; notification |
 
-### FR-17 — Observabilidad
+### FR-17 — Observability
 
-El sistema SHALL emitir logs estructurados en los que cada entrada relacionada con una ejecución contiene `executionId` (y `stepId` cuando aplica), y SHALL exponer alarmas para mensajes en la DLQ, ejecuciones vivas más allá de su plazo y Executor sin actividad.
+The system SHALL emit structured logs in which every entry related to an execution contains `executionId` (and `stepId` when applicable), and SHALL expose alarms for messages in the DLQ, executions alive past their deadline, and an inactive Executor.
 
-#### Scenario: reconstrucción
-- GIVEN un `executionId`
-- WHEN un operador consulta el estado persistido y los logs
-- THEN puede determinar qué steps corrieron, con qué identificadores externos, cuánto duraron y por qué falló, sin acceso a Jenkins
+#### Scenario: reconstruction
+- GIVEN an `executionId`
+- WHEN an operator queries the persisted state and the logs
+- THEN they can determine which steps ran, with which external identifiers, how long they took, and why it failed, with no access to Jenkins
 
-#### Scenario: redacción
-- GIVEN cualquier log
-- THEN no contiene secretos, credenciales ni tokens
+#### Scenario: redaction
+- GIVEN any log
+- THEN it contains no secrets, credentials, or tokens
 
-### FR-18 — Coexistencia con Jenkins
+### FR-18 — Coexistence with Jenkins
 
-El sistema SHALL operar los deploys reales del PoC solo dentro de ventanas de prueba en las que los jobs de Jenkins que despliegan sobre la misma unidad de deploy están deshabilitados, y SHALL dejar registro de cada ventana.
+The system SHALL operate the PoC's real deploys only within test windows in which the Jenkins jobs that deploy onto the same deploy unit are disabled, and SHALL keep a record of each window.
 
-#### Scenario: ventana
-- GIVEN una prueba de deploy en `<PRMS_REPORTING_DEV_TARGET>`
-- THEN antes de empezar se anuncia, se verifica que no hay builds de Jenkins en curso para esos jobs y estos se deshabilitan
-- AND al terminar se rehabilitan y se registran responsable, horarios y ejecuciones
+#### Scenario: window
+- GIVEN a deploy test on `<PRMS_REPORTING_DEV_TARGET>`
+- THEN before starting, it is announced, it is verified that there are no Jenkins builds in progress for those jobs, and they are disabled
+- AND when it finishes, they are re-enabled and the owner, schedule, and executions are recorded
 
-#### Scenario: Jenkins global
-- BUT it must NOT apagarse Jenkins globalmente ni modificarse Jenkinsfiles
+#### Scenario: global Jenkins
+- BUT it must NOT shut down Jenkins globally or modify Jenkinsfiles
 
-#### Scenario: precondición
-- GIVEN que la lista de jobs no está confirmada (dependencia del inventario de configuración)
-- THEN no se ejecutan deploys reales sobre ese target
+#### Scenario: precondition
+- GIVEN that the list of jobs is not confirmed (dependency on the configuration inventory)
+- THEN no real deploys are run on that target
 
-#### Scenario: respaldo técnico (añadido tras Judgment Day ronda 1, S-4)
-- GIVEN un target marcado en el registro como "requiere ventana de deploy"
-- WHEN se intenta un deploy y no hay ninguna ventana abierta y vigente (registrada con responsable y con la lista no vacía de jobs externos deshabilitados)
-- THEN el deploy falla sin abrir SSH y se notifica
-- BUT el mecanismo must NOT contener lógica específica de Jenkins en el núcleo: es una capacidad genérica y transitoria por target que se retira cambiando datos del registro
+#### Scenario: technical backing (added after Judgment Day round 1, S-4)
+- GIVEN a target marked in the registry as "requires deploy window"
+- WHEN a deploy is attempted and there is no open and valid window (recorded with an owner and with a non-empty list of disabled external jobs)
+- THEN the deploy fails without opening SSH and a notification is sent
+- BUT the mechanism must NOT contain Jenkins-specific logic in the core: it is a generic, transient per-target capability that is retired by changing registry data
 
-#### Scenario: revalidación de la ventana (añadido tras Judgment Day ronda 2, R2-W1)
-- GIVEN una ventana válida cuando empezó la ejecución
-- WHEN el deploy espera el lock, recibe "target ocupado" o está a punto de ejecutar el script
-- THEN la ventana se vuelve a comprobar en cada uno de esos momentos, y debe cubrir la duración posible del deploy
-- AND IT MUST NOT ejecutarse el script si la ventana venció: el step falla sin efectos en el target y se notifica
+#### Scenario: window revalidation (added after Judgment Day round 2, R2-W1)
+- GIVEN a window that was valid when the execution started
+- WHEN the deploy waits for the lock, receives "target busy", or is about to execute the script
+- THEN the window is checked again at each of those moments, and it must cover the deploy's possible duration
+- AND IT MUST NOT execute the script if the window has expired: the step fails with no effects on the target and a notification is sent
 
-### FR-19 — Retención de artefactos
+### FR-19 — Artifact retention
 
-El sistema SHALL eliminar los artefactos de fuente de cada ejecución al terminarla, y la infraestructura SHALL expirar automáticamente: fuente a 7 días, logs y reportes a 30 días, subidas multipart incompletas a 1 día.
+The system SHALL delete each execution's source artifacts when it finishes, and the infrastructure SHALL automatically expire: source after 7 days, logs and reports after 30 days, incomplete multipart uploads after 1 day.
 
-#### Scenario: ejecución abandonada
-- GIVEN una ejecución que nunca terminó
-- THEN sus artefactos desaparecen por expiración aunque no se haya ejecutado la limpieza explícita
+#### Scenario: abandoned execution
+- GIVEN an execution that never finished
+- THEN its artifacts disappear through expiration even if the explicit cleanup never ran
 
-### FR-20 — Trigger por webhook de GitHub (SHOULD)
+### FR-20 — GitHub webhook trigger (SHOULD)
 
-El sistema SHOULD aceptar webhooks de push de GitHub para pipelines con trigger `github-push`, verificando la firma y deduplicando por id de entrega.
+The system SHOULD accept GitHub push webhooks for pipelines with the `github-push` trigger, verifying the signature and deduplicating by delivery id.
 
-#### Scenario: firma inválida
-- GIVEN un webhook sin firma válida
-- THEN se rechaza y no se encola nada
+#### Scenario: invalid signature
+- GIVEN a webhook without a valid signature
+- THEN it is rejected and nothing is queued
 
-#### Scenario: rama no configurada
-- GIVEN un push a una rama no declarada
-- THEN no se crea ninguna ejecución
+#### Scenario: branch not configured
+- GIVEN a push to an undeclared branch
+- THEN no execution is created
 
 ---
 
 ## 7. Non-Functional Requirements
 
-| ID | Requisito | Medida / verificación |
+| ID | Requirement | Measure / verification |
 |---|---|---|
-| **NFR-01 Frontera del Executor** | El Executor MUST NOT: instalar dependencias ni compilar (npm/pnpm/maven/docker build); ejecutar scripts de repositorios de aplicación; conectarse a bases de datos de aplicación; leer secretos de aplicación; contener ramas de código por proyecto o aplicación; interpretar expresiones, bucles o scripts embebidos en definiciones; alojar el daemon o el socket de Docker | Inspección de la imagen (sin toolchains ni socket montado); revisión de permisos y red; búsqueda de identificadores de proyecto en el código del Executor = 0; validación de schema que rechaza expresiones |
-| **NFR-02 Seguridad** | Ningún secreto en ZIPs, objetos S3, imagen, definiciones, registro ni logs. Mínimo privilegio por componente y ambiente. Credenciales AWS del Executor temporales o, si no es posible, justificadas de forma explícita (dependencia: OD-Q12). Host key fijado. Credencial SSH solo en memoria | Escaneo de artefactos, imagen y logs; revisión IAM |
-| **NFR-03 Confiabilidad** | Corrección bajo entrega at-least-once, desorden y reinicios. Ningún deploy duplicado. Locks recuperables sin intervención | Pruebas de duplicados, concurrencia y kill |
-| **NFR-04 Huella de recursos** | Contenedor con límites de CPU y memoria. Preparaciones de fuente y sesiones SSH concurrentes acotadas y configurables. Disco de trabajo dimensionado por medición (dependencia: OD-Q15) | Configuración del contenedor; medición en el incremento de fuente |
-| **NFR-05 Latencia de coordinación** | Desde que un evento de finalización está en la cola hasta que el siguiente step queda despachado: ≤ 60 s en condiciones normales | Medición en E2E (p95 en ≥ 10 ejecuciones) |
-| **NFR-06 Operabilidad** | Un operador reconstruye cualquier ejecución solo con estado persistido, logs y notificaciones | Ejercicio de runbook |
-| **NFR-07 Costo** | CodeBuild solo para builds de imagen; quality en Lambda; sin cómputo permanente nuevo para el Executor. Se informan duraciones y recursos medidos | Informe de medición |
-| **NFR-08 Extensibilidad sin código de proyecto** | Añadir un pipeline del mismo patrón requiere solo una definición y una entrada de registro, **sin cambios de código** del Executor. Añadir un tipo de step afecta solo a su capacidad y al schema. *Simplificación del PoC: como las definiciones van empaquetadas en la imagen, publicar una definición nueva requiere reconstruir y redesplegar la imagen. La fuente de definiciones debe estar abstraída para poder externalizarla sin cambiar el núcleo* | Prueba: segunda definición ficticia del mismo patrón validada sin cambios de código |
-| **NFR-09 Aislamiento de ambiente** | Todos los recursos y permisos del PoC son DEV. Sin acceso a recursos STAGING o PROD | Revisión IAM (una sola cuenta AWS, FA §2) |
-| **NFR-10 No interferencia** | El PoC no modifica Jenkinsfiles, código de aplicación ni elimina credenciales existentes en hosts | Revisión de cambios |
+| **NFR-01 Executor boundary** | The Executor MUST NOT: install dependencies or compile (npm/pnpm/maven/docker build); run scripts from application repositories; connect to application databases; read application secrets; contain per-project or per-application code branches; interpret expressions, loops, or embedded scripts in definitions; host the Docker daemon or socket | Image inspection (no toolchains or mounted socket); review of permissions and network; search for project identifiers in the Executor's code = 0; schema validation that rejects expressions |
+| **NFR-02 Security** | No secrets in ZIPs, S3 objects, the image, definitions, the registry, or logs. Least privilege per component and environment. The Executor's AWS credentials are temporary or, if that is not possible, explicitly justified (dependency: OD-Q12). Pinned host key. SSH credential in memory only | Scanning of artifacts, image, and logs; IAM review |
+| **NFR-03 Reliability** | Correctness under at-least-once delivery, out-of-order delivery, and restarts. No duplicate deploys. Locks recoverable without intervention | Duplicate, concurrency, and kill tests |
+| **NFR-04 Resource footprint** | Container with CPU and memory limits. Concurrent source preparations and SSH sessions bounded and configurable. Working disk sized by measurement (dependency: OD-Q15) | Container configuration; measurement in the source increment |
+| **NFR-05 Coordination latency** | From the moment a completion event is in the queue until the next step is dispatched: ≤ 60 s under normal conditions | E2E measurement (p95 over ≥ 10 executions) |
+| **NFR-06 Operability** | An operator can reconstruct any execution using only persisted state, logs, and notifications | Runbook exercise |
+| **NFR-07 Cost** | CodeBuild only for image builds; quality in Lambda; no new permanent compute for the Executor. Measured durations and resources are reported | Measurement report |
+| **NFR-08 Extensibility without project code** | Adding a pipeline of the same pattern requires only a definition and a registry entry, **with no code changes** to the Executor. Adding a step type affects only its capability and the schema. *PoC simplification: since definitions are packaged into the image, publishing a new definition requires rebuilding and redeploying the image. The definition source must be abstracted so it can be externalized without changing the core* | Test: a second mock definition of the same pattern validated with no code changes |
+| **NFR-09 Environment isolation** | All of the PoC's resources and permissions are DEV. No access to STAGING or PROD resources | IAM review (a single AWS account, FA §2) |
+| **NFR-10 Non-interference** | The PoC does not modify Jenkinsfiles or application code, and does not remove existing credentials on hosts | Change review |
 
 ---
 
-## 8. Defect classes y gates
+## 8. Defect classes and gates
 
-| Clase de defecto | Gate que la detecta | Sin gate automático → sustituto |
+| Defect class | Gate that detects it | No automatic gate → substitute |
 |---|---|---|
-| Transición de estado inválida o en carrera | Tests de dominio con base de datos local y concurrencia simulada | — |
-| Doble despacho, doble deploy o doble migración | Tests de idempotencia + E2E con inyección de duplicados | — |
-| Lock mal adquirido o liberado, o supersede incorrecto | Tests de LockService con base de datos local (contención, vencimiento, propietario ajeno) | — |
-| Definición o registro inválidos aceptados | Tests de validación con casos negativos | — |
-| Error de tipos en contratos | Type-check / build del proyecto | — |
-| Secreto filtrado en ZIP, S3, imagen o logs | Escaneo automatizado de artefactos de prueba e imagen | Revisión humana del escaneo en la HITL de E2E |
-| El Executor incluye toolchains o lógica de proyecto (frontera) | Inspección de imagen + búsqueda de identificadores de proyecto | Revisión de diseño en cada PR |
-| Script de deploy en orden incorrecto (migra después de detener) | Prueba E2E con migración rota a propósito | Verificación humana del servicio en la ventana |
-| Rollback ineficaz tras un health check fallido | Prueba E2E con imagen que no arranca | Verificación humana |
-| Conectividad de red faltante | Spike de red | — |
-| Permiso IAM excesivo | **Sin gate automático completo** | Revisión humana de políticas en la HITL de infraestructura; riesgo aceptado residual |
-| Interferencia con Jenkins | **Sin gate automático** | Checklist de ventana (FR-18) verificado por el admin de Jenkins |
-| Latencia (NFR-05) | Medición sobre ≥ 10 ejecuciones; si la dispersión supera el umbral, el resultado no es evidencia y se reporta la dispersión | — |
+| Invalid or racing state transition | Domain tests with a local database and simulated concurrency | — |
+| Double dispatch, double deploy, or double migration | Idempotency tests + E2E with duplicate injection | — |
+| Lock incorrectly acquired or released, or incorrect supersede | LockService tests with a local database (contention, expiration, foreign owner) | — |
+| Invalid definition or registry accepted | Validation tests with negative cases | — |
+| Type error in contracts | Type-check / project build | — |
+| Secret leaked into ZIP, S3, image, or logs | Automated scan of test artifacts and image | Human review of the scan in the E2E HITL |
+| The Executor includes toolchains or project logic (boundary) | Image inspection + search for project identifiers | Design review on every PR |
+| Deploy script in the wrong order (migrates after stopping) | E2E test with a deliberately broken migration | Human verification of the service during the window |
+| Ineffective rollback after a failed health check | E2E test with an image that fails to start | Human verification |
+| Missing network connectivity | Network spike | — |
+| Excessive IAM permission | **No complete automatic gate** | Human policy review in the infrastructure HITL; residual accepted risk |
+| Interference with Jenkins | **No automatic gate** | Window checklist (FR-18) verified by the Jenkins admin |
+| Latency (NFR-05) | Measurement over ≥ 10 executions; if the spread exceeds the threshold, the result is not evidence and the spread is reported | — |
 
 ---
 
-## 9. Decisiones abiertas y dependencias
+## 9. Open decisions and dependencies
 
-Ninguna se resuelve en esta fase.
+None of them is resolved in this phase.
 
-| OD | Pregunta (sin responder) | Requisitos que dependen | Qué queda sin decidir |
+| OD | Question (unanswered) | Dependent requirements | What remains undecided |
 |---|---|---|---|
-| OD-Q5 | ¿`<PRMS_REPORTING_DEV_TARGET>` admite instance profile? ¿Usuario de deploy dedicado? ¿Qué jobs usan sus llaves sobrantes? | FR-13 (credenciales AWS del target), FR-18 | El mecanismo exacto por el que el target obtiene permisos AWS. FR-13 exige el resultado (sin llaves estáticas sobrantes), no el mecanismo |
-| OD-Q7 | ¿CDK o Terraform? | FR-19 (lifecycle), aprovisionamiento de toda la infra | La herramienta de IaC. Los requisitos describen recursos y comportamientos, no la herramienta |
-| OD-Q11 | ¿Qué host es exactamente el servidor de microservicios? ¿PROD? ¿Swarm? ¿Proxy? | NFR-04, NFR-09, conectividad | El host. NFR-09 exige aislamiento DEV en permisos y recursos; si el host es PROD, se escala al owner |
-| OD-Q12 | ¿Cómo obtiene el Executor credenciales AWS sin exponerlas a otros contenedores? | NFR-02 | El mecanismo. NFR-02 exige mínimo privilegio y no exposición |
-| OD-Q13 | ¿Los tests de quality necesitan configuración con secretos? | FR-08, FR-09 | Si el worker necesita leer secretos. FR-08 prohíbe secretos en ZIPs en cualquier caso |
-| OD-Q14 | ¿Alguien consume `<JENKINS_EXECUTIONS_TABLE>`? | Ninguno del PoC | Compatibilidad futura de registros |
-| OD-Q15 | Tamaño de `<PRMS_REPORTING_REPO>` y autenticación en GitHub | FR-08, NFR-04 | El tamaño del disco y el tipo de credencial de lectura del repo |
+| OD-Q5 | Does `<PRMS_REPORTING_DEV_TARGET>` support an instance profile? A dedicated deploy user? Which jobs use its leftover keys? | FR-13 (target's AWS credentials), FR-18 | The exact mechanism by which the target obtains AWS permissions. FR-13 requires the outcome (no leftover static keys), not the mechanism |
+| OD-Q7 | CDK or Terraform? | FR-19 (lifecycle), provisioning of all the infrastructure | The IaC tool. The requirements describe resources and behaviors, not the tool |
+| OD-Q11 | What host exactly is the microservices server? PROD? Swarm? Proxy? | NFR-04, NFR-09, connectivity | The host. NFR-09 requires DEV isolation in permissions and resources; if the host is PROD, it is escalated to the owner |
+| OD-Q12 | How does the Executor obtain AWS credentials without exposing them to other containers? | NFR-02 | The mechanism. NFR-02 requires least privilege and no exposure |
+| OD-Q13 | Do the quality tests need configuration with secrets? | FR-08, FR-09 | Whether the worker needs to read secrets. FR-08 prohibits secrets in ZIPs in any case |
+| OD-Q14 | Does anyone consume `<JENKINS_EXECUTIONS_TABLE>`? | None in the PoC | Future record compatibility |
+| OD-Q15 | Size of `<PRMS_REPORTING_REPO>` and GitHub authentication | FR-08, NFR-04 | The disk size and the type of credential for reading the repo |
 
-Dependencias de evidencia aún no disponibles (del proposal Q1–Q3, parcialmente resueltas): nombres de los jobs de Jenkins (FR-18), formato de entrada de `<QUALITY_WORKER_FUNCTION>` (FR-09), comandos y orden de migración actuales (FR-13), Dockerfiles y `.dockerignore` de `<PRMS_REPORTING_REPO>` (FR-10).
+Evidence dependencies not yet available (from the proposal's Q1–Q3, partially resolved): Jenkins job names (FR-18), `<QUALITY_WORKER_FUNCTION>` input format (FR-09), current migration commands and order (FR-13), Dockerfiles and `.dockerignore` of `<PRMS_REPORTING_REPO>` (FR-10).
 
 ---
 
 ## 10. Requirement ID Index
 
-| ID | Nombre | Fuerza | Proposal |
+| ID | Name | Strength | Proposal |
 |---|---|---|---|
-| FR-01 | Pipeline Definitions declarativas | SHALL | R-DEF, §10.4 |
+| FR-01 | Declarative Pipeline Definitions | SHALL | R-DEF, §10.4 |
 | FR-02 | Target Registry | SHALL | §10.4 |
-| FR-03 | Solicitud de ejecución e identidad | SHALL | R-ID |
-| FR-04 | Recepción de eventos | SHALL | R-QUEUE, §10.3 |
-| FR-05 | Estado persistente | SHALL | §10.12 |
-| FR-06 | Planificación de steps | SHALL | R-PAR |
-| FR-07 | Procesamiento idempotente | SHALL | R-IDEM, §10.13 |
-| FR-08 | Preparación de fuente | SHALL | R-NOSECRETS, §10.7 |
-| FR-09 | Quality en Lambda | SHALL | §10.6 |
-| FR-10 | Build en CodeBuild por ambiente | SHALL | §10.5 |
-| FR-11 | Lock y supersede | SHALL | R-LOCK, §10.14 |
-| FR-12 | Deploy por SSH | SHALL | §10.8 |
-| FR-13 | Contrato del deploy script | SHALL | R-MIG, R-ROLLBACK-READY, §10.11 |
-| FR-14 | Notificaciones | SHALL | §10.15 |
-| FR-15 | Reconciliación | SHALL | R-RECON |
-| FR-16 | Comportamiento ante fallos | SHALL | §10.17 |
-| FR-17 | Observabilidad | SHALL | R-OBS, §10.16 |
-| FR-18 | Coexistencia con Jenkins | SHALL | §12 |
-| FR-19 | Retención de artefactos | SHALL | §10.7 |
-| FR-20 | Webhook de GitHub | SHOULD | Inc 8 |
-| NFR-01…10 | No funcionales | MUST / SHALL | §6, §13, §14 |
+| FR-03 | Execution request and identity | SHALL | R-ID |
+| FR-04 | Event reception | SHALL | R-QUEUE, §10.3 |
+| FR-05 | Persistent state | SHALL | §10.12 |
+| FR-06 | Step scheduling | SHALL | R-PAR |
+| FR-07 | Idempotent processing | SHALL | R-IDEM, §10.13 |
+| FR-08 | Source preparation | SHALL | R-NOSECRETS, §10.7 |
+| FR-09 | Quality in Lambda | SHALL | §10.6 |
+| FR-10 | Build in CodeBuild per environment | SHALL | §10.5 |
+| FR-11 | Lock and supersede | SHALL | R-LOCK, §10.14 |
+| FR-12 | Deploy via SSH | SHALL | §10.8 |
+| FR-13 | Deploy script contract | SHALL | R-MIG, R-ROLLBACK-READY, §10.11 |
+| FR-14 | Notifications | SHALL | §10.15 |
+| FR-15 | Reconciliation | SHALL | R-RECON |
+| FR-16 | Failure behavior | SHALL | §10.17 |
+| FR-17 | Observability | SHALL | R-OBS, §10.16 |
+| FR-18 | Coexistence with Jenkins | SHALL | §12 |
+| FR-19 | Artifact retention | SHALL | §10.7 |
+| FR-20 | GitHub webhook | SHOULD | Inc 8 |
+| NFR-01…10 | Non-functional | MUST / SHALL | §6, §13, §14 |
 
-**Delta del proposal:** todos los ADDED se convierten en FR. Los MODIFIED (ruta de deploy, orden del deploy, credenciales del target) quedan en FR-12, FR-13 y FR-18. No hay REMOVED.
+**Delta from the proposal:** all ADDED items become FR. The MODIFIED items (deploy path, deploy order, target credentials) land in FR-12, FR-13 and FR-18. There are no REMOVED items.
