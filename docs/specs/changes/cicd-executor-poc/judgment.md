@@ -181,3 +181,76 @@ These do not reopen the judgment: they apply the informational items R3-1 throug
 | R3-4 | **Canonical rule:** exhausting the lock wait **always** ends in `FAILED (LOCK_TIMEOUT)` via T5, whether detected by the handler or the reconciler. T12 no longer applies to `WAITING_LOCK`. New `AND IT MUST` in FR-11 |
 | Publication | Specs sanitized: account ID, region, hosts, credential IDs, secret names, containers, ports, ECR repos, the previous PoC's function and bucket, Jenkins table, Slack channel, Jenkins job names and paths, resident scripts and vulnerability details of other systems → logical references (`<…>`). New DD-23: real values are resolved outside Git |
 | Budget | Re-estimated in Phase 3: 37 tasks (previously 25) and ~50 rounds; LOC unchanged (~8,700) |
+
+---
+
+## Scoped Judgment Day — AC-01 revision (proposal v3, requirements v3, design v4, tasks v4) — Round 1
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-06 |
+| Target | Frozen snapshot, SHA-256 verified by both judges: `proposal.md` 233947c9…, `requirements.md` 9b74fa90…, `design.md` ee96dfbf…, `tasks.md` 9dd292c8… |
+| Judges | Two blind, read-only `opus` judges, identical scope and criteria (Premise Ledger first; trust boundary priority) |
+| Raw counts | Judge A: 3 severe, 14 warnings, 7 suggestions. Judge B: 4 severe, 14 warnings, 7 suggestions |
+
+### Confirmed severe (both judges)
+
+| ID | Finding | Judges |
+|---|---|---|
+| CS-1 | The CI role is reachable from `pull_request_target` and `workflow_run` runs. When a job references an environment, the OIDC `sub` takes the environment form regardless of the triggering event, and these triggers run with the default branch as `GITHUB_REF`, so deployment branch rules do not stop them. P-A2 is marked VERIFIED for a claim false in this configuration; FR-25, AC15 and N-32 only test `pull_request` | A-1, B-1 |
+| CS-2 | Supersede regression: S2 compares only the fenced `lastDeployed`, written only after a recorded success. A newer execution ending `UNKNOWN_TARGET_STATE` (script actually finished) or losing its lease mid-script never records its success, so an older waiting execution passes S2 and deploys over it. Violates FR-23 / AC17 | A-3, B-3 |
+
+### Severity contested (one judge severe, the other warning) — owner decision
+
+| ID | Finding | Judges |
+|---|---|---|
+| CC-1 | P-A5 consequence "if repos are private: cost only, security model holds" is contradicted by GitHub's plan documentation (environment protection features depend on the plan; protection rules are ignored after converting to private). No ledger row for the organization's plan | A-2 (severe), B-5 (warning) |
+| CC-2 | Dedupe key `DEDUPE#{requestId}` is global and `requestId` comes from the body; `run_id` is unique only within a repository. A bound role of repo X can pre-claim repo Y's request; collisions across repos drop legitimate requests | B-2 (severe), A-7 (warning) |
+
+### Suspect (one judge only)
+
+| ID | Finding | Judge |
+|---|---|---|
+| SU-1 | GitHub variables are not masked in logs; the specs say "masked secrets/variables". Role ARN, registry host or queue URL would appear in public CI logs. No ledger row | B-4 (severe) |
+
+### Confirmed warnings (both judges; recorded as info)
+
+| ID | Finding | Judges |
+|---|---|---|
+| CW-1 | `execStartedAt` is never cleared after exit 50, so X10/X11 cannot fire on the next attempt | A-5, B-8 |
+| CW-2 | A crash after entering `QUEUED`/`WAITING_LOCK` leaves no retry message; the execution stalls until a spurious `LOCK_TIMEOUT` | A-6, B-7 |
+| CW-3 | FR-05 lists a `RECEIVED` state the design never creates; FR-15's outcome contradicts X11 | A-11, B-10, B-11 |
+| CW-4 | `lock-policy` (KEEP) still orders supersede by the Executor sequence, the option DD-27 rejects | A-14, B-13 |
+| CW-5 | Design §15 omits obsolete contract tests and Lambda/CodeBuild fixtures | A-15, B-14 |
+| CW-6 | Budget components sum to ~5,580 LOC, not the stated ~5,300 | A-16, B-15 |
+
+Other single-judge warnings and suggestions remain in the raw judge files and are carried as info (notably B-17: P-A4 claims more than its source; B-19: P-A6 now confirmable at its primary source; B-12: FR-17 past-deadline alarm missing from the design).
+
+**Status:** Round 1 complete. Awaiting the owner's authorization for the round-one correction.
+
+### Round 1 correction → scoped re-judgment (round 2)
+
+All 11 round-1 IDs RESOLVED by both judges. One fix-caused severe (R2-A1, Judge A): P-G6 was marked VERIFIED but did not reproduce — the AWS IAM page's GitHub tab maps `job_workflow_ref`, `repository_id`, `repository_owner_id`, `environment` (and others; not `event_name`) to condition keys. Settled by the architect with a single re-run of the source (confirmed). Fix-caused warnings confirmed by both: dispatched-value condition unspecified (`<=` needed), `workflow_dispatch` branch not checked, rollback contradiction, FR-03 dedupe wording.
+
+### Round 2 correction (final bounded round) → final verification
+
+| Field | Value |
+|---|---|
+| Changes | DD-24 simplified: trust policy matches `aud`, `repository_id`, `repository_owner_id`, `environment` and a SHA-pinned `job_workflow_ref` directly (custom subject template dropped; P-G4 moot); P-G6 corrected; P-G10 (immutable subject format) added; `highestDispatched` condition `stored <= new`; guard checks the bound ref for `push` and `workflow_dispatch`; rollback in scope = the script's automatic restore only (operator redeploy of an older digest = OD-A8); runbook §12.2 resolution CLI; FR-03 wording; ledger table repaired; P-A6 VERIFIED |
+| Final verification | Judge A: **APPROVE** (no fix-caused severe). Judge B: **APPROVE** (no fix-caused severe; corrected its own round-2 reading of P-G6) |
+| Residual info (not fixed; the fix lineage is exhausted) | R3-A1 (warning): the source of the guard job's "bound ref" is not specified — it must not come from a caller input. R2-1 residual (warning): the `highestAccepted` write at X1 has no stated condition; a strict condition would send a late older build to the DLQ instead of `SUPERSEDED` (safe, but breaks an FR-23 scenario). R2-A7: `targetWriteRejected` missing from the §5.1 attribute list. R2-A8: FR-04 omits `TARGET_RESOLUTION_RECORDED`. R3-A2: stale text (N-29 still says P-A6 UNVERIFIED; DD-29 still says "tag or SHA") |
+| Leader direction recorded | Pinning the reusable workflow to a commit SHA in the trust binding was a Leader direction in round 2; it narrows OD-A6 ("tag or SHA") for the trust binding only. Owner confirmation pending |
+
+JUDGMENT: APPROVED ✅ (with residual info items requiring an owner-approved editorial pass before implementation resumes)
+
+### Post-approval editorial pass E1–E5 (owner-requested, 2026-10-06)
+
+| ID | Residual closed | Change (editorial; no new decision) |
+|---|---|---|
+| E1 | R3-A1 | The bound ref comes from the Environment-scoped variable `CICD_BOUND_REF` (admin-only, P-G13 VERIFIED), checked in the Environment job's first step before any OIDC request; never a workflow input, the request or a repository variable (`write`-only, rejected). Fails closed if missing. P-G14 (availability in a called workflow) UNVERIFIED, fails closed |
+| E2 | R2-1 residual | `highestAccepted` is not a condition of X1: a separate conditional update (`stored <= new`) after X1, so a late older build ends `SUPERSEDED` via S1/X3, as FR-23 requires; S2 stays authoritative |
+| E3 | R2-A7 | `targetWriteRejected` added to the §5.1 execution attributes |
+| E4 | R2-A8 | FR-04 lists `TARGET_RESOLUTION_RECORDED` among the known message types |
+| E5 | R3-A2 | N-29 stale P-A6 text removed; DD-29 and the OD-A6 rows say the reusable workflow is pinned by commit SHA wherever the trust depends on it (owner direction) |
+
+Checks after E1–E5: stale-text grep clean; Premise Ledger 15 VERIFIED / 25 UNVERIFIED (consistent with the count line); sanitization grep clean on all spec files; `npm run validate` 6/6 PASS.
