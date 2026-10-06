@@ -1,6 +1,6 @@
 # Jenkins Coexistence Log — Template
 
-<!-- @akili-spec changes/cicd-executor-poc design DD-21, §12, §12.1; requirements FR-18; proposal §12 -->
+<!-- @akili-spec changes/cicd-executor-poc design DD-21, §12, §12.1, §12.2; requirements FR-18; proposal §12 -->
 
 Record of every deploy-test window opened against a target shared with Jenkins
 (`deployWindowPolicy: required`, e.g. `<PRMS_REPORTING_DEV_TARGET>`). One row per window.
@@ -18,6 +18,9 @@ real Jenkins job names, and no host, account, or credential identifier appears i
 - Every time the §12.1 stale-mutex runbook procedure results in an operator intervention on a
   Jenkins-shared target, even outside a formally opened window (`docs/runbook.md`'s "Stale
   local mutex" decision table: "after any intervention, record it here").
+- Every time a `UNKNOWN_TARGET_STATE` resolution is recorded with the operator CLI (`docs/runbook.md`
+  §12.2 step 6): put the `executionId`, the observed digests (logical names only) and the actor
+  in the Incidents column of the window it belongs to, or in a row of its own if no window is open.
 
 ## Log
 
@@ -40,4 +43,4 @@ cell uses `prms-reporting-dev`, the registry's `targetId` — see Column notes.)
 | Executions within the window | Every `executionId` that attempted a deploy on this target while the window was open, whether it succeeded, failed, or was skipped |
 | Migration state before / after | `migration:check:ci` run in **read-only mode** and its output recorded once before the first test in the window and once after each test (design §12 "Shared DEV DB", P-24 mitigation; FR-18's "record of each window") — procedural, not a technical guard: neither the distributed lock nor the local mutex cover concurrent migrations from Jenkins variants against the same DB |
 | DB snapshot taken | Whether a DEV DB snapshot was taken before the first test in this window (design §12, P-24); `yes` with its reference, or `no` with a reason if the window had no migration-bearing test |
-| Incidents | Anything abnormal: a stale-mutex intervention (§12.1), a `windowClosedDuringRun` notification, a discrepancy between DynamoDB's target state and the image actually running, etc. `none` if the window was uneventful |
+| Incidents | Anything abnormal: a stale-mutex intervention (§12.1), an `UNKNOWN_TARGET_STATE` resolution (§12.2), a `windowClosedDuringRun` notification, a discrepancy between DynamoDB's target state and the image actually running, etc. `none` if the window was uneventful |

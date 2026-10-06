@@ -211,7 +211,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-05 — Request contract, internal events and message router
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · M · **A** |
+| Status / Size / Gate | **[x] done** (commit with N-02, N-08) · M · **A** |
 | Goal | Domain validation of `DEPLOY_REQUESTED` and internal events; router by `eventType`; unparseable → no ack |
 | Depends on | N-02, N-04 |
 | Requirements / Design | FR-03, FR-04 · design §6.1, §6.4, §7 (`message-router`), RL-3 |
@@ -481,7 +481,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-20 — Infrastructure inventory and runbooks
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · S · **A** |
+| Status / Size / Gate | **[x] done** · S · **A** |
 | Goal | `infra/RESOURCES.md`, `docs/runbook.md`, `docs/resources.md` for Model B |
 | Depends on | N-02 |
 | Requirements / Design | FR-17, FR-18, FR-25, NFR-06, NFR-09 · design §5, §11, §12, DD-17, DD-24 |

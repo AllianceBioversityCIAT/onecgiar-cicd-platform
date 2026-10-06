@@ -355,3 +355,23 @@
 | Committed snapshot | HEAD + N-07 only (guard file staged with the N-07 hunk alone, because N-05 shares it): typecheck 0, lint clean, guards PASS, vitest 493/493 |
 | Forward pointers | **Callers (N-10/N-12):** map `REJECTED_SOURCE_MISMATCH` to an audited outcome; FR-23 notification and "listed as unresolved" clauses; build `sourceRef` identically everywhere (repository + workflow + environment, DD-27 item 1). **N-03:** two-sources startup validation. Advisory: `SUPERSEDED.by` names the first newer attribute, not the max |
 | Status | **Done** |
+
+### N-05 — Request contract, internal events and message router · done (commit together with N-02 and N-08)
+
+| Field | Value |
+|---|---|
+| Attempt 1 | `domain/request-contract` (types, 8 KB UTF-8 limit before parsing, `requestIdMatches`, `consistentWithSource`), `application/message-router` (parse → eventType → authorize via `SenderAuthorizer` port → schema → requestId → lookup → consistency → handler); rejected `DEPLOY_REQUESTED` → X2 via `applyTransition` + ack; unparseable / unknown type / invalid internal event → no ack; per-type `oneOf` + `unevaluatedProperties: false` in `event.schema.json`; `domain/events`, normalizers, `test/fixtures/aws`, old router tests deleted. Falsifier (ack unparseable) → 7 failed. Evidence re-run (Leader): tsc 0, lint clean, validate PASS, 146/146; Leader falsifier (requestId check disabled) → red — **VERIFIED** |
+| Reviewer attempt 1 | **PASS** (`opus`, full). Rulings accepted: unknown/invalid internal events → DLQ; unauthorized internal sender acked; `workflowRef` exact equality (fail closed); handler errors → no ack; oversized `DEPLOY_REQUESTED` → DLQ (never parse oversized untrusted input) |
+| Sequencing | N-08 (in progress) already removed the types-only `event-router/index.ts` shim that N-05 left for the frozen T-08 files and observability. N-05 cannot be committed alone without that shim → **N-02, N-05 and N-08 land in one commit** after N-08's review |
+| Forward pointers | **N-24 / DD-29:** pin which GitHub value `ci.workflowRef` carries and what `source.workflowRef` resolves to (caller `workflow_ref` vs SHA-pinned `job_workflow_ref`, P-G11) before N-32, or every real request ends `CONSISTENCY_MISMATCH`. **N-06/N-10:** carry `senderId` (role-ID prefix only) as audit data into `EXEC#.senderRef` and rejection records; N-06 records the intended reason when an unknown `deploymentId` makes the authorizer fail first. **N-17:** remove leftover orphan vocabulary in observability if any remains after N-08 |
+| Status | **Done** (commit pending with N-08) |
+
+### N-20 — Infrastructure inventory and runbooks · done
+
+| Field | Value |
+|---|---|
+| Attempt 1 | `infra/RESOURCES.md` rewritten for Model B (OIDC provider; per-repository/environment CI role with the DD-24 trust shape — six exact `StringEquals` keys, `job_workflow_ref` at `<PINNED_COMMIT_SHA>`, 1 h; queue policy with the DD-25 per-type rule; Scheduler target role; operator principal; reduced Executor role; GitHub-side configuration incl. admin-only `CICD_BOUND_REF`, secrets only, SHA-pinned actions; DynamoDB items/TTLs; alarms); `docs/runbook.md` (§12.1 kept, §12.2 resolution procedure with the OD-A8 boundary), `docs/resources.md`, `docs/jenkins-coexistence-log.md`. Checklist derived from design §11/§5/§12: 77 items. Red run vs HEAD: 40+ missing; mutations (StringLike `sub`, `job_workflow_ref@*`) → 3 and 2 failed. Evidence re-run (Leader): 77/0, publication scan 0, Leader mutation → 2 failed — **VERIFIED** |
+| Reviewer attempt 1 | **PASS** (`opus`, checklist) |
+| Spec gap recorded | FR-17 requires an alarm for executions past their deadline, but design §12 names no metric; `ExecutionsPastDeadline` is a placeholder name. Owner: **N-14** (reconciler) emits it; design §12 to be amended in the Gate A closure spec sync |
+| Forward pointers | **N-24 (Gate B):** the queue policy needs an explicit `Deny` for principals outside the four (an `Allow` alone does not block same-account IAM principals); CI role states DEV-only scope; shared `<ECR_REPOSITORY>` across environments recorded as residual (P-7 / OD-A7); operator principal is a role (no static keys); add `ecr:BatchGetImage` only if digest capture needs it. **N-11:** deliver `tools/resolve-target` (design §12.2 has a stray space: `tools/ resolve-target`) and mark it in runbook step 6. Removals list to name `<WEBHOOK_SECRET_REF>` (editorial) |
+| Status | **Done** |
