@@ -103,6 +103,28 @@ export class ExecutionRepository {
   }
 
   /**
+   * Write-once audit fields (`slackThreadTs`, `scriptChecksum`) that are NOT part of the state machine. Conditional on the
+   * item existing and the field being absent; it deliberately does NOT touch `version`, `status` or the GSI2 attributes, so it can
+   * never invalidate the version an in-flight coordinator attempt holds (DD-03: the state itself stays guarded by status + version).
+   * `false` when the field was already set (a redelivered or concurrent writer won).
+   */
+  public async setAuditOnce(executionId: string, field: "slackThreadTs" | "scriptChecksum", value: string): Promise<boolean> {
+    const key = executionKey(executionId);
+    return runConditionalWrite(() =>
+      this.client.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { [TABLE_PK_ATTR]: key.pk, [TABLE_SK_ATTR]: key.sk },
+          UpdateExpression: "SET #field = :value",
+          ConditionExpression: `attribute_exists(${TABLE_PK_ATTR}) AND attribute_not_exists(#field)`,
+          ExpressionAttributeNames: { "#field": field },
+          ExpressionAttributeValues: { ":value": value },
+        }),
+      ),
+    );
+  }
+
+  /**
    * The conditional update `update` sends, as data: the deploy coordinator
    * puts it in a `TransactWriteItems` next to the TARGET write (X9, X16).
    * Same sparse-index covenant check and same condition as `update`.

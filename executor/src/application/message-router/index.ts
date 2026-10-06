@@ -58,14 +58,21 @@ export {
  * `source` field.
  */
 export interface SenderAuthorizer {
-  authorize(request: {
+  /**
+   * Synchronous, fail-closed decision (N-17: widened from a boolean so the audit `senderRef` reaches the records, FR-21).
+   * `senderRef` is the role-ID prefix only, never the caller-chosen session suffix.
+   */
+  decide(request: {
     /** SQS `SenderId` system attribute (`ROLEID:session`), undefined when absent. */
     readonly senderId: string | undefined;
     readonly eventType: MessageEventType;
     /** Only for DEPLOY_REQUESTED, and only when the body carries a string; unvalidated lookup key. */
     readonly deploymentId?: string;
-  }): Promise<boolean>;
+  }): { readonly authorized: boolean; readonly senderRef?: string };
 }
+
+/** Audit sender reference recorded when the SenderId could not be parsed at all (no role-ID prefix exists). */
+export const UNKNOWN_SENDER_REF = "UNKNOWN";
 
 /** Resolves a deployment's bound source (DD-27) from its definition; `undefined` when no definition exists. */
 export interface DeploymentSourceLookup {
@@ -83,12 +90,18 @@ export interface Rejection {
   /** Best-effort identifiers read from the (possibly invalid) body, for audit only. Strings only. */
   readonly requestId?: string;
   readonly deploymentId?: string;
+  /** Audit sender reference (role-ID prefix only, DD-25); `UNKNOWN_SENDER_REF` when the SenderId did not parse. */
+  readonly senderRef: string;
+  /** SQS MessageId: the `REJECT#MSG#` key fallback when the identifiers are missing or unusable. */
+  readonly sqsMessageId?: string;
 }
 
 /** Accepted, contract-valid deploy request, ready for execution-service (dedupe claim, sequence, X1). */
 export interface ValidatedDeployRequest {
   readonly request: DeployRequest;
   readonly source: ResolvedSource;
+  /** Audit sender reference (role-ID prefix only, DD-25), persisted to `EXEC#.senderRef` (FR-21). */
+  readonly senderRef: string;
   /** All checks passed except the dedupe claim, which execution-service owns (DD-20); feed these plus the claim to `applyTransition` CREATE (X1). */
   readonly checks: CreationChecksWithoutClaim;
 }
@@ -104,7 +117,8 @@ export interface MessageHandlers {
   reconcileTick(event: EventOf<"RECONCILE_TICK">): Promise<void>;
   deployWindowOpenRequested(event: EventOf<"DEPLOY_WINDOW_OPEN_REQUESTED">): Promise<void>;
   deployWindowCloseRequested(event: EventOf<"DEPLOY_WINDOW_CLOSE_REQUESTED">): Promise<void>;
-  targetResolutionRecorded(event: EventOf<"TARGET_RESOLUTION_RECORDED">): Promise<void>;
+  /** `context.senderRef` is the operator principal's role-ID prefix (audit data, DD-25). */
+  targetResolutionRecorded(event: EventOf<"TARGET_RESOLUTION_RECORDED">, context: { readonly senderRef: string }): Promise<void>;
 }
 
 export interface MessageRouterDeps {
@@ -119,6 +133,8 @@ export interface IncomingMessage {
   readonly body: string;
   /** SQS `SenderId` system attribute (P-A4). */
   readonly senderId?: string;
+  /** SQS `MessageId`, carried into rejection records as the `REJECT#MSG#` fallback key. */
+  readonly messageId?: string;
 }
 
 export type UnroutableReason = UnparseableReason | "UNKNOWN_EVENT_TYPE" | "INVALID_INTERNAL_EVENT";
@@ -159,6 +175,8 @@ function x2Reason(transition: TransitionResult): RejectReason {
 }
 
 async function reject(
+  message: IncomingMessage,
+  senderRef: string,
   deps: MessageRouterDeps,
   failed: Partial<CreationChecksWithoutClaim>,
   details: readonly string[],
@@ -173,6 +191,8 @@ async function reject(
     details,
     ...(requestId === undefined ? {} : { requestId }),
     ...(deploymentId === undefined ? {} : { deploymentId }),
+    senderRef,
+    ...(message.messageId === undefined ? {} : { sqsMessageId: message.messageId }),
   });
   return { ack: true, outcome: "REJECTED", reason };
 }
@@ -183,29 +203,30 @@ async function routeDeployRequest(
   deps: MessageRouterDeps,
 ): Promise<RouteResult> {
   const lookupKey = stringField(body, "deploymentId");
-  const authorized = await deps.authorizer.authorize({
+  const decision = deps.authorizer.decide({
     senderId: message.senderId,
     eventType: DEPLOY_REQUESTED,
     ...(lookupKey === undefined ? {} : { deploymentId: lookupKey }),
   });
-  if (!authorized) return reject(deps, { senderAuthorized: false }, ["sender is not authorized for this request"], body);
+  const senderRef = decision.senderRef ?? UNKNOWN_SENDER_REF;
+  if (!decision.authorized) return reject(message, senderRef, deps, { senderAuthorized: false }, ["sender is not authorized for this request"], body);
 
   const schema = deps.validators.deployRequest.validate(body);
-  if (!schema.valid) return reject(deps, { schemaValid: false }, schema.errors, body);
+  if (!schema.valid) return reject(message, senderRef, deps, { schemaValid: false }, schema.errors, body);
   const request = body as unknown as DeployRequest;
 
   if (!requestIdMatches(request)) {
-    return reject(deps, { requestIdMatches: false }, ["requestId must equal ci.runId-ci.runAttempt"], body);
+    return reject(message, senderRef, deps, { requestIdMatches: false }, ["requestId must equal ci.runId-ci.runAttempt"], body);
   }
 
   const source = await deps.sources.resolveSource(request.deploymentId);
-  if (source === undefined) return reject(deps, { deploymentKnown: false }, ["no definition for deploymentId"], body);
+  if (source === undefined) return reject(message, senderRef, deps, { deploymentKnown: false }, ["no definition for deploymentId"], body);
 
   if (!consistentWithSource(request, source)) {
-    return reject(deps, { consistencyOk: false }, ["ci.repository or ci.workflowRef does not match the resolved source"], body);
+    return reject(message, senderRef, deps, { consistencyOk: false }, ["ci.repository or ci.workflowRef does not match the resolved source"], body);
   }
 
-  await deps.handlers.deployRequested({ request, source, checks: PASSED });
+  await deps.handlers.deployRequested({ request, source, checks: PASSED, senderRef });
   return { ack: true, outcome: "HANDLED", eventType: DEPLOY_REQUESTED };
 }
 
@@ -215,8 +236,8 @@ async function routeInternalEvent(
   body: Readonly<Record<string, unknown>>,
   deps: MessageRouterDeps,
 ): Promise<RouteResult> {
-  const authorized = await deps.authorizer.authorize({ senderId: message.senderId, eventType });
-  if (!authorized) {
+  const decision = deps.authorizer.decide({ senderId: message.senderId, eventType });
+  if (!decision.authorized) {
     await deps.handlers.unauthorizedInternalEvent({ eventType, senderId: message.senderId });
     return { ack: true, outcome: "UNAUTHORIZED", eventType };
   }
@@ -239,7 +260,7 @@ async function routeInternalEvent(
       await h.deployWindowCloseRequested(event);
       break;
     case "TARGET_RESOLUTION_RECORDED":
-      await h.targetResolutionRecorded(event);
+      await h.targetResolutionRecorded(event, { senderRef: decision.senderRef ?? UNKNOWN_SENDER_REF });
       break;
   }
   return { ack: true, outcome: "HANDLED", eventType };

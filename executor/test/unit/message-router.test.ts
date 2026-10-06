@@ -84,7 +84,7 @@ interface Harness {
 }
 
 function harness(options: {
-  authorize?: SenderAuthorizer["authorize"];
+  authorize?: (request: Parameters<SenderAuthorizer["decide"]>[0]) => boolean;
   resolveSource?: DeploymentSourceLookup["resolveSource"];
   handlerFailure?: Error;
 } = {}): Harness {
@@ -111,9 +111,9 @@ function harness(options: {
       validators,
       handlers,
       authorizer: {
-        async authorize(request) {
+        decide(request) {
           authorizeCalls.push({ ...request });
-          return options.authorize === undefined ? true : options.authorize(request);
+          return { authorized: options.authorize === undefined ? true : options.authorize(request), senderRef: "ROLE_ID_REF" };
         },
       },
       sources: {
@@ -200,7 +200,7 @@ describe("message-router: DEPLOY_REQUESTED", () => {
   });
 
   it("an unauthorized sender is REJECTED via X2 UNAUTHORIZED_SENDER before any other check (DD-25)", async () => {
-    const h = harness({ authorize: async () => false });
+    const h = harness({ authorize: () => false });
     // The body is also schema-invalid: the first reason in the closed order wins.
     const result = await routeMessage({ body: body({ ...validRequest, host: "<HOST>" }), senderId: "ROLE_ID_X:s" }, h.deps);
 
@@ -307,7 +307,7 @@ describe("message-router: eventType routing", () => {
   });
 
   it("an internal event from an unauthorized sender is acknowledged without invoking its handler (DD-25)", async () => {
-    const h = harness({ authorize: async () => false });
+    const h = harness({ authorize: () => false });
     const result = await routeMessage({ body: body(internalEvents["RECONCILE_TICK"]!.event), senderId: "ROLE_ID_X:s" }, h.deps);
 
     expect(result).toEqual({ ack: true, outcome: "UNAUTHORIZED", eventType: "RECONCILE_TICK" });

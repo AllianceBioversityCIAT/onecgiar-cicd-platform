@@ -162,6 +162,26 @@ export class BundledDefinitionSource implements DefinitionSource {
     return { content: await readFile(filePath, "utf8"), definitionRef: this.definitionRef };
   }
 
+  /**
+   * Every `deploymentId` declared under `deployment-definitions/` (files without one, such as the target registry, are skipped).
+   * Startup validates ALL of them (design §6.2); this enumeration is a property of this adapter, not of the `DefinitionSource` port.
+   */
+  async listDeploymentIds(): Promise<string[]> {
+    const files = await listYamlFilesRecursively(path.join(this.repoRoot, "deployment-definitions"));
+    const ids: string[] = [];
+    for (const filePath of files) {
+      let parsed: unknown;
+      try {
+        parsed = parseYaml(await readFile(filePath, "utf8"));
+      } catch {
+        continue;
+      }
+      const id = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>).deploymentId : undefined;
+      if (typeof id === "string") ids.push(id);
+    }
+    return ids.sort();
+  }
+
   async getTargetRegistry(): Promise<DefinitionContent> {
     // NFR-09: the PoC is DEV-only — a single registry file, no per-environment selection logic.
     const filePath = path.join(this.repoRoot, "deployment-definitions", "targets", "dev.yaml");

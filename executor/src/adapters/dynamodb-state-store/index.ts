@@ -43,3 +43,4 @@ export {
   type MarkUnknownInput,
   type MarkUnknownOutcome,
 } from "./deploy-transactions.js";
+export { ResolutionAuditRepository, type ResolutionAuditEntry } from "./resolution-audit-repository.js";

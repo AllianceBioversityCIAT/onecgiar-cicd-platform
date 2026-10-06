@@ -147,7 +147,8 @@ function unitSetsEqual(requested: readonly string[], declared: readonly string[]
   return a.size === b.size && [...a].every((unit) => b.has(unit));
 }
 
-function rejectionRef(input: RejectionInput): RejectionRef {
+/** The `REJECT#` key of a rejection: scoped `{deploymentId, requestId}` when both are usable, else the SQS message id (design §5.1). */
+export function rejectionRef(input: Pick<RejectionInput, "deploymentId" | "requestId" | "sqsMessageId">): RejectionRef {
   const { deploymentId, requestId, sqsMessageId } = input;
   if (
     deploymentId !== undefined &&

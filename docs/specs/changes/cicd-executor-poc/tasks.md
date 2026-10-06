@@ -427,7 +427,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-17 — SQS consumer and bootstrap
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · M · **A** (local emulator) |
+| Status / Size / Gate | **[x] done** (SenderId on real SQS DEFERRED to N-26) · M · **A** |
 | Goal | Long-poll with `SenderId` and `ApproximateReceiveCount`; heartbeat; ack rules; wiring in `main` |
 | Depends on | N-05, N-06*, N-10, N-12, N-13, N-14, N-16 (*fake authorizer until confirmed) |
 | Requirements / Design | FR-04, FR-05, NFR-03, NFR-04 · DD-14, DD-16 |

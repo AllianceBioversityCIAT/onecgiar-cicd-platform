@@ -73,6 +73,7 @@ function matches(configured: string | undefined, roleId: string): boolean {
 export interface DecidingSenderAuthorizer extends SenderAuthorizer {
   /** Same rule as `authorize`, with audit data (`senderRef` = role-ID prefix) for the caller to record. */
   decide(request: AuthorizationRequest): AuthorizationDecision;
+  authorize(request: AuthorizationRequest): Promise<boolean>;
 }
 
 export function createSenderAuthorizer(deps: SenderAuthorizerDeps): DecidingSenderAuthorizer {
