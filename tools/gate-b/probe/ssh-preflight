@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# @akili-spec changes/cicd-executor-poc gate-b-plan K-7 (D-5)
+# Owner-run helper that ONLY PRINTS the commands to run from the workstation.
+# It executes nothing and contacts nothing. Replace the placeholders yourself
+# (<TARGET_HOST>, <TARGET_PORT>, <DEPLOY_USER>) and never paste real values into
+# the repository.
+set -euo pipefail
+
+cat <<'COMMANDS'
+# 1. Fetch the host key the target presents (read-only network call, run by you).
+#    Use the key type you intend to pin.
+ssh-keyscan -p <TARGET_PORT> -t ed25519 <TARGET_HOST> > "${TMPDIR:-/tmp}/probe_known_hosts"
+
+# 2. Compute its fingerprint.
+ssh-keygen -lf "${TMPDIR:-/tmp}/probe_known_hosts" -E sha256
+
+# 3. Compare it with the fingerprint you obtained out of band (for example from the
+#    console of the machine). Do NOT continue unless they are identical.
+
+# 4. Test a login with strict host-key checking against ONLY that scratch file.
+#    This runs `true` and nothing else on the target.
+ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${TMPDIR:-/tmp}/probe_known_hosts" \
+    -o PasswordAuthentication=no -p <TARGET_PORT> <DEPLOY_USER>@<TARGET_HOST> true
+
+# 5. Delete the scratch file.
+rm -f -- "${TMPDIR:-/tmp}/probe_known_hosts"
+
+# Expected: step 4 exits 0 with no prompt and no "host key verification failed".
+# The public key line from step 1 (without the host name) is what the host-key secret pins.
+COMMANDS

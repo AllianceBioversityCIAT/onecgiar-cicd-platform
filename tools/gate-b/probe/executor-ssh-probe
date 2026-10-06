@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Owner-run SSH probe (gate-b-plan K-7). Requires `npm run build` in executor/.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec node "$here/executor-ssh-probe.mjs" "$@"
