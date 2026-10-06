@@ -498,3 +498,17 @@
 | Committed snapshot | HEAD + N-12 files: tsc 0, lint, guards PASS, vitest 791 / 52 skipped |
 | Forward pointers | **N-14:** re-drive attempt = execution.attempt + 1. **Closure spec sync:** add `cicdResultMissing` and `windowClosedDuringRun` semantics to §5.1; runbook §12.2 mentions that `TARGET.currentImages` may lag `lastDeployed` when the flag is set. Advisory: compare fencingToken/acquiredAt before a loser releases (theoretical window); distinct label for the post-exit window check |
 | Status | **Done** |
+
+### N-21 — Reusable workflow and PRMS caller · done
+
+| Field | Value |
+|---|---|
+| Attempt 1 | `.github/workflows/deploy-request.reusable.yml` (workflow_call; `guard` job event allowlist + input validation; Environment job `needs: guard` with bound-ref check first, account-ID mask, checkout, OIDC, ECR login, plain docker build/push with strict digest capture, jq body, one final `send-message`; identifiers only from five Environment secrets; `vars.CICD_BOUND_REF` the only variable; no local actions), `docs/examples/caller-workflow.yml`, contract test (26: 25 pass, actionlint SKIPPED — not installed). Pinned actions resolved by the implementer and **independently by the Leader** via api.github.com (checkout v7.0.1 `3d3c42e5…`, configure-aws-credentials v6.3.0 `e1253824…`, amazon-ecr-login v2.1.7 `03f1aad4…` after annotated-tag dereference) — match. Falsifier (send before build) → 2 failed. Leader falsifier (one secret changed to `vars.*`) → red — **VERIFIED** |
+| Reviewer attempt 1 | **FAIL** (`opus`): the contract test does not parse the caller example, although FR-22's "CI failure → no request" relies on `deploy: needs: ci` and DD-29 requires SHA-pinned callers |
+| Escalated to the owner (design gap) | If the Environment-scoped `CICD_BOUND_REF` is unset, a repository- or organization-level variable of the same name (creatable with `write` access, P-G13) may satisfy the bound-ref check, contradicting E1's "never a repository-level variable" in the degraded case without branch rules (P-G7). GitHub's documentation read at source (2026-10-06) does not state the precedence between levels → **UNVERIFIED**. Candidate mitigation (owner decision): a Gate B check (N-24/N-29) that no repository/organization variable named `CICD_BOUND_REF` exists, plus observation at N-32 |
+| Forward pointers | **N-24/N-32:** pin the `ci.workflowRef` form (`github.workflow_ref` = caller workflow at `@refs/…`) that `source.workflowRef` must resolve to; confirm digest capture on GitHub-hosted runners and Environment secrets visibility in called workflows (P-G14) |
+| Attempt 2 | Contract test parses the caller example (triggers, `permissions: {}`, `deploy.needs: ci`, SHA-pinned `uses`, no `secrets: inherit`, exact `with` keys and permissions, no literals); guard rejects a leading `-` in context/dockerfile; digest read via `docker inspect` RepoDigests after push (strict sha256 check). Falsifiers: drop `needs: ci` → red; allow leading `-` → red. Evidence re-run (Leader): contract 34 passed / 1 skipped (actionlint SKIPPED), `run-all --require-workflow` PASS; Leader falsifier (caller `@main`) → red — **VERIFIED** |
+| Reviewer attempt 2 | **PASS** (`opus`) |
+| Committed snapshot | HEAD + N-21 files: tsc 0, lint, guards PASS, vitest 825 / 53 skipped |
+| Deferred | Real GitHub run, RepoDigests on GitHub-hosted runners, Environment secrets/variables in a called workflow (P-G14), `ci.workflowRef` form — Gate C (N-32) |
+| Status | **Done** |

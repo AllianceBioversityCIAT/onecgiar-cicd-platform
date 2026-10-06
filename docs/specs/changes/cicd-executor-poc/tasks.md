@@ -499,7 +499,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-21 — Reusable workflow and PRMS caller (static only)
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · M · **A** (no GitHub run in Gate A) |
+| Status / Size / Gate | **[x] done** (static; real run in Gate C) · M · **A** |
 | Goal | `.github/workflows/deploy-request.reusable.yml` and `docs/examples/caller-workflow.yml` implementing FR-22 |
 | Depends on | N-02, N-19 (guard 7 must exist so the real reusable workflow is checked) |
 | Requirements / Design | FR-22, FR-25 · DD-24, DD-26, DD-29 |

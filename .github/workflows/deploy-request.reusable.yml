@@ -1,0 +1,222 @@
+# @akili-spec changes/cicd-executor-poc requirements FR-22, FR-25; design DD-24, DD-26, DD-29, 6.1
+#
+# Trusted reusable workflow (CI contract). It builds and pushes images, captures
+# their DIGESTS and sends exactly ONE DEPLOY_REQUESTED message. It holds no deploy
+# logic, no SSH credentials and never selects a host, script or command (NFR-01).
+#
+# Trust model (DD-24): the CI role trust policy pins this file via `job_workflow_ref`
+# at an immutable commit SHA. Event allowlist = `guard` job; bound-ref check = FIRST
+# step of the Environment job, read ONLY from the administrator-only Environment
+# variable CICD_BOUND_REF (the single allowed `vars.*`; fail closed when empty).
+# Role ARN, registry, repository, region and queue URL come ONLY from Environment
+# secrets, never from `vars.*` (P-G8). The account ID is masked before first use.
+#
+# Environment secrets expected (names are generic):
+#   CICD_ROLE_ARN, CICD_AWS_REGION, CICD_ECR_REGISTRY, CICD_ECR_REPOSITORY, CICD_QUEUE_URL
+# Environment variable expected (administrators only): CICD_BOUND_REF (a full ref,
+# for example refs/heads/<bound-branch>).
+#
+# Lint and tests are the caller's own jobs; the caller makes its deploy job `needs:` them,
+# so a failing CI step means this workflow never starts and no request is sent (FR-22).
+#
+# Action pinning (owner rule, DD-29 / guard 7): every `uses:` is a full commit SHA.
+# Resolved on 2026-10-06 from the official repositories through the GitHub API
+# (git/ref/tags/<tag>; annotated tags dereferenced via git/tags/<sha>):
+#   actions/checkout                      v7.0.1  3d3c42e5aac5ba805825da76410c181273ba90b1
+#     https://api.github.com/repos/actions/checkout/git/ref/tags/v7.0.1  (lightweight tag)
+#   aws-actions/configure-aws-credentials v6.3.0  e1253824e5c10ff9df46874f81ed3ec929e19cfd
+#     https://api.github.com/repos/aws-actions/configure-aws-credentials/git/ref/tags/v6.3.0  (lightweight tag)
+#   aws-actions/amazon-ecr-login          v2.1.7  03f1aad4c6c7ffd436567f42f9384779290529bd
+#     https://api.github.com/repos/aws-actions/amazon-ecr-login/git/ref/tags/v2.1.7
+#     -> annotated tag aded0d72..., dereferenced via .../git/tags/aded0d722166a37980e030aa969dda0bfe6b6947
+# Image build and push use the preinstalled `docker` CLI in `run:` steps (no third-party
+# build action), which keeps the trusted third-party surface minimal.
+name: deploy-request
+
+on:
+  workflow_call:
+    inputs:
+      deploymentId:
+        description: Semantic deployment identifier (matches a Deployment Definition).
+        type: string
+        required: true
+      environment:
+        description: GitHub Environment that binds the push-and-send job.
+        type: string
+        required: true
+      units:
+        description: >-
+          JSON array of build units, each {"unit": "<unit id>", "context": "<relative build context>",
+          "dockerfile": "<optional path relative to the repository root>"}. 1 to 8 units.
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  guard:
+    name: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Enforce event allowlist and validate inputs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DEPLOYMENT_ID: ${{ inputs.deploymentId }}
+          UNITS: ${{ inputs.units }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            push|workflow_dispatch) ;;
+            *) echo "::error::event not allowed for deploy requests"; exit 1 ;;
+          esac
+          if ! [[ "$DEPLOYMENT_ID" =~ ^[a-z0-9][a-z0-9-]{1,62}$ ]]; then
+            echo "::error::invalid deploymentId"; exit 1
+          fi
+          printf '%s' "$UNITS" | jq -e '
+            type == "array" and length >= 1 and length <= 8
+            and all(.[];
+              type == "object"
+              and ((keys - ["unit", "context", "dockerfile"]) | length) == 0
+              and (.unit | type == "string" and test("^[a-z0-9][a-z0-9-]{0,31}$"))
+              and (.context | type == "string" and test("^[A-Za-z0-9_.][A-Za-z0-9_./-]*$")
+                   and (test("(^|/)[.][.](/|$)") | not))
+              and ((.dockerfile // "Dockerfile") | type == "string"
+                   and test("^[A-Za-z0-9_.][A-Za-z0-9_./-]*$")
+                   and (test("(^|/)[.][.](/|$)") | not)))
+            and (([.[].unit] | unique | length) == length)' > /dev/null \
+            || { echo "::error::invalid units input"; exit 1; }
+
+  push-and-send:
+    name: push-and-send
+    needs: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Enforce bound ref
+        env:
+          BOUND_REF: ${{ vars.CICD_BOUND_REF }}
+          CURRENT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BOUND_REF:-}" ]; then
+            echo "::error::bound ref is not configured (fail closed)"; exit 1
+          fi
+          if [ "$CURRENT_REF" != "$BOUND_REF" ]; then
+            echo "::error::ref is not the bound ref"; exit 1
+          fi
+
+      - name: Mask account identifiers
+        env:
+          ROLE_ARN: ${{ secrets.CICD_ROLE_ARN }}
+          REGISTRY: ${{ secrets.CICD_ECR_REGISTRY }}
+        run: |
+          set -euo pipefail
+          account_from_registry="${REGISTRY%%.*}"
+          account_from_role="$(printf '%s' "$ROLE_ARN" | cut -d: -f5)"
+          for value in "$account_from_registry" "$account_from_role"; do
+            if [ -n "$value" ]; then echo "::add-mask::$value"; fi
+          done
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assume CI role through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.CICD_ROLE_ARN }}
+          aws-region: ${{ secrets.CICD_AWS_REGION }}
+
+      - name: Log in to the registry
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: Build and push units, capture digests
+        env:
+          UNITS: ${{ inputs.units }}
+          REGISTRY: ${{ secrets.CICD_ECR_REGISTRY }}
+          REPOSITORY: ${{ secrets.CICD_ECR_REPOSITORY }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          artifacts_file="$RUNNER_TEMP/artifacts.json"
+          echo '{}' > "$artifacts_file"
+          while IFS= read -r entry; do
+            unit="$(printf '%s' "$entry" | jq -r '.unit')"
+            context="$(printf '%s' "$entry" | jq -r '.context')"
+            dockerfile="$(printf '%s' "$entry" | jq -r '.dockerfile // "Dockerfile"')"
+            # The tag is for humans only (never drives a deploy) and cannot collide with integer tags.
+            image="${REGISTRY}/${REPOSITORY}:ci-${unit}-${RUN_ID}-${RUN_ATTEMPT}"
+            docker build --file "$dockerfile" --tag "$image" "$context"
+            docker push "$image"
+            # Digest comes from the local image's RepoDigests entry for the pushed repository
+            # (not scraped from push output); it is validated strictly below.
+            prefix="${REGISTRY}/${REPOSITORY}@"
+            digest=""
+            while IFS= read -r line; do
+              case "$line" in
+                "$prefix"*) digest="${line#"$prefix"}"; break ;;
+              esac
+            done < <(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image")
+            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::could not capture a digest for unit ${unit}"; exit 1
+            fi
+            jq --arg unit "$unit" --arg digest "$digest" '. + {($unit): $digest}' "$artifacts_file" > "$artifacts_file.tmp"
+            mv "$artifacts_file.tmp" "$artifacts_file"
+          done < <(printf '%s' "$UNITS" | jq -c '.[]')
+
+      - name: Build deploy request body
+        env:
+          DEPLOYMENT_ID: ${{ inputs.deploymentId }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPOSITORY_SLUG: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          artifacts_file="${ARTIFACTS_FILE:-$RUNNER_TEMP/artifacts.json}"
+          body_file="${BODY_FILE:-$RUNNER_TEMP/deploy-request.json}"
+          jq -n \
+            --arg deploymentId "$DEPLOYMENT_ID" \
+            --arg requestId "${RUN_ID}-${RUN_ATTEMPT}" \
+            --arg commitSha "$COMMIT_SHA" \
+            --arg repository "$REPOSITORY_SLUG" \
+            --arg workflowRef "$WORKFLOW_REF" \
+            --arg runId "$RUN_ID" \
+            --argjson runAttempt "$RUN_ATTEMPT" \
+            --argjson runNumber "$RUN_NUMBER" \
+            --slurpfile artifacts "$artifacts_file" \
+            '{
+              specVersion: 1,
+              eventType: "DEPLOY_REQUESTED",
+              requestId: $requestId,
+              deploymentId: $deploymentId,
+              commitSha: $commitSha,
+              artifacts: $artifacts[0],
+              ci: {
+                repository: $repository,
+                workflowRef: $workflowRef,
+                runId: $runId,
+                runAttempt: $runAttempt,
+                runNumber: $runNumber
+              }
+            }' > "$body_file"
+
+      - name: Send deploy request
+        env:
+          QUEUE_URL: ${{ secrets.CICD_QUEUE_URL }}
+        run: |
+          set -euo pipefail
+          aws sqs send-message \
+            --queue-url "$QUEUE_URL" \
+            --message-body "file://$RUNNER_TEMP/deploy-request.json" \
+            --output text --query MessageId > /dev/null

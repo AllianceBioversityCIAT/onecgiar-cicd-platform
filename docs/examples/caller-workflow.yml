@@ -1,0 +1,42 @@
+# @akili-spec changes/cicd-executor-poc requirements FR-22, FR-25; design DD-29
+#
+# EXAMPLE ONLY (documentation). Caller for the PRMS Reporting DEV deployment.
+# Adding it to the application repository is Gate C (N-32) and needs owner approval (OD-A6).
+# Placeholders in angle brackets are resolved outside Git (DD-23).
+#
+# Prerequisites configured by an administrator, not in this file:
+#   - GitHub Environment <GITHUB_ENVIRONMENT> with deployment branch rules = the bound branch
+#   - Environment variable CICD_BOUND_REF (full ref of the bound branch; admin-only)
+#   - Environment secrets CICD_ROLE_ARN, CICD_AWS_REGION, CICD_ECR_REGISTRY,
+#     CICD_ECR_REPOSITORY, CICD_QUEUE_URL
+#   - The CI role trust policy pins the reusable workflow at <PINNED_COMMIT_SHA> (DD-24);
+#     moving the pin means changing the trust policy in the same change.
+name: prms-reporting-dev
+
+on:
+  push:
+    branches: ["<BOUND_BRANCH>"]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ci:
+    # The caller's own lint and tests. A failure here means the deploy job never starts.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - run: echo "<LINT_AND_TEST_STEPS>"
+
+  deploy:
+    needs: ci
+    # Required so the reusable workflow's Environment job can request an OIDC token.
+    permissions:
+      id-token: write
+      contents: read
+    uses: <GITHUB_ORG>/<PLATFORM_REPO>/.github/workflows/deploy-request.reusable.yml@<PINNED_COMMIT_SHA>
+    with:
+      deploymentId: "<PRMS_REPORTING_DEV_DEPLOYMENT_ID>"
+      environment: "<GITHUB_ENVIRONMENT>"
+      units: '[{"unit":"<UNIT_A>","context":"<CONTEXT_A>"},{"unit":"<UNIT_B>","context":"<CONTEXT_B>","dockerfile":"<DOCKERFILE_B>"}]'
