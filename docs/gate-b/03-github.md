@@ -2,7 +2,7 @@
 # 03. GitHub: Environment, values, caller workflow, OIDC checks (B2)
 
 **Answer first.** In your chosen repository `<GITHUB_ORG>/<APP_REPO>` you create one Environment
-`<GITHUB_ENVIRONMENT>` holding exactly **one secret** (`CICD_ROLE_ARN`) and **four variables**,
+`<GITHUB_ENVIRONMENT>` holding **no secrets** and exactly **five variables** (`CICD_ROLE_ARN` among them),
 add the caller workflow on the bound branch, and trigger it with `workflow_dispatch`. AWS
 authentication is OIDC only. **Never store an AWS access key or secret access key in GitHub (or
 anywhere).** No application repository is changed by Claude; you pick the repository and branch.
@@ -11,12 +11,12 @@ anywhere).** No application repository is changed by Claude; you pick the reposi
 
 | Value | Class | Source | Notes |
 |---|---|---|---|
-| `CICD_ROLE_ARN` | **Environment secret** (the only one) | Stack output `CiRoleArn` | Not a credential, but it embeds the account id; a secret is the only way GitHub masks it in logs |
+| `CICD_ROLE_ARN` | Environment **variable** (not a secret) | Stack output `CiRoleArn` | Not a credential. It embeds the account id, so the role ARN and account id **will be visible in public workflow logs** (accepted, owner decision 2026-10-06): access is controlled by the OIDC trust conditions, not by hiding the ARN |
 | `CICD_AWS_REGION` | Environment variable | `<AWS_REGION>` (your choice) | |
 | `CICD_ECR_REPOSITORY` | Environment variable | Repository **name** only: last segment of stack output `CiEcrRepositoryArn` | No account id |
 | `CICD_DEPLOY_QUEUE_NAME` | Environment variable | Stack output `DeployQueueName` | Name only; the URL is derived |
 | `CICD_BOUND_REF` | Environment variable, **admin-only** | Your choice: the full ref `refs/heads/<BOUND_BRANCH>` | The one ref allowed to deploy; fail closed when empty |
-| Account id, registry host, queue URL | **Derived after OIDC**, masked before use | `sts get-caller-identity`, registry login output, `sqs get-queue-url` | Never stored in GitHub |
+| Account id, registry host, queue URL | **Derived after OIDC**, masked as log hygiene | `sts get-caller-identity`, registry login output, `sqs get-queue-url` | Never stored in GitHub |
 | Environment name, deployment branch rules, branch protection, required reviewers | Repository / Environment **configuration** | You | Not values |
 | `deploymentId`, `environment`, `units` | Caller workflow **inputs** | In the caller file | Non-sensitive |
 
@@ -48,28 +48,28 @@ gh api --method PUT repos/<GITHUB_ORG>/<APP_REPO>/environments/<GITHUB_ENVIRONME
 
 with a file `{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}` and then `gh api --method POST repos/<GITHUB_ORG>/<APP_REPO>/environments/<GITHUB_ENVIRONMENT>/deployment-branch-policies -f name=<BOUND_BRANCH> -f type=branch`.
 
-## 3. Set the secret and the variables on the Environment
+## 3. Set the variables on the Environment (no secrets)
 
-UI: Environment page, **Environment secrets** and **Environment variables**. Or with `gh` (it prompts for the secret so the value never enters shell history):
+UI: Environment page, **Environment variables**. The Environment holds no secrets: GitHub holds no AWS credential of any kind (authentication is GitHub OIDC only). Or with `gh`:
 
 ```powershell
-gh secret set CICD_ROLE_ARN --env <GITHUB_ENVIRONMENT> --repo <GITHUB_ORG>/<APP_REPO>
+gh variable set CICD_ROLE_ARN --env <GITHUB_ENVIRONMENT> --repo <GITHUB_ORG>/<APP_REPO> --body "<CI_ROLE_ARN>"
 gh variable set CICD_AWS_REGION --env <GITHUB_ENVIRONMENT> --repo <GITHUB_ORG>/<APP_REPO> --body "<AWS_REGION>"
 gh variable set CICD_ECR_REPOSITORY --env <GITHUB_ENVIRONMENT> --repo <GITHUB_ORG>/<APP_REPO> --body "<ECR_REPOSITORY>"
 gh variable set CICD_DEPLOY_QUEUE_NAME --env <GITHUB_ENVIRONMENT> --repo <GITHUB_ORG>/<APP_REPO> --body "<DEPLOY_QUEUE_NAME>"
 gh variable set CICD_BOUND_REF --env <GITHUB_ENVIRONMENT> --repo <GITHUB_ORG>/<APP_REPO> --body "refs/heads/<BOUND_BRANCH>"
 ```
 
-Verify (names only, no values for the secret):
+Verify:
 
 ```powershell
 gh secret list --env <GITHUB_ENVIRONMENT> --repo <GITHUB_ORG>/<APP_REPO>
 gh variable list --env <GITHUB_ENVIRONMENT> --repo <GITHUB_ORG>/<APP_REPO>
 ```
 
-Expected: one secret (`CICD_ROLE_ARN`) and four variables.
+Expected: the secret list is empty and the variable list shows exactly the five variables (`CICD_ROLE_ARN`, `CICD_AWS_REGION`, `CICD_ECR_REPOSITORY`, `CICD_DEPLOY_QUEUE_NAME`, `CICD_BOUND_REF`).
 
-**Stop if** you find any AWS access key or secret key stored anywhere in the repository or Environment. Remove it; the model is OIDC only.
+**Stop if** you find any AWS access key or secret key stored anywhere in the repository or Environment, or any secret in the Environment. Remove it; the model is OIDC only. Never store AWS keys in GitHub.
 
 `CICD_BOUND_REF` is admin-only: only repository admins can edit Environment variables, so keep the number of admins small and do not grant the admin role to people who push to the bound branch.
 
@@ -157,11 +157,13 @@ Record the observed `sub`, `job_workflow_ref` and the source-binding `workflowRe
 1. Open the Actions tab, select the workflow, **Run workflow** on `<BOUND_BRANCH>`.
 2. Watch the jobs: `ci`, then the reusable `guard`, then `push-and-send`.
 
-Expected: all green. In the `push-and-send` log: bound ref check passes, the role ARN's account segment is masked, OIDC succeeds, the image is built and pushed, the request is sent. Then in the Executor log: a message acknowledged and an execution accepted (see [07](07-verification.md)); with the window closed it ends `FAILED (DEPLOY_WINDOW_CLOSED)` and never opens SSH.
+Expected: all green. In the `push-and-send` log: bound ref check passes, OIDC succeeds (the role ARN and account id are visible in the log by design), the image is built and pushed, the request is sent. Then in the Executor log: a message acknowledged and an execution accepted (see [07](07-verification.md)); with the window closed it ends `FAILED (DEPLOY_WINDOW_CLOSED)` and never opens SSH.
 
-**Public-safe log check (P-G14).** Search the whole job log for your 12-digit account id, the registry host and the queue URL.
+**Public-safe log check (P-G14).** Search the whole job log for the registry host and the queue URL. The role ARN and the 12-digit account id are expected to appear (non-secret variable; accepted).
 
-**Stop if** any of them appears unmasked. Delete the run logs (repository, Actions, the run, Delete all logs), report it and do not continue; Environment value visibility in a called workflow (P-G14) is exactly what this observes.
+Masking of the registry host and queue URL is log hygiene only: both are built from the account id, which is already public with the role ARN (G-10). Record whether they appear masked (`***`); that is not a stop condition.
+
+**Stop if** any credential-like value appears (an access key, a secret key, a token). Delete the run logs (repository, Actions, the run, Delete all logs), report it and do not continue.
 
 If `sts:AssumeRoleWithWebIdentity` is denied: use section 7. If `guard` fails: the event was not `push` or `workflow_dispatch`, or an input is invalid. If `Enforce bound ref` fails: `CICD_BOUND_REF` is empty or not equal to `refs/heads/<BOUND_BRANCH>`.
 

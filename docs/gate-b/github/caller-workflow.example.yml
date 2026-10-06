@@ -13,13 +13,13 @@
 #   <GITHUB_ENVIRONMENT>          the GitHub Environment (deployment branch rules = the
 #                                 bound branch) that holds the values below
 #
-# The Environment <GITHUB_ENVIRONMENT> holds exactly 1 secret and 4 variables:
-#   Secret:    CICD_ROLE_ARN (embeds the account ID; a secret is the only way GitHub masks it)
-#   Variables: CICD_BOUND_REF (full ref of the bound branch; administrators only),
+# The Environment <GITHUB_ENVIRONMENT> holds 0 secrets and 5 variables:
+#   Variables: CICD_ROLE_ARN (the CI role ARN; not a secret, it appears in public logs),
+#              CICD_BOUND_REF (full ref of the bound branch; administrators only),
 #              CICD_AWS_REGION, CICD_ECR_REPOSITORY (repository name only),
 #              CICD_DEPLOY_QUEUE_NAME (queue name only)
-# The account ID, registry and queue URL are derived after OIDC and masked. No static AWS
-# access key exists anywhere; authentication is OIDC only.
+# The account ID, registry and queue URL are derived after OIDC; masking them is log hygiene.
+# No static AWS access key exists anywhere; authentication is GitHub OIDC only.
 #
 # Secrets mechanism: this caller passes NO secrets (no `secrets:` key, no `secrets: inherit`).
 # The reusable workflow's Environment job reads the Environment values itself.

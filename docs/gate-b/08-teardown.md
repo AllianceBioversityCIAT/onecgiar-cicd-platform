@@ -101,7 +101,7 @@ Expected: a `DeletionDate` about 7 days ahead. Repeat per secret. During the rec
 In `<GITHUB_ORG>/<APP_REPO>`:
 
 1. Remove the caller workflow file from `<BOUND_BRANCH>` (through your normal pull request) and any throwaway test or claims-probe workflow and branch. In `<GITHUB_ORG>/<PLATFORM_REPO>` remove `claims-probe.reusable.yml` if it still exists.
-2. Delete the Environment. This also deletes its secret `CICD_ROLE_ARN` and its four variables: **Settings, Environments, `<GITHUB_ENVIRONMENT>`, Delete environment**, or `gh api --method DELETE repos/<GITHUB_ORG>/<APP_REPO>/environments/<GITHUB_ENVIRONMENT>`.
+2. Delete the Environment. This also deletes its five variables (including `CICD_ROLE_ARN`): **Settings, Environments, `<GITHUB_ENVIRONMENT>`, Delete environment**, or `gh api --method DELETE repos/<GITHUB_ORG>/<APP_REPO>/environments/<GITHUB_ENVIRONMENT>`.
 3. Revert any branch-protection change you made only for this run.
 4. Verify: `gh secret list --repo <GITHUB_ORG>/<APP_REPO>` and `gh variable list --repo <GITHUB_ORG>/<APP_REPO>` show nothing from this kit.
 

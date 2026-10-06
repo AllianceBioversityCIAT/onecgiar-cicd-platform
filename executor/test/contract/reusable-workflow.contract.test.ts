@@ -113,10 +113,10 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
       expect(first.run).toMatch(/"\$CURRENT_REF" != "\$BOUND_REF"/);
     });
 
-    it("references exactly the four Environment variables and uses CICD_BOUND_REF only in the first step", () => {
+    it("references exactly the five Environment variables and uses CICD_BOUND_REF only in the first step", () => {
       const refs = [...workflowText.matchAll(/\bvars\.([A-Za-z0-9_]+)/g)].map((m) => m[1]);
       expect(new Set(refs)).toEqual(
-        new Set(["CICD_BOUND_REF", "CICD_AWS_REGION", "CICD_ECR_REPOSITORY", "CICD_DEPLOY_QUEUE_NAME"]),
+        new Set(["CICD_ROLE_ARN", "CICD_BOUND_REF", "CICD_AWS_REGION", "CICD_ECR_REPOSITORY", "CICD_DEPLOY_QUEUE_NAME"]),
       );
       envSteps.forEach((st, i) => {
         expect(JSON.stringify(st).includes("vars.CICD_BOUND_REF"), `step ${i}`).toBe(i === 0);
@@ -129,17 +129,18 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
     });
   });
 
-  describe("one secret, four variables, derived identifiers (gate-b-plan section 12)", () => {
+  describe("zero secrets, five variables, derived identifiers (gate-b-plan section 12)", () => {
     const idx = (pred: (st: Step) => boolean) => envSteps.findIndex(pred);
     const oidcIdx = idx((st) => !!st.uses?.startsWith("aws-actions/configure-aws-credentials@"));
     const loginIdx = idx((st) => !!st.uses?.startsWith("aws-actions/amazon-ecr-login@"));
     const buildIdx = idx((st) => !!st.run?.includes("docker push"));
     const sendIdx = idx((st) => !!st.run?.includes("aws sqs send-message"));
 
-    it("reads exactly ONE secret, CICD_ROLE_ARN, anywhere", () => {
-      const secrets = [...workflowText.matchAll(/\bsecrets\.([A-Za-z0-9_]+)/g)].map((m) => m[1]);
-      expect(secrets.length).toBeGreaterThan(0);
-      expect(new Set(secrets)).toEqual(new Set(["CICD_ROLE_ARN"]));
+    it("references NO secret anywhere and takes the role ARN from the CICD_ROLE_ARN variable", () => {
+      expect(workflowText).not.toMatch(/secrets\./); // no expression anywhere, comments included
+      expect(workflowText.replace(/^\s*#.*$/gm, "")).not.toMatch(/secrets/i);
+      expect(envSteps[oidcIdx]!.with?.["role-to-assume"]).toBe("${{ vars.CICD_ROLE_ARN }}");
+      expect(Object.keys(envSteps[oidcIdx]!.with ?? {}).sort()).toEqual(["aws-region", "mask-aws-account-id", "role-to-assume"]);
     });
 
     it("takes region and repository name from vars and the registry from the login step output", () => {
@@ -148,13 +149,6 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
       const build = envSteps[buildIdx]!;
       expect(build.env?.["REGISTRY"]).toBe(`${"${{"} steps.${envSteps[loginIdx]!.id}.outputs.registry }}`);
       expect(build.env?.["REPOSITORY"]).toBe("${{ vars.CICD_ECR_REPOSITORY }}");
-    });
-
-    it("masks the role ARN account segment before the first step that uses the secret elsewhere", () => {
-      const maskIdx = idx((st) => !!st.run?.includes("::add-mask::") && JSON.stringify(st).includes("secrets.CICD_ROLE_ARN"));
-      expect(maskIdx).toBe(1);
-      const firstOtherSecretUse = idx((st) => st !== envSteps[maskIdx] && JSON.stringify(st).includes("secrets."));
-      expect(firstOtherSecretUse).toBeGreaterThan(maskIdx);
     });
 
     it("masks the account ID from get-caller-identity after OIDC and before login, build and send", () => {
@@ -187,7 +181,7 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
 
     it("uses no static AWS credentials (OIDC only)", () => {
       expect(workflowText).not.toMatch(/aws-access-key-id|aws-secret-access-key|aws-session-token/i);
-      expect(workflowText).not.toMatch(/AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY/);
+      expect(workflowText).not.toMatch(/AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN/);
     });
 
     it("carries no ARN, account ID, host, URL or IP literal", () => {
@@ -201,7 +195,7 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
   });
 
   describe("step ordering (FR-22: one request after every CI step)", () => {
-    it("runs bound-ref, mask, checkout, OIDC, account mask, registry login, build+push, body, send in that order", () => {
+    it("runs bound-ref, checkout, OIDC, account mask, registry login, build+push, body, send in that order", () => {
       const kinds = envSteps.map((s) => {
         if (s.uses?.startsWith("actions/checkout@")) return "checkout";
         if (s.uses?.startsWith("aws-actions/configure-aws-credentials@")) return "oidc";
@@ -209,12 +203,11 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
         if (s.run?.includes("BOUND_REF")) return "bound-ref";
         if (s.run?.includes("aws sqs send-message")) return "send";
         if (s.run?.includes("sts get-caller-identity")) return "account-mask";
-        if (s.run?.includes("::add-mask::")) return "mask";
         if (s.run?.includes("docker push")) return "build-push";
         if (s.run?.includes("jq -n")) return "body";
         return "unknown";
       });
-      expect(kinds).toEqual(["bound-ref", "mask", "checkout", "oidc", "account-mask", "ecr-login", "build-push", "body", "send"]);
+      expect(kinds).toEqual(["bound-ref", "checkout", "oidc", "account-mask", "ecr-login", "build-push", "body", "send"]);
     });
 
     it("has exactly one send step, it is the LAST step and nothing in the workflow uses always()", () => {

@@ -156,7 +156,7 @@ The requirements phase turns these into FRs (AC-01 §10).
 | R-AUTHN | Each request is accepted only from the sender bound to its `deploymentId` (OD-A2 **resolved by the owner**: SQS `SenderId` role binding; session names never authorize). Otherwise `REJECTED`, audited, alarmed, never deployed | New FR: request authentication |
 | R-DIGEST | Artifacts are deployed by digest only. The image repository comes from trusted configuration, never from the request. Tags are rejected | FR-03 / FR-13 |
 | R-ORDER | An older build that finishes or is re-run later never replaces a newer deployment. Single trusted source per `deploymentId` and per `lockKey`; multi-source ordering out of the PoC (OD-A1 resolved) (OD-A1) | FR-11 |
-| R-TRUST | The CI → AWS boundary uses OIDC with `sub` restricted to repository + GitHub Environment, least-privilege CI roles, and no internal identifiers in public CI logs | New FR or NFR (design decides) |
+| R-TRUST | The CI → AWS boundary uses OIDC with `sub` restricted to repository + GitHub Environment, least-privilege CI roles, and no internal identifiers in public CI logs (*refined by G-10: the CI role ARN and the AWS account ID are owner-accepted in CI logs (G-10, design DD-24 v4.7); hosts, IPs, credential IDs, credentials and secret values stay forbidden*) | New FR or NFR (design decides) |
 
 ### MODIFIED
 
@@ -228,7 +228,7 @@ The requirements phase turns these into FRs (AC-01 §10).
 | Immutable output | Captures the pushed **digest** of each image. Tags pushed for humans never drive a deploy and must not collide with Jenkins's integer tags in the shared repository (OD-A7) |
 | One request per successful build | Sends exactly one `DEPLOY_REQUESTED` after all CI steps succeed. Any CI failure ends the run with nothing sent |
 | Action pinning | Every action in the trusted reusable workflow is pinned by a full commit SHA (trailing version comment); `docker://` by digest; mutable refs prohibited; `./` exempt; enforced by a static guard (owner rule, 2026-10-06) |
-| Public-safe logs | Role ARN, registry and queue URL come only from GitHub **secrets** (configuration variables render unmasked); the account ID is masked explicitly (P-A7, §13.3). *Refined by owner direction (2026-10-06): design DD-24 v4.6 — the role ARN is the only secret; registry, queue URL and account ID are derived after OIDC and masked* |
+| Public-safe logs | Role ARN, registry and queue URL come only from GitHub **secrets** (configuration variables render unmasked); the account ID is masked explicitly (P-A7, §13.3). *Refined by owner direction (2026-10-06): design DD-24 v4.7 — no GitHub secret; the role ARN is an Environment variable and may appear in logs with the account ID; registry and queue URL are derived after OIDC; OIDC only* |
 | Event allowlist | The pinned reusable workflow runs only for `push` or `workflow_dispatch`, and only when the ref is the bound ref (both events), read from an administrator-controlled Environment variable, never from caller input (design DD-24); `pull_request`, `pull_request_target` and `workflow_run` stop before any OIDC token is requested (§13.2) |
 | No deploy logic | The workflow never selects a host, script or command |
 
@@ -461,7 +461,7 @@ Removed vs v2: ZIP/S3 secret controls (no ZIPs) and webhook HMAC (no ingress).
 
 ### 13.3 Public repositories: what becomes visible
 
-- **Workflow files and CI logs are public** (P-A7, UNVERIFIED; the safe assumption is yes): role ARNs, registry host and queue URL come only from **secrets** (variables render unmasked); the account ID is masked explicitly (refined by design DD-24 v4.6, owner direction 2026-10-06: only the role ARN is a secret; registry, queue URL and account ID are derived after OIDC and masked). DD-23's publication policy extends to application repos.
+- **Workflow files and CI logs are public** (P-A7, UNVERIFIED; the safe assumption is yes): role ARNs, registry host and queue URL come only from **secrets** (variables render unmasked); the account ID is masked explicitly (refined by design DD-24 v4.7, owner direction 2026-10-06: no GitHub secret; the role ARN is a variable; registry and queue URL are derived after OIDC). DD-23's publication policy extends to application repos.
 - **The deploy request** carries only public-safe identifiers; hosts never appear. **Build-time secrets:** prefer none; otherwise Environment-scoped, never available to fork PRs.
 - **P-A5 "repositories are public"** is UNVERIFIED per repository (OD-A9). If a repo is private, the security model depends on the organization plan: deployment branch rules and environment secrets need Pro/Team or higher, required reviewers need Enterprise, and on Free a conversion to private makes protection rules be ignored (design P-G7). Not resolved here: OD-A9 gates B and C.
 
@@ -567,7 +567,7 @@ Added: `.github/workflows/` (reusable workflow + example caller), `schemas/{depl
 | R9 | DEV DB shared with Jenkins variants from other branches | Windows with jobs disabled; snapshot; check migration state before and after |
 | R10 | The Executor grows into a workflow engine or reabsorbs CI | §11 warning signs; vocabulary review per wave; boundary guards (T-21) |
 | R11 | **GitHub becomes the CI critical path**: an outage blocks new deploys | Deploy-only path with an already-built digest (OD-A8); Jenkins stays as rollback during the PoC |
-| R12 | **Public CI logs** leak account IDs, role ARNs or hosts | Secrets only (variables are unmasked); explicit account-ID mask; log review in AC12 |
+| R12 | **Public CI logs** leak account IDs, role ARNs or hosts | Secrets only (variables are unmasked); explicit account-ID mask; log review in AC12. *Superseded by design DD-24 v4.7 (owner, 2026-10-06): no GitHub secret; role ARN and account ID may appear in logs; no credential ever does* |
 | R13 | **Repository admins** weaken branch or Environment rules | Admins are in the trust boundary (§13.4); sender binding, supersede and windows still apply; periodic settings review |
 | R14 | OIDC trust policy too broad (wildcard or environment-only `sub`, untrusted triggers) | Exact match on direct IAM keys (`job_workflow_ref` at an immutable SHA, repository and owner IDs, Environment), event allowlist; negative tests (AC15) |
 | R15 | Supersede ordering wrong under reruns or multiple repositories | OD-A1 resolved: single source per `lockKey`, multi-source out of the PoC; AC17 |
@@ -639,7 +639,7 @@ Executor PoC development can start  ≠  Jenkins can be retired
 | AC9 | CI failure stays in GitHub and sends no request; deploy failures notify Slack | Red test; failing deploy |
 | AC10 | Killing the Executor mid-deploy ends in a terminal state or `UNKNOWN_TARGET_STATE`, with the lock released | Container kill |
 | AC11 | A poison message goes to the DLQ and triggers the alarm | Malformed message |
-| AC12 | No secrets in the image, definitions, requests or logs; no account ID, role ARN or host in public CI logs | Scan + log review |
+| AC12 | No secrets in the image, definitions, requests or logs; no account ID, role ARN or host in public CI logs. *Refined by owner direction (2026-10-06, G-10): the CI role ARN and the AWS account ID are owner-accepted in CI logs (G-10, design DD-24 v4.7); hosts, IPs, credential IDs, credentials and secret values stay forbidden* | Scan + log review |
 | AC13 | An operator reconstructs a deploy from the GitHub run, DynamoDB, CloudWatch and Slack | Runbook exercise |
 | AC14 | Jenkins jobs are re-enabled and work after each window | Subsequent Jenkins run |
 | AC15 | **Sender authorization:** a request from a role not bound to the `deploymentId` is `REJECTED`, audited and alarmed with no SSH; `pull_request`, `pull_request_target` and `workflow_run` runs, and a job outside the pinned reusable workflow, cannot assume the CI role or send a request | Negative tests |

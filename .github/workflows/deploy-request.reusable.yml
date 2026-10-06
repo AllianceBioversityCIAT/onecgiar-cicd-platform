@@ -9,13 +9,18 @@
 # step of the Environment job, read ONLY from the administrator-only Environment
 # variable CICD_BOUND_REF (fail closed when empty).
 #
-# Values (gate-b-plan section 12; AWS auth is OIDC only, no static access keys):
-#   Environment secret (the ONLY one; it embeds the account ID):  CICD_ROLE_ARN
-#   Environment variables: CICD_BOUND_REF (admin-only), CICD_AWS_REGION,
+# Values (gate-b-plan section 12; AWS auth is GitHub OIDC only: no static access keys and
+# NO secrets at all; owner decision 2026-10-06):
+#   Environment secrets: none (0).
+#   Environment variables (5): CICD_ROLE_ARN, CICD_BOUND_REF (admin-only), CICD_AWS_REGION,
 #     CICD_ECR_REPOSITORY (repository name only), CICD_DEPLOY_QUEUE_NAME (queue name only)
-#   Derived after OIDC and masked before use: the account ID (sts get-caller-identity),
-#     the registry (output of the registry login step) and the queue URL (sqs get-queue-url).
-#
+#   Derived after OIDC: the account ID (sts get-caller-identity), the registry (output of the
+#     registry login step) and the queue URL (sqs get-queue-url).
+# Masking is log hygiene, NOT confidentiality: the role ARN (which embeds the account ID) is a
+# non-secret variable, so the runner prints it unmasked wherever a step references it. Access is
+# controlled by the OIDC trust conditions, not by hiding the ARN. The masks below only reduce
+# noise in later log lines.
+
 # Lint and tests are the caller's own jobs; the caller makes its deploy job `needs:` them,
 # so a failing CI step means this workflow never starts and no request is sent (FR-22).
 #
@@ -111,14 +116,6 @@ jobs:
             echo "::error::ref is not the bound ref"; exit 1
           fi
 
-      - name: Mask the account segment of the role ARN
-        env:
-          ROLE_ARN: ${{ secrets.CICD_ROLE_ARN }}
-        run: |
-          set -euo pipefail
-          account_from_role="$(printf '%s' "$ROLE_ARN" | cut -d: -f5)"
-          if [ -n "$account_from_role" ]; then echo "::add-mask::$account_from_role"; fi
-
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -127,11 +124,11 @@ jobs:
       - name: Assume CI role through OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ secrets.CICD_ROLE_ARN }}
+          role-to-assume: ${{ vars.CICD_ROLE_ARN }}
           aws-region: ${{ vars.CICD_AWS_REGION }}
           mask-aws-account-id: true
 
-      - name: Derive and mask the account ID
+      - name: Derive and mask the account ID (log hygiene only)
         run: |
           set -euo pipefail
           account_id="$(aws sts get-caller-identity --query Account --output text)"

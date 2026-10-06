@@ -14,7 +14,7 @@
 | Status | **APPROVED by the owner (2026-10-06)** after the scoped Judgment Day returned `APPROVED`. Execution may resume with Gate A (N-01…N-22) under `/akili-execute` |
 | Sources of truth | `architecture-change-01.md` (AC-01, APPROVED), `proposal.md` v3, `requirements.md` v3 (+ RL-1…RL-7), `design.md` v4, `judgment.md` |
 | Repository | `onecgiar-cicd-platform` (design §4.1). Commits only in `/akili-execute`, with owner approval |
-| Publication policy | No internal identifiers in Git (DD-23), extended to workflow files and CI logs |
+| Publication policy | No internal identifiers in Git (DD-23), extended to workflow files and CI logs (except the CI role ARN and account ID in CI logs, owner-accepted, G-10) |
 | Local-only files | The two local analysis files stay ignored; `git status` + `git ls-files` before **every** commit |
 | Approval Mode | `gated` |
 | Task ID prefix | **`N-nn`** for this plan. `T-nn` refers only to the v2 plan and the execution log; `D-n` stays the Gate D tracking prefix |
@@ -547,7 +547,7 @@ Gate B is split per `gate-b-plan.md` (approved 2026-10-06). **B0** is the reposi
 | [x] **K-2** | Secrets Manager `SecretProvider` adapter (carry-over §6.1) | Gate A | Unit tests on a mocked client: `exists` via `DescribeSecret`, `getSecret` via `GetSecretValue`, not-found → false, errors carry no ARN/account ID | full |
 | [x] **K-3** | `npm run definitions:check -- --root <dir>` | Gate A | Valid root passes; a broken definition fails with the file and reason | checklist |
 | [x] **K-4** | Example definitions under `docs/gate-b/examples/definitions/` | K-3 | Pass `definitions:check`; placeholders only (publication guard) | checklist |
-| [x] **K-5** | Caller workflow example; reusable workflow and contract test follow the GitHub value classification (plan §12; DD-24 amended under owner direction) | K-1 | Exactly one secret (`CICD_ROLE_ARN`); registry, queue URL, account ID derived after OIDC and masked before use; guard 7 strict | full |
+| [x] **K-5** | Caller workflow example; reusable workflow and contract test follow the GitHub value classification (plan §12; DD-24 amended under owner direction) — *superseded by G-10 (2026-10-06): no secret; the role ARN is a variable* | K-1 | Exactly one secret (`CICD_ROLE_ARN`); registry, queue URL, account ID derived after OIDC and masked before use; guard 7 strict | full |
 | [x] **K-6** | `executor.env.example` and `tools/gate-b/run-executor.{ps1,sh}` (Node 22 check, dry-run) | K-2 | Dry-run prints the resolved, redacted configuration and refuses Node ≠ 22 | checklist |
 | [x] **K-7** | Probe tooling `tools/gate-b/probe/` (read-only target probe, SSH preflight) outside the deploy-script allowlist and the image | Gate A | Dockerfile-boundary guard still passes; probe makes no write outside its own lock | full |
 | [x] **K-8** | Owner runbook `docs/gate-b/` (SAM checkpoints A–D, GitHub setup, Executor startup, target values, B1–B5 checklists, teardown) | K-1…K-7 | Commands reference only placeholders; validation and deploy are separate steps | checklist |

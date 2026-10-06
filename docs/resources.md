@@ -34,7 +34,7 @@ IP, credential ID, ARN or job name.
 | `<SSH_CREDENTIAL_REF>`, `<SLACK_TOKEN_REF>` and identifier references | Secrets Manager | SSH and Slack credentials read at point of use; non-sensitive principal references |
 | `cicd-executor-dev` | IAM | The reduced Executor role: SQS, its table, those secrets, CloudWatch |
 | Log groups, alarms, saved queries | CloudWatch | 30-day logs; alarms on DLQ depth, oldest-message age, heartbeat, rejected sender. **Planned, not yet wired:** `ExecutionsPastDeadline` and an unresolved-`UNKNOWN_TARGET_STATE` signal (see `infra/RESOURCES.md` **Alarms**) |
-| GitHub Environment configuration | GitHub | Branch rules; one Environment secret (`CICD_ROLE_ARN`); Environment variables `CICD_BOUND_REF` (admin-only), `CICD_AWS_REGION`, `CICD_ECR_REPOSITORY`, `CICD_DEPLOY_QUEUE_NAME`; registry, queue URL and account ID derived after OIDC (design DD-24 v4.6) |
+| GitHub Environment configuration | GitHub | Branch rules; no secret; Environment variables `CICD_ROLE_ARN`, `CICD_BOUND_REF` (admin-only), `CICD_AWS_REGION`, `CICD_ECR_REPOSITORY`, `CICD_DEPLOY_QUEUE_NAME`; registry, queue URL and account ID derived after OIDC (design DD-24 v4.7) |
 | Microservices server | Existing host | Runs the `cicd-executor` container (DD-18); no `/work` volume |
 | `<PRMS_REPORTING_DEV_TARGET>` | Existing host | Where real deploys land, inside Jenkins-coexistence windows (DD-21) |
 
