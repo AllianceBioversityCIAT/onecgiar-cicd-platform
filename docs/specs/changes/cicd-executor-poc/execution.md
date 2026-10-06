@@ -307,7 +307,7 @@
 | Forward pointers | **Every owner task** (N-03, N-04, N-05, N-07, N-08, N-12) flips its PENDING entries to DELETED when it removes the path or symbol. **N-22:** add a strict mode that fails while any PENDING entry remains (advisory 1). **N-19:** add `executor/scripts` to the scan roots and drop the stale `scripts`/`ingress` roots; cover `vi.doMock`/`vi.importMock`. Next task touching `ports/queue-publisher.ts` fixes its stale comment |
 | Status | **Done** |
 
-### N-15 — `deploy-container.sh` adaptation · in progress
+### N-15 — `deploy-container.sh` adaptation · done
 
 | Field | Value |
 |---|---|
@@ -344,7 +344,12 @@
 | Deferred (environment) | `docker ps` image reporting for digest-started containers and `docker images --digests` pruning semantics → Gate C (T-33) |
 | Reviewer attempt 1 | **FAIL** (`opus`): the previous image comes from `docker ps` unchanged, so a container started by tag (normal first deploy where Jenkins deploys by tag) is recorded, restored and pruning-compared by tag — violates DD-26 and FR-13 ("identified by digest", "never run by tag"). Probe: exit 30 restored `…app:123` |
 | Leader ruling | Resolve the running image to `<repo>@sha256:<digest>` via image ID + matching RepoDigests; fallback without a matching RepoDigest = restore by image ID (content-addressed), reported as unresolved, never a tag. Also exclude ALREADY_CURRENT containers from restore |
-| Attempt 2 | In progress |
+| Attempt 2 | `resolve_running_image`: a `docker ps` value already in digest form is used as is; otherwise image ID → matching RepoDigest → `<repo>@sha256:<digest>`; no match → image ID marked `unresolved:sha256:<id>` (content-addressed, never a tag). Feeds RESTORE_IMAGE, previousImages, restore, already-running comparison and the pruning keep-set. ALREADY_CURRENT containers excluded from restore; README and §6.5/N-15 references updated; 3 new cases. Falsifiers (raw docker ps value stored; restore skip removed) → red. Evidence re-run (Leader): suite 20/0, 1 assertion skipped — **VERIFIED** |
+| Reviewer attempt 2 | **PASS** (`opus`): Issue 1 resolved (probe: tag-started container restored by image ID, never by tag); no regressions; genericity intact |
+| Accepted deviation | `previousImages.<c> = "unresolved:sha256:<id>"` when no RepoDigest matches (DD-26 spirit: immutable, content-addressed; never a tag). Documented in the README |
+| Committed snapshot | HEAD + `deploy-scripts/**` + the consumer `bundled-definition-source.test.ts` (T-14 update: script now exists): typecheck 0, lint clean, guards PASS, vitest 494/494 |
+| Forward pointers | **N-08/N-09/N-12:** recognize the `unresolved:` prefix in `previousImages` and never treat it as a digest; runbook §12.2 mentions it. **Gate C (T-33):** real `docker ps`/`docker inspect`/RepoDigests/`rmi`-by-digest semantics; a container whose image cannot be inspected (today treated as absent). Advisory: empty-string `previousImages` on an already-current re-run without a hint; stray spaces at line 588 |
+| Status | **Done** |
 
 ### N-07 — Supersede policy · done
 

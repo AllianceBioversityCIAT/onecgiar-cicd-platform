@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+# Fake `docker` for LOCAL control-flow tests only.
+#
+# This machine has no Docker daemon. This shim proves deploy-container.sh's
+# ORDERING, exit codes, cleanup and no-prune-of-previous behavior -- it does
+# NOT and CANNOT validate real Docker semantics (real pull/run/health
+# behavior, real container isolation). That validation is DEFERRED to Gate C
+# (T-33), on real Linux with a real Docker daemon.
+#
+# State kept under $DOCKER_STATE_DIR:
+#   containers/<name>              exists + contains the image <=> "running"
+#   images/<repo-sanitized>/<digest>  exists <=> that image is "pulled"/present
+#   control/<knob>                 presence/content forces specific outcomes
+#
+# Every invocation is appended to $DOCKER_LOG as "docker <args...>" so tests
+# can assert what was (or was not) called, in what order.
+set -uo pipefail
+
+: "${DOCKER_STATE_DIR:?DOCKER_STATE_DIR must be set by the test harness}"
+: "${DOCKER_LOG:?DOCKER_LOG must be set by the test harness}"
+
+mkdir -p "$DOCKER_STATE_DIR/containers" "$DOCKER_STATE_DIR/images" "$DOCKER_STATE_DIR/control"
+
+printf 'docker %s\n' "$*" >> "$DOCKER_LOG"
+
+sanitize() { printf '%s' "$1" | tr '/' '_'; }
+
+control_path() { printf '%s/control/%s' "$DOCKER_STATE_DIR" "$1"; }
+has_control() { [[ -e "$(control_path "$1")" ]]; }
+
+# Image identity model (see harness shim_define_image): ids/<ref> -> image ID;
+# repodigests/<id> -> the RepoDigests lines of that image. A ref with no
+# mapping gets a deterministic fake ID; a bare "sha256:<id>" is its own ID.
+resolve_id_value() {
+  local ref="$1" f
+  if [[ "$ref" == sha256:* && "$ref" != *@* ]]; then
+    ID_VALUE="$ref"; return
+  fi
+  f="$DOCKER_STATE_DIR/ids/$(sanitize "$ref")"
+  if [[ -f "$f" ]]; then
+    ID_VALUE="$(cat "$f")"
+  else
+    ID_VALUE="sha256:$(printf '%s' "$ref" | sha256sum | cut -c1-64)"
+  fi
+}
+resolve_id() { resolve_id_value "$1"; printf '%s
+' "$ID_VALUE"; }
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  pull)
+    image="$1"
+    if has_control "pull_fail"; then
+      echo "FAKE_DOCKER: simulated pull failure" >&2
+      exit 1
+    fi
+    # Images are keyed by digest ("<repo>@sha256:<hex>"). A tag-form pull is
+    # a script bug under DD-26; fail loudly so a test cannot pass on it.
+    if [[ "$image" != *@sha256:* ]]; then
+      echo "FAKE_DOCKER: refusing non-digest pull '$image'" >&2
+      exit 1
+    fi
+    repo="${image%@*}"
+    digest="${image##*@}"
+    mkdir -p "$DOCKER_STATE_DIR/images/$(sanitize "$repo")"
+    : > "$DOCKER_STATE_DIR/images/$(sanitize "$repo")/$digest"
+    exit 0
+    ;;
+
+  login)
+    exit 0
+    ;;
+
+  ps)
+    name_filter=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --filter) name_filter="$2"; shift 2 ;;
+        --format) shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    cname="$(printf '%s' "$name_filter" | sed -E 's/^name=\^\/(.*)\$$/\1/')"
+    if [[ -f "$DOCKER_STATE_DIR/containers/$cname" ]]; then
+      cat "$DOCKER_STATE_DIR/containers/$cname"
+    fi
+    exit 0
+    ;;
+
+  run)
+    detach=0
+    name=""
+    env_file=""
+    rest=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -d) detach=1; shift ;;
+        --rm) shift ;;
+        --name) name="$2"; shift 2 ;;
+        --env-file) env_file="$2"; shift 2 ;;
+        -p) shift 2 ;;
+        *) rest+=("$1"); shift ;;
+      esac
+    done
+    image="${rest[0]:-}"
+
+    # Records the --env-file's permission mode at the moment docker would
+    # have read it (while it still exists; the real script deletes it on
+    # exit), so tests can assert on its 0600-ness without racing cleanup.
+    if [[ -n "$env_file" && -f "$env_file" ]]; then
+      stat -c '%a' "$env_file" > "$DOCKER_STATE_DIR/control/last_env_file_mode" 2>/dev/null || true
+    fi
+
+    if [[ $detach -eq 1 ]]; then
+      if has_control "start_fail_${name}"; then
+        # Consumed on use: simulates a TRANSIENT start failure (e.g. the
+        # swap's start attempt), so a subsequent restore attempt for the
+        # same container name can succeed, same as a real one-off error.
+        rm -f "$(control_path "start_fail_${name}")" 2>/dev/null || true
+        echo "FAKE_DOCKER: simulated start failure for $name" >&2
+        exit 1
+      fi
+      printf '%s' "$image" > "$DOCKER_STATE_DIR/containers/$name"
+      exit 0
+    fi
+
+    # One-shot run with a trailing command (e.g. `sh -c "<cmd>"`): execute it
+    # for real on the host -- there is no real image to run, but the command
+    # string itself is a real, test-authored shell command (e.g. `true`,
+    # `false`, `exit 1`), so this faithfully reproduces exit-code behavior.
+    if [[ ${#rest[@]} -gt 1 ]]; then
+      "${rest[@]:1}"
+      exit $?
+    fi
+    exit 0
+    ;;
+
+  exec)
+    name="${1:-}"
+    shift || true
+    "$@"
+    exit $?
+    ;;
+
+  stop)
+    # Marks as "not confirmed running" only on `rm` (below); `stop` itself is
+    # just recorded for ordering assertions.
+    exit 0
+    ;;
+
+  rm)
+    name="$1"
+    rm -f "$DOCKER_STATE_DIR/containers/$name" 2>/dev/null || true
+    exit 0
+    ;;
+
+  images)
+    # Lists digests ("sha256:<hex>") of the repository, as
+    # `docker images --digests --format '{{.Digest}}' <repo>` would.
+    repo=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --format) shift 2 ;;
+        --digests) shift ;;
+        *) repo="$1"; shift ;;
+      esac
+    done
+    dir="$DOCKER_STATE_DIR/images/$(sanitize "$repo")"
+    if [[ -d "$dir" ]]; then
+      ls -1 "$dir"
+    fi
+    exit 0
+    ;;
+
+  rmi)
+    image="$1"
+    repo="${image%@*}"
+    digest="${image##*@}"
+    rm -f "$DOCKER_STATE_DIR/images/$(sanitize "$repo")/$digest" 2>/dev/null || true
+    printf 'RMI %s\n' "$image" >> "$DOCKER_LOG"
+    exit 0
+    ;;
+
+  inspect)
+    # `docker inspect --format '{{.Image}}' <container>`: the image ID of a
+    # running container. A container holding a bare image ID reports it.
+    name=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --format) shift 2 ;;
+        *) name="$1"; shift ;;
+      esac
+    done
+    [[ -f "$DOCKER_STATE_DIR/containers/$name" ]] || exit 1
+    ref="$(cat "$DOCKER_STATE_DIR/containers/$name")"
+    resolve_id "$ref"
+    exit 0
+    ;;
+
+  image)
+    sub="${1:-}"
+    shift || true
+    [[ "$sub" == "inspect" ]] || exit 0
+    fmt=""
+    ref=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --format) fmt="$2"; shift 2 ;;
+        *) ref="$1"; shift ;;
+      esac
+    done
+    resolve_id_value "$ref"
+    if [[ "$fmt" == *RepoDigests* ]]; then
+      f="$DOCKER_STATE_DIR/repodigests/$(sanitize "$ID_VALUE")"
+      [[ -f "$f" ]] && cat "$f"
+    else
+      printf '%s
+' "$ID_VALUE"
+    fi
+    exit 0
+    ;;
+
+  *)
+    exit 0
+    ;;
+esac

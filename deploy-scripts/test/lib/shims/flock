@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Fake `flock` for LOCAL control-flow tests only (this machine has no real
+# flock / kernel file-lock support available to bash).
+#
+# Emulates NON-BLOCKING acquire via `mkdir` atomicity (mkdir is atomic on a
+# POSIX filesystem, same property flock(2) relies on at the kernel level).
+# This proves the SCRIPT's control flow (busy -> exit 50, no effects; free ->
+# run the command and propagate its exit code) but is NOT a stand-in for real
+# kernel-lock semantics (no true inter-process mutual exclusion guarantee,
+# no release-on-process-death via the kernel). Real flock(1)/flock(2)
+# behavior on Linux is DEFERRED validation (Gate C, T-33).
+#
+# Supports the exact subset deploy-container.sh uses:
+#   flock -n -E <code> <lockfile> <command...>
+set -uo pipefail
+
+exit_code=1
+lockfile=""
+args=("$@")
+i=0
+n=${#args[@]}
+
+while (( i < n )); do
+  arg="${args[$i]}"
+  case "$arg" in
+    -n|--nonblock)
+      i=$((i+1))
+      ;;
+    -E|--conflict-exit-code)
+      i=$((i+1))
+      exit_code="${args[$i]:-1}"
+      i=$((i+1))
+      ;;
+    *)
+      lockfile="$arg"
+      i=$((i+1))
+      break
+      ;;
+  esac
+done
+
+command=("${args[@]:$i}")
+
+if [[ -z "$lockfile" ]]; then
+  echo "FAKE_FLOCK: no lockfile argument given" >&2
+  exit 1
+fi
+
+marker="${lockfile}.d"
+mkdir -p "$(dirname "$lockfile")" 2>/dev/null || true
+
+if ! mkdir "$marker" 2>/dev/null; then
+  exit "$exit_code"
+fi
+
+cleanup() { rmdir "$marker" 2>/dev/null || true; }
+trap cleanup EXIT
+
+if [[ ${#command[@]} -eq 0 ]]; then
+  exit 0
+fi
+
+"${command[@]}"
+exit $?

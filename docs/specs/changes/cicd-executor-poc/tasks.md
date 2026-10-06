@@ -391,7 +391,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-15 — `deploy-container.sh` adaptation (preserves T-14)
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · M · **A** (real validation in Gate C) |
+| Status / Size / Gate | **[x] done** (real validation in Gate C) · M · **A** |
 | Goal | Replace `--image` with `--artifact <container>=<repo>@sha256:<64-hex>`; tag rejection; "already running" exit 0 |
 | Depends on | N-01 |
 | Requirements / Design | FR-13 · design §6.5, DD-11, DD-22, DD-26 |

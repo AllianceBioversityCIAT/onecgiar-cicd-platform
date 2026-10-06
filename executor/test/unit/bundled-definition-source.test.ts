@@ -1,7 +1,7 @@
 // @akili-spec changes/cicd-executor-poc design DD-19; requirements FR-01
 // Unit tests for the BundledDefinitionSource adapter: reads the real,
-// versioned pipeline-definitions/, schemas/ and (absent, in this repo state)
-// deploy-scripts/ directories, resolves definitionRef from
+// versioned pipeline-definitions/, schemas/ and deploy-scripts/ (T-14)
+// directories, resolves definitionRef from
 // CICD_DEFINITION_REF (refusing to start in production when it is missing —
 // T-03 attempt 2, design DD-19 / FR-01), and resolves the repo root from
 // CICD_DEFINITIONS_ROOT when set, falling back to the dev-only walk-up
@@ -47,9 +47,16 @@ describe("BundledDefinitionSource", () => {
     await expect(source.getSchema("does-not-exist.schema.json")).rejects.toThrow(DefinitionSourceError);
   });
 
-  it("throws a clear error for a deploy script, since deploy-container.sh itself does not exist yet (deploy-scripts/ only has a README placeholder — arrives in T-14, DD-10)", async () => {
+  it("reads the real, versioned generic deploy script (T-14, DD-10)", async () => {
     const source = new BundledDefinitionSource({ repoRoot });
-    await expect(source.getDeployScript("deploy-container.sh")).rejects.toThrow(DefinitionSourceError);
+    const { content } = await source.getDeployScript("deploy-container.sh");
+    expect(content).toContain("#!/usr/bin/env bash");
+    expect(content).toContain("CICD_RESULT");
+  });
+
+  it("throws a clear error for an unknown deploy script name", async () => {
+    const source = new BundledDefinitionSource({ repoRoot });
+    await expect(source.getDeployScript("does-not-exist.sh")).rejects.toThrow(DefinitionSourceError);
   });
 
   it("every call returns the same definitionRef", async () => {
