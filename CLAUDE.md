@@ -46,7 +46,7 @@ There is no `docs/prd.md`, `docs/trd/trd.md` or `docs/ux-ui/design.md` (minimal 
 6. **Publication policy** (design §4.1, DD-23): never commit account IDs, hosts, IPs, credential IDs, revealing secret names, Jenkins job names or sensitive values. Use logical references (`<AWS_ACCOUNT_ID>`, `<PRMS_REPORTING_DEV_TARGET>`, …).
 7. **Local-only files:** `JENKINS_REPLACEMENT_AKILI_CONTEXT.md` and `JENKINS_REPLACEMENT_FEASIBILITY_ANALYSIS.md` are in `.gitignore`. Before every commit run `git status` and `git ls-files` and confirm neither appears.
 8. **Open decisions** (OD-Q5, OD-Q7, OD-Q11–Q15, OD-N1) are never resolved by assumption.
-9. Commit messages are prefixed with `[SPEC:changes/cicd-executor-poc]` and written in English.
+9. Commit messages are written in English and follow semantic commits with gitmoji: `<emoji> <type>(<scope>): <Subject>. <issue reference>` — types and emojis: ✨ feat, 🐛 fix, 📝 docs, ♻️ refactor, 👷 build, ✅ test, 💚 ci, 🎨 style, 🔧 chore, ⚡ perf (scope and issue reference optional, e.g. `✨ feat(executor): Add the deploy coordinator.`). Spec traceability goes in the body: `Spec: changes/cicd-executor-poc, task N-xx (FR/DD refs).` (owner decision, 2026-10-06).
 
 ## Model Routing
 
