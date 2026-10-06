@@ -229,7 +229,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-06 — Sender authorizer (DD-25, approved)
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · S · **A** (OD-A2 resolved by the owner, 2026-10-06) |
+| Status / Size / Gate | **[x] done** · S · **A** |
 | Goal | Map the `SenderId` role ID to a principal class and enforce the per-type rule |
 | Depends on | N-03, N-05 |
 | Requirements / Design | FR-21, RL-2 · DD-25 |

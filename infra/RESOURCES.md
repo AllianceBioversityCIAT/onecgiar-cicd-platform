@@ -146,7 +146,7 @@ this task; re-create from the table below when needed). Result of the last run i
 | §11.2 | CloudWatch logs/metrics | #16; IAM by component |
 | §11.2 | **No** S3, Lambda, CodeBuild, ECR, IAM, GitHub | IAM by component "Explicitly excluded" |
 | §5.1 | Item types and TTLs (180 d, 30 d, 7 d, 7 d); GSI2 only | #4 |
-| §12 | DLQ > 0, oldest message > 10 min, no heartbeat 5 min, `UNAUTHORIZED_SENDER` > 0 | Alarms |
+| §12 | DLQ > 0, oldest message > 10 min, no heartbeat 5 min, `RejectedRequests{reason=UNAUTHORIZED_SENDER}` > 0 | Alarms |
 | FR-17 | `ExecutionsPastDeadline` alarm with forward note; `UNKNOWN_TARGET_STATE` unresolved | Alarms |
 | §12 / proposal §14.1 | EventBridge Scheduler `cicd-reconcile-dev`, target role | #10, #11 |
 | proposal §14.1 | OIDC provider, CI role, secrets, log groups, host, target profile | #7, #9, #13, #14, #16, #20, #19 |

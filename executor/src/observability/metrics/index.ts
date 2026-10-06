@@ -13,6 +13,7 @@
 // `RetryLater` counters, and the liveness `ExecutorHeartbeat` metric (design
 // §12 "Liveness": "emits a heartbeat metric every minute").
 import type { Clock } from "../../ports/clock.js";
+import type { RejectReason } from "../../domain/errors/index.js";
 
 /** Orphan-event counter seam, inlined here when the `application/event-router` shim was deleted (N-08). Types only. */
 export interface EventRouterMetrics {
@@ -43,6 +44,8 @@ export interface Metrics extends EventRouterMetrics {
   recordRetryLater(): void;
   /** design §12 "Liveness": emitted once per heartbeat tick (T-17's heartbeat, every minute). */
   recordHeartbeat(): void;
+  /** design §12: EMF `RejectedRequests` = 1 with dimension `reason` (any X2 reason; alarm on `reason=UNAUTHORIZED_SENDER`, DD-25). */
+  recordRejectedRequest(reason: RejectReason): void;
 }
 
 interface EmfUnit {
@@ -103,6 +106,9 @@ export function createMetrics(deps: CreateMetricsDeps): Metrics {
     },
     recordHeartbeat() {
       emit(deps, "ExecutorHeartbeat", 1, "Count");
+    },
+    recordRejectedRequest(reason) {
+      emit(deps, "RejectedRequests", 1, "Count", { reason });
     },
   };
 }

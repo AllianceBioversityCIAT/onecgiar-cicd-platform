@@ -116,3 +116,19 @@ describe("createMetrics — event-router counters (design §12: OrphanEvents, Re
     expect(doc.RetryLater).toBe(1);
   });
 });
+
+describe("createMetrics — RejectedRequests by reason (design §12, DD-25)", () => {
+  it("emits RejectedRequests = 1 with the reason dimension", () => {
+    const sink = capturingSink();
+    const metrics = createMetrics({ sink, clock: fakeClock("2026-10-05T12:00:00.000Z") });
+
+    metrics.recordRejectedRequest("UNAUTHORIZED_SENDER");
+
+    const doc = parseEmfLine(sink.lines[0]!) as Record<string, unknown>;
+    expect(doc.RejectedRequests).toBe(1);
+    expect(doc.reason).toBe("UNAUTHORIZED_SENDER");
+    const directive = (doc._aws as { CloudWatchMetrics: { Dimensions: string[][]; Metrics: { Name: string }[] }[] }).CloudWatchMetrics[0]!;
+    expect(directive.Dimensions).toEqual([["reason"]]);
+    expect(directive.Metrics.map((m) => m.Name)).toEqual(["RejectedRequests"]);
+  });
+});

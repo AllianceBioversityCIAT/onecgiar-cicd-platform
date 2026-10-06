@@ -403,14 +403,13 @@
 | Landing | One combined commit with N-02, N-03 and N-05 (shared files: guard 8, `schema-paths.ts`, the definition port; splitting would require hand-built intermediate versions). The full working tree was verified green before the commit |
 | Status | **Done** |
 
-### N-06 — Sender authorizer · in progress
+### N-06 — Sender authorizer · done
 
 | Field | Value |
 |---|---|
 | Attempt 1 | `createSenderAuthorizer` with the router's port shape; per-type rule (DEPLOY_REQUESTED ← that deployment's allowedSender; LOCK_RETRY_REQUESTED ← Executor; RECONCILE_TICK ← scheduler; DEPLOY_WINDOW_* and TARGET_RESOLUTION_RECORDED ← operator); role-ID prefix only, session discarded, body never an input; fail-closed reasons; `decide()` returns `{authorized, senderRef, reason}`. 26 tests. Falsifier (stub authorizing from `ci.repository`) → 3 failed. Evidence re-run (Leader): 67/67; Leader falsifier (RECONCILE_TICK mapped to CI) → 2 failed — **VERIFIED** |
 | Reviewer attempt 1 | **FAIL** (`opus`): metric emitted as `UnauthorizedSender`, but design §12 and DD-25 define `RejectedRequests` by reason with the alarm on `RejectedRequests{UNAUTHORIZED_SENDER}` — the specified alarm would never fire |
 | Forward pointers | **N-17:** widen the router port to `decide()`, write `senderRef` into `REJECT#…` and `EXEC#…` (FR-21 audit); decide whether to log the session suffix as labeled untrusted audit data; avoid double-counting rejections |
-| Attempt 2 | In progress |
 
 ### N-09 — Target state with ordering and fencing · done
 
@@ -431,3 +430,7 @@
 | Committed snapshot | HEAD + N-11 files: tsc 0, lint, guards PASS, vitest 642 / 37 skipped |
 | Forward pointers | **N-17:** real SQS publisher adapter for the operator CLI (today it refuses unless `--dry-run`); pass `senderId` to the resolution handler; adapters for `TargetPolicyLookup`, `UnresolvedStore`, `ExecutionLookup`, `LockOwnerLookup`, `ResolutionAuditWriter`. **N-14:** the reconciler's GSI2 sweep closes expired open windows. Advisory: redelivered resolution after success could return an idempotent `ALREADY_RECORDED`; runbook line "close, then reopen" to extend a window |
 | Status | **Done** |
+| Attempt 2 (N-06) | `Metrics.recordRejectedRequest(reason)` emits `RejectedRequests` = 1 with dimension `reason` (design §12); `UnauthorizedSender` removed; the authorizer records `UNAUTHORIZED_SENDER` on every rejection; tests assert name, value and EMF dimensions; prototype-key test; redundant guard removed. Falsifier (old name) → 2 failed. Evidence re-run (Leader): 70/70; Leader falsifier (`in` instead of own-property) → prototype test red — **VERIFIED** |
+| Reviewer attempt 2 (N-06) | **PASS** (`opus`). Leader alignment: `infra/RESOURCES.md` alarm row now names `RejectedRequests{reason=UNAUTHORIZED_SENDER}` (checklist 77/0) |
+| Committed snapshot (N-06) | HEAD + N-06 files: tsc 0, lint, guards PASS, vitest 671 / 37 skipped |
+| Status (N-06) | **Done** |
