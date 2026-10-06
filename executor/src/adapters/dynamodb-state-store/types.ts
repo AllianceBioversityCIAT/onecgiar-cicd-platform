@@ -44,6 +44,8 @@ export interface ExecutionItem {
   readonly lockLostDuringRun?: boolean;
   readonly targetWriteRejected?: boolean;
   readonly windowClosedDuringRun?: boolean;
+  /** The script exited with a code that guarantees `CICD_RESULT` (0/10/20/30/40) but none was parsed (design §6.5, §7.2). */
+  readonly cicdResultMissing?: boolean;
   readonly scriptChecksum?: string;
   readonly result?: { readonly code: number; readonly cicdResult?: string; readonly logTail?: string };
   readonly error?: { readonly code: DomainErrorCode; readonly message?: string };

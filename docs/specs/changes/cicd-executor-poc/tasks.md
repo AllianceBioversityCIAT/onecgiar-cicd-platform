@@ -337,7 +337,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-12 — Deploy coordinator (DD-28)
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · M (flag: could grow to L; split at the §7.5 table if it does) · **A** |
+| Status / Size / Gate | **[x] done** · M · **A** |
 | Goal | V1–V4, lock (DD-09), S2, two-phase intent, semaphore, transport call, exit mapping, fenced target write, release on every exit |
 | Depends on | N-04, N-09, N-10, N-11 (transport via fake; N-13 real) |
 | Requirements / Design | FR-11, FR-12, FR-16, FR-24 · design §7.2, §7.3, §7.5, §7.6, DD-22, DD-28 |

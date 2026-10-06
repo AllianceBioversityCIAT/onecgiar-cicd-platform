@@ -45,6 +45,16 @@ function assertSparseIndexCovenant(status: ExecutionStatus, activeStatus: unknow
   }
 }
 
+/** An Update usable as a standalone `UpdateCommand` input and as a `TransactWriteItems` `Update` item. */
+export interface ExecutionUpdateSpec {
+  readonly TableName: string;
+  readonly Key: Record<string, string>;
+  readonly UpdateExpression: string;
+  readonly ConditionExpression: string;
+  readonly ExpressionAttributeNames: Record<string, string>;
+  readonly ExpressionAttributeValues: Record<string, unknown>;
+}
+
 export class ExecutionRepository {
   public constructor(
     private readonly client: DynamoDBDocumentClient,
@@ -88,6 +98,20 @@ export class ExecutionRepository {
     expected: ExecutionTransitionExpected,
     patch: ExecutionUpdatePatch,
   ): Promise<boolean> {
+    const spec = this.updateSpec(executionId, expected, patch);
+    return runConditionalWrite(() => this.client.send(new UpdateCommand(spec)));
+  }
+
+  /**
+   * The conditional update `update` sends, as data: the deploy coordinator
+   * puts it in a `TransactWriteItems` next to the TARGET write (X9, X16).
+   * Same sparse-index covenant check and same condition as `update`.
+   */
+  public updateSpec(
+    executionId: string,
+    expected: ExecutionTransitionExpected,
+    patch: ExecutionUpdatePatch,
+  ): ExecutionUpdateSpec {
     assertSparseIndexCovenant(patch.status ?? expected.status, patch.activeStatus, patch.deadlineAt);
 
     const key = executionKey(executionId);
@@ -123,17 +147,13 @@ export class ExecutionRepository {
       updateExpressionParts.push(`REMOVE ${removeClauses.join(", ")}`);
     }
 
-    return runConditionalWrite(() =>
-      this.client.send(
-        new UpdateCommand({
-          TableName: this.tableName,
-          Key: { [TABLE_PK_ATTR]: key.pk, [TABLE_SK_ATTR]: key.sk },
-          UpdateExpression: updateExpressionParts.join(" "),
-          ConditionExpression: condition,
-          ExpressionAttributeNames: names,
-          ExpressionAttributeValues: values,
-        }),
-      ),
-    );
+    return {
+      TableName: this.tableName,
+      Key: { [TABLE_PK_ATTR]: key.pk, [TABLE_SK_ATTR]: key.sk },
+      UpdateExpression: updateExpressionParts.join(" "),
+      ConditionExpression: condition,
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+    };
   }
 }

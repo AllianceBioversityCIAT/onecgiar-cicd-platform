@@ -21,6 +21,7 @@ export {
   ExecutionRepository,
   type ExecutionTransitionExpected,
   type ExecutionUpdatePatch,
+  type ExecutionUpdateSpec,
 } from "./execution-repository.js";
 export { RejectionRepository } from "./rejection-repository.js";
 export { DedupeRepository } from "./dedupe-repository.js";
@@ -35,3 +36,10 @@ export {
 export { LockRepository, type LockAcquireOutcome, LOCK_ITEM_TTL_SECONDS } from "./lock-repository.js";
 export { DeployWindowRepository } from "./deploy-window-repository.js";
 export { EventMarkRepository } from "./event-mark-repository.js";
+export {
+  DeployTransactions,
+  type BeginDispatchInput,
+  type BeginDispatchOutcome,
+  type MarkUnknownInput,
+  type MarkUnknownOutcome,
+} from "./deploy-transactions.js";

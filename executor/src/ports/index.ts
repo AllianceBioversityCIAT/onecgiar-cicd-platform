@@ -16,10 +16,13 @@ export type {
 } from "./definition-source.js";
 export type { SecretProvider } from "./secret-provider.js";
 export type {
-  StepHandler,
-  StepContext,
-  DispatchResult,
-} from "./step-handler.js";
+  DeployTransport,
+  DeploySession,
+  ScriptExecRequest,
+  ScriptExecOutcome,
+  CicdResult,
+} from "./deploy-transport.js";
+export { DeployTransportError } from "./deploy-transport.js";
 export type {
   NotificationProvider,
   NotificationEvent,

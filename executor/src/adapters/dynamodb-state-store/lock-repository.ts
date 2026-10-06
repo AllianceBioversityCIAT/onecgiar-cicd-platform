@@ -24,7 +24,18 @@ import type { LockItem } from "./types.js";
 export const LOCK_ITEM_TTL_SECONDS = 24 * 60 * 60;
 
 export type LockAcquireOutcome =
-  | { readonly outcome: "ACQUIRED"; readonly fencingToken: number; readonly leaseExpiresAt: number }
+  | {
+      readonly outcome: "ACQUIRED";
+      readonly fencingToken: number;
+      readonly leaseExpiresAt: number;
+      /**
+       * `true` when this owner ALREADY held a live lease (a duplicate or concurrent
+       * attempt of the same execution re-entered it, DD-09 re-entrancy). Such a caller
+       * did not take the lock fresh and must not release it unless it goes on to own the
+       * attempt (deploy-coordinator, design §7.5).
+       */
+      readonly alreadyHeld: boolean;
+    }
   | { readonly outcome: "BUSY"; readonly owner: string; readonly leaseExpiresAt: number }
   /** The read-time decision was ACQUIRABLE but a concurrent writer won the race first. */
   | { readonly outcome: "LOST_RACE" };
@@ -121,7 +132,13 @@ export class LockRepository {
     if (!applied) {
       return { outcome: "LOST_RACE" };
     }
-    return { outcome: "ACQUIRED", fencingToken: decision.fencingToken, leaseExpiresAt: decision.leaseExpiresAt };
+    const alreadyHeld = decision.reason === "REENTRANT" && current !== undefined && current.leaseExpiresAt >= now;
+    return {
+      outcome: "ACQUIRED",
+      fencingToken: decision.fencingToken,
+      leaseExpiresAt: decision.leaseExpiresAt,
+      alreadyHeld,
+    };
   }
 
   /** FR-11 "renewal": conditional on `owner` — a non-owner's renewal is a no-op (FR-11 "ownership"). */

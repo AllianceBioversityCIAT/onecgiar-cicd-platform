@@ -50,7 +50,8 @@ export interface RecordDeployedInput {
   readonly lockKey: string;
   readonly fencingToken: number;
   readonly lastDeployed: DeployedStamp;
-  readonly currentImages: Readonly<Record<string, string>>;
+  /** Absent when the script reported no `CICD_RESULT`: the stored images are then left untouched. */
+  readonly currentImages?: Readonly<Record<string, string>>;
   /** Opaque strings; may include the `unresolved:sha256:<id>` marker. */
   readonly previousImages?: Readonly<Record<string, string>>;
   readonly updatedAt: number;
@@ -86,7 +87,6 @@ export class TargetStateRepository {
     assertValidOrdering(input.lastDeployed);
     const names: Record<string, string> = {
       "#lockKey": "lockKey",
-      "#currentImages": "currentImages",
       "#lastDeployed": "lastDeployed",
       "#fencingToken": "fencingToken",
       "#updatedAt": "updatedAt",
@@ -95,7 +95,6 @@ export class TargetStateRepository {
     };
     const values: Record<string, unknown> = {
       ":lockKey": input.lockKey,
-      ":currentImages": input.currentImages,
       ":lastDeployed": input.lastDeployed,
       ":fencingToken": input.fencingToken,
       ":updatedAt": input.updatedAt,
@@ -104,11 +103,15 @@ export class TargetStateRepository {
     };
     const sets = [
       "#lockKey = :lockKey",
-      "#currentImages = :currentImages",
       "#lastDeployed = :lastDeployed",
       "#fencingToken = :fencingToken",
       "#updatedAt = :updatedAt",
     ];
+    if (input.currentImages !== undefined) {
+      names["#currentImages"] = "currentImages";
+      values[":currentImages"] = input.currentImages;
+      sets.push("#currentImages = :currentImages");
+    }
     if (input.previousImages !== undefined) {
       names["#previousImages"] = "previousImages";
       values[":previousImages"] = input.previousImages;

@@ -485,3 +485,16 @@
 | Committed snapshot | HEAD + N-19 files (guard 8 file staged with the N-19 hunks only; the N-12 `step-handler` line stays PENDING until N-12 lands): tsc 0, lint, guards PASS, vitest 748 / 44 skipped |
 | Forward pointers | **N-22 and CI (OD-N1):** run `validate` with `--require-workflow`. **N-21:** avoid local actions and local job-level calls in the trusted workflow (nested workflows not named `*.reusable.*` are not scanned), or forbid them in its contract test. **Closure spec sync:** record the owner's wording that the trailing version comment is "where useful" in DD-29 |
 | Status | **Done** |
+
+### N-12 — Deploy coordinator · done
+
+| Field | Value |
+|---|---|
+| Attempt 1 | `application/deploy-coordinator` (`evaluateQueued`, `handleLockRetry`), `ports/deploy-transport`, atomic X9 and X16 `TransactWriteItems` (`deploy-transactions.ts`), `ExecutionRepository.updateSpec()`; `ports/step-handler` deleted. 36 unit + 7 integration tests. Falsifier (`execStartedAt` after exec) → crash classified X11 instead of X16. Evidence re-run (Leader): tsc 0, lint, validate, 36/36; integration exit 0, 10 files / 51 tests; Leader falsifier (semaphore slot not released) → 23 failed — **VERIFIED** |
+| Reviewer attempt 1 | **FAIL** (`opus`, reproduced): a concurrent duplicate `LOCK_RETRY_REQUESTED` acquires the lock re-entrantly, loses X9 and releases the distributed lock while the sibling's script runs (violates §7.5, DD-09, DD-22: the target mutex must never be the only barrier). Judgement calls accepted: lease 180 s; `attempt = execution.attempt + 1`; lost session keeps the lock; target write before X12; owner check before `lastDeployed`; 2 SSH connect retries (§7.2) |
+| Leader assignment | `windowClosedDuringRun` (FR-24, §7.7) assigned to N-12; no fabricated `currentImages` when `CICD_RESULT` is missing. **N-14:** re-drives use `attempt = execution.attempt + 1` |
+| Attempt 2 | `acquire` reports `alreadyHeld` (same owner re-entering a live lease); a handler releases only a lock it took fresh, or after committing X9/X6 itself; on an X9/X6 conflict it re-reads and keeps the lock if the sibling is DEPLOYING. Post-exit window re-check sets `windowClosedDuringRun` (outcome unchanged). Missing `CICD_RESULT` → `currentImages` untouched, `lastDeployed` still written, `cicdResultMissing` flag. 43 unit + 8 integration tests incl. the concurrent-duplicate repro. Falsifier (release-on-conflict restored) → "expected 1 to be +0". Evidence re-run (Leader): 43/43; integration exit 0, 10 files / 52 tests, no JVM left — **VERIFIED** |
+| Reviewer attempt 2 | **PASS** (`opus`): release audit of every exit; deliberate lease-expiry cases (timeout, lost session, re-entrant handler erroring before X9/X6) are safe |
+| Committed snapshot | HEAD + N-12 files: tsc 0, lint, guards PASS, vitest 791 / 52 skipped |
+| Forward pointers | **N-14:** re-drive attempt = execution.attempt + 1. **Closure spec sync:** add `cicdResultMissing` and `windowClosedDuringRun` semantics to §5.1; runbook §12.2 mentions that `TARGET.currentImages` may lag `lastDeployed` when the flag is set. Advisory: compare fencingToken/acquiredAt before a loser releases (theoretical window); distinct label for the post-exit window check |
+| Status | **Done** |

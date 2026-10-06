@@ -49,7 +49,7 @@ export const OBSOLESCENCE_ENTRIES = [
   { path: "executor/src/adapters/dynamodb-state-store/step-attempt-lookup.ts", status: "DELETED" },
   { path: "executor/src/adapters/dynamodb-state-store/instance-lease-repository.ts", status: "DELETED" },
   { path: "executor/test/integration/step-repository.transition.int.test.ts", status: "DELETED" },
-  { path: "executor/src/ports/step-handler.ts", status: "PENDING", owner: "N-12" },
+  { path: "executor/src/ports/step-handler.ts", status: "DELETED" },
   // N-08 done: the T-08 store was reduced; the N-04 legacy-vocabulary shim and the N-05 event-router types-only shim are gone (observability inlines the orphan seam types)
   { path: "executor/src/application/event-router/index.ts", status: "DELETED" },
   { path: "executor/src/domain/state-machine/legacy-vocabulary.ts", status: "DELETED" },
