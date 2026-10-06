@@ -1,0 +1,18 @@
+[
+  { "ParameterKey": "Stage", "ParameterValue": "dev" },
+  { "ParameterKey": "GitHubRepositoryId", "ParameterValue": "<GITHUB_REPOSITORY_ID_DIGITS>" },
+  { "ParameterKey": "GitHubRepositoryOwnerId", "ParameterValue": "<GITHUB_OWNER_ID_DIGITS>" },
+  { "ParameterKey": "GitHubEnvironment", "ParameterValue": "<GITHUB_ENVIRONMENT>" },
+  { "ParameterKey": "PlatformWorkflowRepository", "ParameterValue": "<GITHUB_ORG>/<PLATFORM_REPO>" },
+  { "ParameterKey": "PinnedWorkflowSha", "ParameterValue": "<PINNED_COMMIT_SHA_40_HEX>" },
+  { "ParameterKey": "GitHubOidcSub", "ParameterValue": "<ENVIRONMENT_FORM_SUB>" },
+  { "ParameterKey": "ExistingGitHubOidcProviderArn", "ParameterValue": "" },
+  { "ParameterKey": "CiEcrRepositoryArn", "ParameterValue": "" },
+  { "ParameterKey": "CreateProbeEcrRepository", "ParameterValue": "true" },
+  { "ParameterKey": "ExecutorTrustedPrincipalArn", "ParameterValue": "<OWNER_IAM_PRINCIPAL_ARN>" },
+  { "ParameterKey": "OperatorTrustedPrincipalArn", "ParameterValue": "<OPERATOR_IAM_PRINCIPAL_ARN>" },
+  { "ParameterKey": "SecretIdPrefix", "ParameterValue": "<SECRET_ID_PREFIX_ENDING_WITH_SLASH>" },
+  { "ParameterKey": "ReconcileScheduleState", "ParameterValue": "DISABLED" },
+  { "ParameterKey": "AlarmTopicArn", "ParameterValue": "" },
+  { "ParameterKey": "EnablePointInTimeRecovery", "ParameterValue": "false" }
+]

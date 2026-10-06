@@ -1,0 +1,28 @@
+# Example only. Copy to samconfig.toml (kept out of Git) and replace every <PLACEHOLDER>.
+# Review and `sam validate --lint` come first; deployment is a separate owner step (plan section 11).
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "cicd-poc-dev"
+region = "<AWS_REGION>"
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+parameter_overrides = [
+  "Stage=dev",
+  "GitHubRepositoryId=<GITHUB_REPOSITORY_ID_DIGITS>",
+  "GitHubRepositoryOwnerId=<GITHUB_OWNER_ID_DIGITS>",
+  "GitHubEnvironment=<GITHUB_ENVIRONMENT>",
+  "PlatformWorkflowRepository=<GITHUB_ORG>/<PLATFORM_REPO>",
+  "PinnedWorkflowSha=<PINNED_COMMIT_SHA_40_HEX>",
+  "GitHubOidcSub=<ENVIRONMENT_FORM_SUB>",
+  "ExistingGitHubOidcProviderArn=",
+  "CiEcrRepositoryArn=",
+  "CreateProbeEcrRepository=true",
+  "ExecutorTrustedPrincipalArn=<OWNER_IAM_PRINCIPAL_ARN>",
+  "OperatorTrustedPrincipalArn=<OPERATOR_IAM_PRINCIPAL_ARN>",
+  "SecretIdPrefix=<SECRET_ID_PREFIX_ENDING_WITH_SLASH>",
+  "ReconcileScheduleState=DISABLED",
+  "AlarmTopicArn=",
+  "EnablePointInTimeRecovery=false",
+]

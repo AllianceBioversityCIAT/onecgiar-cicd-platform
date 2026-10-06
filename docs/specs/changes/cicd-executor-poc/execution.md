@@ -629,3 +629,18 @@
 | Attempt 2 | Requirements v3.6 (FR-22 "public-safe logs"), design DD-29 decision and §11 security row aligned, proposal pointers, N-21 supersede note, RESOURCES verification row. Review: **FAIL** — one RESOURCES verification row left |
 | Attempt 3 | RESOURCES row aligned. Review: **PASS**. Advisory: P-G14 (Environment values visible in a called workflow) stays deferred to the first real run |
 | Not executed | Any real GitHub run (owner, B2) |
+
+### K-1 — SAM template for the DEV foundation (2026-10-06)
+
+| Item | Record |
+|---|---|
+| Attempt 1 | `infra/sam/template.yaml` (queue + DLQ, queue policy with explicit `Deny` on `SendMessage` outside the four roles, table + GSI2 + TTL matching the code, conditional OIDC provider (Retain), CI role with the six exact `StringEquals` DD-24 claims and `sqs:GetQueueUrl`, Executor/Operator/Scheduler roles, reconcile schedule DISABLED by default, log group, five alarms, optional probe ECR repository, explicit deletion policies, outputs), `parameters.example.json`, `samconfig.example.toml`, contract test (49) with a CloudFormation-tag YAML parser. Publication guard allowlists the public service identifiers `sts.amazonaws.com` and `scheduler.amazonaws.com`. Implementer falsifiers (StringLike trust; `Resource: "*"` on the Executor) → red. Leader evidence: isolated worktree tsc 0, lint clean, guards 8/8, vitest 998 passed / 74 skipped / 1 todo; Leader falsifiers (`ArnNotEquals`→`ArnNotLike`; table `DeletionPolicy` removed) → red. Review: **FAIL** — the Scheduler `<aws.scheduler.execution-id>` is not a UUID, so every RECONCILE_TICK would fail `eventId` `format: uuid` and go to the DLQ; the test substituted a made-up UUID |
+| Attempt 2 | Not resolved by assumption: recorded as spec gap **G-8** for the owner. Template comment states the gap; the schedule must stay DISABLED; the test uses the documented real-format sample and asserts the rejection; outputs add the four role IDs (DD-25 identifier secrets). Leader evidence: isolated worktree lint clean, guards 8/8, vitest 1016 passed / 74 skipped / 1 todo; typecheck 0. Review: **PASS**. Leader editorial follow-ups from the advisories: stale Input comment reworded, G-8 in the parameter description, same-account principal note. Runbook items (poison message via the operator role, single ECR repository parameter, silent trust failure if a claim key is unsupported, IAM propagation retry, EMF alarms without log shipping) → K-8 |
+| Not executed | `sam validate --lint` (owner, B1 checkpoint B), any deployment |
+
+### Spec gaps found in B0 (owner decision; not resolved by assumption)
+
+| ID | Gap | Effect |
+|---|---|---|
+| G-8 | EventBridge Scheduler cannot produce a UUID `eventId` (`<aws.scheduler.execution-id>` is a short id), while `schemas/event.schema.json` requires `format: uuid` for RECONCILE_TICK | The reconcile schedule stays DISABLED; the B1 evidence "scheduler-originated RECONCILE_TICK consumed" is blocked. Options for the owner: a schema/design change for the scheduler branch, or another UUID source |
+| G-9 | `BundledDefinitionSource.listDeploymentIds()` skips definition files that fail to parse, so the Executor starts without such a deployment instead of refusing | K-3's offline check reports these files (tool-side); the Executor's own behavior is unchanged pending an owner decision |

@@ -40,7 +40,7 @@ Every such command appears **only** in the kit documentation, for the owner to r
 | D-4 | **RESOLVED: Node 22** for the local Executor, via a portable/local approach; no system-wide Node change |
 | D-5 | **REFRAMED:** non-destructive SSH/`flock` validation is **owner-run probe tooling outside the production `deployScript` allowlist**. No new approved deploy script |
 
-Still open, and **not** resolved by this plan: OD-Q5 (target credentials to pull from ECR), OD-Q11 and OD-Q12 (permanent host and its credentials; Gate C), OD-N1, OD-A6 (PRMS repo; Gate C), OD-A7, OD-A8, and spec gaps G-1 to G-6.
+Still open, and **not** resolved by this plan: OD-Q5 (target credentials to pull from ECR), OD-Q11 and OD-Q12 (permanent host and its credentials; Gate C), OD-N1, OD-A6 (PRMS repo; Gate C), OD-A7, OD-A8, and spec gaps G-1 to G-6, plus G-8 and G-9 found in B0 (`execution.md`, "Spec gaps found in B0").
 
 ---
 
@@ -66,7 +66,7 @@ Implementation tasks, each through Implementer → Leader evidence re-run → Re
 
 | Milestone | Owner does | Expected evidence (owner shares back; Claude checks) |
 |---|---|---|
-| **B1** AWS foundation | Reviews the template; runs the documented `sam deploy`; creates the Secrets Manager entries; configures the local profile that assumes the Executor role; starts the Executor under Node 22 | Stack outputs; startup log "definitions validated"; heartbeat metric; a scheduler-originated `RECONCILE_TICK` consumed; a negative: the Executor role cannot read an application secret |
+| **B1** AWS foundation | Reviews the template; runs the documented `sam deploy`; creates the Secrets Manager entries; configures the local profile that assumes the Executor role; starts the Executor under Node 22 | Stack outputs; startup log "definitions validated"; heartbeat metric; a scheduler-originated `RECONCILE_TICK` consumed (**blocked by spec gap G-8** until the owner resolves it; the schedule stays DISABLED); a negative: the Executor role cannot read an application secret |
 | **B2** GitHub OIDC → SQS → local Executor | Creates the GitHub Environment, the variables and the single Environment secret of §12; adds the caller workflow to a chosen repo and branch; triggers `workflow_dispatch` | Workflow run log (public-safe), SQS receipt in the Executor log with `senderRef`, execution QUEUED, then `FAILED (DEPLOY_WINDOW_CLOSED)` with the window closed (no SSH). Premises pinned: P-A4 SenderId form, P-G11, P-G14, G-3 (repo-level decoy variable), G-4, P-A3. Negatives: `pull_request`, `pull_request_target`, `workflow_run` cannot assume the role |
 | **B3** State, dedupe, locks | Re-runs the same workflow run; runs an older build after a newer one; lets the scheduler tick; sends a poison message (documented command) | One execution for the re-run; `SUPERSEDED` for the older; reconciler activity; DLQ after 5 receives + alarm |
 | **B4** SSH (non-destructive) | Runs `ssh-preflight`, then `target-probe.sh` on the target, then `executor-ssh-probe` | Host-key match (and a deliberate mismatch rejected), `flock` contention = busy, fresh 0700 directory, checksum, parsed `CICD_RESULT` |

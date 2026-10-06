@@ -1,0 +1,615 @@
+# @akili-spec changes/cicd-executor-poc design DD-17, DD-23, DD-24, DD-25, DD-14, §5.1, §11, §12; gate-b-plan §5, §11, §12; infra/RESOURCES.md
+#
+# Gate B / B0 foundation for the DEV stack (OD-Q7 resolved by the owner: SAM / CloudFormation).
+#
+# Publication policy (design §4.1, DD-23): this file contains no account ID, host, IP,
+# credential ID, revealing secret name or Jenkins job name. Every environment-specific value
+# comes from a parameter or a pseudo-parameter. Secret VALUES are never part of this stack:
+# the owner creates the Secrets Manager secrets with documented commands.
+#
+# Deployment is a separate owner step (plan §11): review, `sam validate --lint`, then `sam deploy`.
+# Nothing here has been deployed or validated against AWS by the author.
+#
+# EMF note: the three EMF-based alarms (ExecutorHeartbeat, RejectedRequests,
+# ExecutionsPastDeadline) receive data only when the Executor's stdout is shipped to
+# CloudWatch Logs. In the workstation run (B1) they have no data unless the owner ships the
+# logs (to be documented in the runbook).
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: CI/CD Executor PoC - Gate B DEV foundation (queue, state table, OIDC trust, roles, schedule, alarms).
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedPattern: "^[a-z][a-z0-9-]{0,15}$"
+    ConstraintDescription: Lowercase letters, digits and hyphens; starts with a letter; at most 16 characters.
+    Description: Environment stage used to derive resource names.
+  GitHubRepositoryId:
+    Type: String
+    AllowedPattern: "^[0-9]{1,20}$"
+    Description: Immutable numeric ID of the application repository allowed to assume the CI role (claim repository_id).
+  GitHubRepositoryOwnerId:
+    Type: String
+    AllowedPattern: "^[0-9]{1,20}$"
+    Description: Immutable numeric ID of the repository owner (claim repository_owner_id).
+  GitHubEnvironment:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9._-]{1,64}$"
+    Description: GitHub Environment name the CI job runs in (claim environment).
+  PlatformWorkflowRepository:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$"
+    Description: owner/repo of the platform repository that hosts the reusable workflow.
+  PinnedWorkflowSha:
+    Type: String
+    AllowedPattern: "^[0-9a-f]{40}$"
+    ConstraintDescription: Exactly 40 lowercase hexadecimal characters (a full commit SHA, never a tag or branch).
+    Description: Commit SHA of the platform reusable workflow pinned in the CI role trust (DD-24).
+  GitHubOidcSub:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9._:/-]{1,256}$"
+    ConstraintDescription: Exact sub value, no wildcard characters.
+    Description: Default environment-form sub claim value as observed by the owner (P-G10).
+  ExistingGitHubOidcProviderArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$"
+    Description: ARN of an already existing GitHub OIDC provider. Empty creates the provider in this stack.
+  CiEcrRepositoryArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:ecr:[a-z0-9-]+:[0-9]{12}:repository/[a-z0-9._/-]+$"
+    Description: ARN of the owner-chosen ECR repository the CI role may push to. Empty requires CreateProbeEcrRepository=true.
+  CreateProbeEcrRepository:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Create an immutable-tag probe ECR repository and use it instead of CiEcrRepositoryArn.
+  # The trusted principals must live in this stack's own account (documented, not enforced).
+  # Both trusted principals must belong to this stack's own account (documented, not enforced).
+  ExecutorTrustedPrincipalArn:
+    Type: String
+    AllowedPattern: "^arn:aws[a-z-]*:iam::[0-9]{12}:(role|user)/[A-Za-z0-9+=,.@_/-]+$"
+    Description: IAM principal of the owner allowed to assume the Executor role (workstation run).
+  OperatorTrustedPrincipalArn:
+    Type: String
+    AllowedPattern: "^arn:aws[a-z-]*:iam::[0-9]{12}:(role|user)/[A-Za-z0-9+=,.@_/-]+$"
+    Description: IAM principal allowed to assume the operator role.
+  # The Executor setting CICD_SECRET_ID_PREFIX must equal this parameter.
+  SecretIdPrefix:
+    Type: String
+    Default: cicd-poc/dev/
+    AllowedPattern: "^[A-Za-z0-9/_+=.@-]{1,200}/$"
+    ConstraintDescription: Secrets Manager name characters only, ending with a slash, no wildcard.
+    Description: Prefix of the Executor's own operational secrets. Application secrets must never be stored under it.
+  ReconcileScheduleState:
+    Type: String
+    Default: DISABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: State of the RECONCILE_TICK schedule. Keep DISABLED until spec gap G-8 is resolved (the Scheduler execution id is not a UUID, so ticks would be rejected and land in the DLQ).
+  AlarmTopicArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]{1,256}$"
+    Description: Optional SNS topic ARN for alarm notifications. Empty means alarms have no actions.
+  EnablePointInTimeRecovery:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Enable DynamoDB point-in-time recovery on the executions table.
+
+Rules:
+  EcrRepositorySelected:
+    Assertions:
+      - Assert: !Or
+          - !Not [!Equals [!Ref CiEcrRepositoryArn, ""]]
+          - !Equals [!Ref CreateProbeEcrRepository, "true"]
+        AssertDescription: Provide CiEcrRepositoryArn or set CreateProbeEcrRepository to true.
+
+Conditions:
+  CreateOidcProvider: !Equals [!Ref ExistingGitHubOidcProviderArn, ""]
+  CreateProbeRepository: !Equals [!Ref CreateProbeEcrRepository, "true"]
+  HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, ""]]
+
+Resources:
+  # ---------------------------------------------------------------- Queues (DD-14, DD-25)
+  DeployDlq:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: !Sub cicd-events-${Stage}-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: Project
+          Value: cicd-poc
+
+  DeployQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: !Sub cicd-events-${Stage}
+      VisibilityTimeout: 120
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeployDlq.Arn
+        maxReceiveCount: 5
+      Tags:
+        - Key: Project
+          Value: cicd-poc
+
+  # Defense in depth behind the consumer's per-type sender binding (DD-25): SendMessage is
+  # allowed only to the four platform roles and explicitly denied to every other principal.
+  DeployQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref DeployQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowSendFromPlatformRoles
+            Effect: Allow
+            Principal:
+              AWS:
+                - !GetAtt CiRole.Arn
+                - !GetAtt ExecutorRole.Arn
+                - !GetAtt SchedulerRole.Arn
+                - !GetAtt OperatorRole.Arn
+            Action: sqs:SendMessage
+            Resource: !GetAtt DeployQueue.Arn
+          - Sid: AllowConsumeFromExecutorRole
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt ExecutorRole.Arn
+            Action:
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+              - sqs:ChangeMessageVisibility
+            Resource: !GetAtt DeployQueue.Arn
+          - Sid: DenySendFromEveryoneElse
+            Effect: Deny
+            Principal: "*"
+            Action: sqs:SendMessage
+            Resource: !GetAtt DeployQueue.Arn
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn:
+                  - !GetAtt CiRole.Arn
+                  - !GetAtt ExecutorRole.Arn
+                  - !GetAtt SchedulerRole.Arn
+                  - !GetAtt OperatorRole.Arn
+
+  # ---------------------------------------------------------------- State table (design §5.1)
+  # Key attribute names, GSI2 and the TTL attribute mirror
+  # executor/src/adapters/dynamodb-state-store/{keys,table-schema}.ts; the contract test pins them.
+  ExecutionsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TableName: !Sub cicd-executions-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+        - AttributeName: activeStatus
+          AttributeType: S
+        - AttributeName: deadlineAt
+          AttributeType: N
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI2
+          KeySchema:
+            - AttributeName: activeStatus
+              KeyType: HASH
+            - AttributeName: deadlineAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !Ref EnablePointInTimeRecovery
+      Tags:
+        - Key: Project
+          Value: cicd-poc
+
+  # ---------------------------------------------------------------- OIDC provider (DD-24)
+  # An account has one provider per URL. When an existing provider is supplied it is only
+  # referenced, never managed. Retained on delete/replace because other stacks may rely on it.
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidcProvider
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      Tags:
+        - Key: Project
+          Value: cicd-poc
+
+  # ---------------------------------------------------------------- Roles
+  CiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateOidcProvider, !Ref GitHubOidcProvider, !Ref ExistingGitHubOidcProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            # Every operator is an exact StringEquals: no StringLike, no wildcard (DD-24, FR-25).
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:repository_id: !Ref GitHubRepositoryId
+                token.actions.githubusercontent.com:repository_owner_id: !Ref GitHubRepositoryOwnerId
+                token.actions.githubusercontent.com:environment: !Ref GitHubEnvironment
+                # P-G11 is UNVERIFIED: the owner confirms the observed job_workflow_ref claim
+                # form for a SHA-pinned reusable workflow call before relying on this value.
+                token.actions.githubusercontent.com:job_workflow_ref: !Sub "${PlatformWorkflowRepository}/.github/workflows/deploy-request.reusable.yml@${PinnedWorkflowSha}"
+                token.actions.githubusercontent.com:sub: !Ref GitHubOidcSub
+      Policies:
+        - PolicyName: ci-push-and-request
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # ACCEPTED EXCEPTION: AWS does not scope ecr:GetAuthorizationToken by resource;
+              # it returns only a short-lived registry token (infra/RESOURCES.md, IAM by component).
+              - Sid: EcrAuthorizationToken
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              # `docker push` needs the layer-upload actions and PutImage. ecr:BatchGetImage is
+              # deliberately absent: the reusable workflow only builds, pushes and inspects the
+              # local image (no pull, no manifest inspection against the registry).
+              - Sid: EcrPushSelectedRepository
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                Resource: !If [CreateProbeRepository, !GetAtt ProbeEcrRepository.Arn, !Ref CiEcrRepositoryArn]
+              # GetQueueUrl: the workflow derives the queue URL after OIDC instead of storing it
+              # (owner classification, plan §12).
+              - Sid: SendDeployRequest
+                Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:GetQueueUrl
+                Resource: !GetAtt DeployQueue.Arn
+      Tags:
+        - Key: Project
+          Value: cicd-poc
+
+  ExecutorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref ExecutorTrustedPrincipalArn
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: executor-runtime
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: QueueConsumeAndSelfSend
+                Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:ChangeMessageVisibility
+                  - sqs:SendMessage
+                Resource: !GetAtt DeployQueue.Arn
+              - Sid: StateTableItems
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:ConditionCheckItem
+                Resource: !GetAtt ExecutionsTable.Arn
+              - Sid: StateTableGsi2Query
+                Effect: Allow
+                Action: dynamodb:Query
+                Resource: !Sub "${ExecutionsTable.Arn}/index/GSI2"
+              # Only the Executor's own operational secrets live under the prefix (SSH credential,
+              # Slack token, identifier references). Application secrets must never be stored
+              # under it (NFR-01, DD-23).
+              - Sid: OperationalSecrets
+                Effect: Allow
+                Action:
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${SecretIdPrefix}*"
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt ExecutorLogGroup.Arn
+              # ACCEPTED EXCEPTION: PutMetricData has no resource-level scoping; the namespace
+              # condition is the narrowest available control.
+              - Sid: PutMetrics
+                Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: CicdExecutor
+      Tags:
+        - Key: Project
+          Value: cicd-poc
+
+  OperatorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref OperatorTrustedPrincipalArn
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: operator-send
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: SendOperatorEvents
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt DeployQueue.Arn
+      Tags:
+        - Key: Project
+          Value: cicd-poc
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+                # Built from names (not GetAtt) so the role does not depend on the schedule.
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/default/cicd-reconcile-${Stage}"
+      Policies:
+        - PolicyName: scheduler-send
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: SendReconcileTick
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt DeployQueue.Arn
+      Tags:
+        - Key: Project
+          Value: cicd-poc
+
+  # ---------------------------------------------------------------- Reconcile schedule (DD-13)
+  # Input follows the RECONCILE_TICK envelope of schemas/event.schema.json; the Scheduler context
+  # attributes supply eventId (execution id) and timestamp (scheduled time, ISO 8601), but eventId
+  # does not satisfy the schema (see G-8 below).
+  # SPEC GAP G-8 (owner decision pending): the Scheduler execution id is NOT a UUID (the AWS
+  # documentation example looks like d32c5kddcf5bb8c3), while the event schema requires
+  # eventId format uuid, so the current schema rejects these ticks (INVALID_INTERNAL_EVENT).
+  # The schedule MUST stay DISABLED (the default) until the owner resolves G-8 (a schema or
+  # design change, or another UUID source).
+  ReconcileSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub cicd-reconcile-${Stage}
+      Description: Sends RECONCILE_TICK to the deploy queue every 5 minutes.
+      ScheduleExpression: rate(5 minutes)
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: !Ref ReconcileScheduleState
+      Target:
+        Arn: !GetAtt DeployQueue.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: '{"specVersion":1,"eventId":"<aws.scheduler.execution-id>","eventType":"RECONCILE_TICK","timestamp":"<aws.scheduler.scheduled-time>","source":"scheduler"}'
+
+  # ---------------------------------------------------------------- Logs
+  ExecutorLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /cicd/executor/${Stage}
+      RetentionInDays: 30
+      Tags:
+        - Key: Project
+          Value: cicd-poc
+
+  # ---------------------------------------------------------------- Alarms (design §12, FR-17)
+  DlqNotEmptyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub cicd-${Stage}-dlq-not-empty
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt DeployDlq.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Project
+          Value: cicd-poc
+
+  OldestMessageAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub cicd-${Stage}-oldest-message-age
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt DeployQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 600
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Project
+          Value: cicd-poc
+
+  # The Executor emits ExecutorHeartbeat with NO dimensions; an alarm that expects a dimension
+  # never sees data (design §12 "Liveness").
+  ExecutorHeartbeatMissingAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub cicd-${Stage}-executor-heartbeat-missing
+      Namespace: CicdExecutor
+      MetricName: ExecutorHeartbeat
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 5
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Project
+          Value: cicd-poc
+
+  RejectedSenderAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub cicd-${Stage}-rejected-unauthorized-sender
+      Namespace: CicdExecutor
+      MetricName: RejectedRequests
+      Dimensions:
+        - Name: reason
+          Value: UNAUTHORIZED_SENDER
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Project
+          Value: cicd-poc
+
+  ExecutionsPastDeadlineAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub cicd-${Stage}-executions-past-deadline
+      Namespace: CicdExecutor
+      MetricName: ExecutionsPastDeadline
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Project
+          Value: cicd-poc
+
+  # ---------------------------------------------------------------- Optional probe ECR repository
+  ProbeEcrRepository:
+    Type: AWS::ECR::Repository
+    Condition: CreateProbeRepository
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      RepositoryName: !Sub cicd-poc-${Stage}-probe
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EmptyOnDelete: true
+      Tags:
+        - Key: Project
+          Value: cicd-poc
+
+Outputs:
+  DeployQueueUrl:
+    Description: Deploy queue URL (operator and Executor configuration steps).
+    Value: !Ref DeployQueue
+  DeployQueueName:
+    Description: Deploy queue name (GitHub Environment variable CICD_DEPLOY_QUEUE_NAME, plan §12).
+    Value: !GetAtt DeployQueue.QueueName
+  DeployQueueArn:
+    Description: Deploy queue ARN (reference for policies and the schedule target).
+    Value: !GetAtt DeployQueue.Arn
+  DeployDlqUrl:
+    Description: Dead-letter queue URL (DLQ inspection runbook step).
+    Value: !Ref DeployDlq
+  ExecutionsTableName:
+    Description: State table name (Executor configuration step).
+    Value: !Ref ExecutionsTable
+  CiRoleArn:
+    Description: CI role ARN (GitHub Environment secret CICD_ROLE_ARN, plan §12).
+    Value: !GetAtt CiRole.Arn
+  ExecutorRoleArn:
+    Description: Executor role ARN (workstation assume-role step, B1).
+    Value: !GetAtt ExecutorRole.Arn
+  OperatorRoleArn:
+    Description: Operator role ARN (operator CLI assume-role step).
+    Value: !GetAtt OperatorRole.Arn
+  SchedulerRoleArn:
+    Description: Scheduler target role ARN (schedulerPrincipalRef resolution step, DD-25).
+    Value: !GetAtt SchedulerRole.Arn
+  CiRoleId:
+    Description: CI role ID (feeds the owner-created allowedSenderRef identifier secret, DD-25).
+    Value: !GetAtt CiRole.RoleId
+  ExecutorRoleId:
+    Description: Executor role ID (feeds the owner-created executorPrincipalRef identifier secret, DD-25).
+    Value: !GetAtt ExecutorRole.RoleId
+  OperatorRoleId:
+    Description: Operator role ID (feeds the owner-created operatorPrincipalRef identifier secret, DD-25).
+    Value: !GetAtt OperatorRole.RoleId
+  SchedulerRoleId:
+    Description: Scheduler role ID (feeds the owner-created schedulerPrincipalRef identifier secret, DD-25).
+    Value: !GetAtt SchedulerRole.RoleId
+  OidcProviderArn:
+    Description: GitHub OIDC provider ARN (created here or the supplied existing one).
+    Value: !If [CreateOidcProvider, !Ref GitHubOidcProvider, !Ref ExistingGitHubOidcProviderArn]
+  CiEcrRepositoryArn:
+    Description: Selected ECR repository ARN the CI role may push to (CI configuration step).
+    Value: !If [CreateProbeRepository, !GetAtt ProbeEcrRepository.Arn, !Ref CiEcrRepositoryArn]
+  ExecutorLogGroupName:
+    Description: Executor log group name (log shipping step in the runbook).
+    Value: !Ref ExecutorLogGroup

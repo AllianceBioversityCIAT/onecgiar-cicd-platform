@@ -34,6 +34,11 @@
 //          found in test/support/dynamodb-local.mjs (T-08, in-flight; not
 //          edited here). Not account/host-specific — a public AWS tooling
 //          endpoint, not a real internal host.
+//        - "sts.amazonaws.com" and "scheduler.amazonaws.com": AWS's own public,
+//          fixed service identifiers (the OIDC audience and the EventBridge
+//          Scheduler service principal), required verbatim in
+//          infra/sam/template.yaml and its contract test. Not account- or
+//          host-specific.
 //
 //   2. PATH_SCOPED_ALLOWLIST: a short list of {path, rules} entries. Each
 //      entry exempts ONLY the named rule categories, and ONLY in the one
@@ -63,6 +68,8 @@ const GLOBAL_LITERAL_ALLOWLIST = new Set([
   "123456789012",
   "AKIAIOSFODNN7EXAMPLE",
   "s3.us-west-2.amazonaws.com",
+  "sts.amazonaws.com",
+  "scheduler.amazonaws.com",
 ]);
 
 const PATH_SCOPED_ALLOWLIST = [
