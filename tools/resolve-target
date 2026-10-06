@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Operator CLI: record a target-state resolution (runbook §12.2). Requires `npm run build` in executor/.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec node "$here/../executor/dist/src/operator-cli/main.js" resolve-target "$@"

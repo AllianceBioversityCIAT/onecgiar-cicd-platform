@@ -319,7 +319,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-11 — Deploy windows: service and operator CLI
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · M · **A** |
+| Status / Size / Gate | **[x] done** · M · **A** |
 | Goal | `deploy-window-service`, `domain/window-policy`, `tools/` CLI for open/close events |
 | Depends on | N-04, N-08 |
 | Requirements / Design | FR-18, FR-24, RL-1 · design §7.7, DD-21 |

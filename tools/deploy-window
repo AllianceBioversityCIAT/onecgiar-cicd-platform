@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Operator CLI: open/close deploy windows (design §4.2, DD-21). Requires `npm run build` in executor/.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec node "$here/../executor/dist/src/operator-cli/main.js" "$@"

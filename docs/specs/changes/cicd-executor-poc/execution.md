@@ -421,3 +421,13 @@
 | Committed snapshot | HEAD + N-09 files: tsc 0, lint, guards PASS, vitest 590 / 37 skipped |
 | Forward pointers | **N-12:** owns the lock-owner half of the §5.1 `lastDeployed` condition (check ownership before `recordDeployed`, or request a transaction builder); assert the companion `Put` is absent when the X9 transaction is cancelled. Editorial (closure spec sync): design §5.1 line still says `highestAccepted` is written in the X1 transaction; tasks N-09/N-10 scope text likewise |
 | Status | **Done** |
+
+### N-11 — Deploy windows: service and operator CLI · done
+
+| Field | Value |
+|---|---|
+| Attempt 1 | Pure `domain/window-policy` (all external deployers covered, ≤ 8 h, `none` ⇔ `not-required`, fail-closed `isDeployAllowed`); `deploy-window-service` (idempotent open/close; `revalidate` V1→X4, V2→X8, V3→X15, V4→X10, fail-fast, never waits); `TargetResolutionService` (Executor-side preconditions; audit before the single conditional `removeUnresolved`; ports cannot write ordering fields or terminal states); operator CLI core in `executor/src/operator-cli` with `tools/deploy-window` and `tools/resolve-target` wrappers. 52 tests. Falsifier (coverage check disabled) → 3 failed. Evidence re-run (Leader): 52/52; Leader falsifier (8 h → 9 h) → 2 failed — **VERIFIED** |
+| Reviewer attempt 1 | **PASS** (`opus`, full) |
+| Committed snapshot | HEAD + N-11 files: tsc 0, lint, guards PASS, vitest 642 / 37 skipped |
+| Forward pointers | **N-17:** real SQS publisher adapter for the operator CLI (today it refuses unless `--dry-run`); pass `senderId` to the resolution handler; adapters for `TargetPolicyLookup`, `UnresolvedStore`, `ExecutionLookup`, `LockOwnerLookup`, `ResolutionAuditWriter`. **N-14:** the reconciler's GSI2 sweep closes expired open windows. Advisory: redelivered resolution after success could return an idempotent `ALREADY_RECORDED`; runbook line "close, then reopen" to extend a window |
+| Status | **Done** |
