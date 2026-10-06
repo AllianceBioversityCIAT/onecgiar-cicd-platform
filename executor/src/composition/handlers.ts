@@ -4,6 +4,7 @@
 // redelivers). Notifications are best effort and never alter the outcome;
 // background work (the delivered-script checksum write) is awaited before the
 // handler resolves so what the operator sees is already persisted.
+import { randomUUID } from "node:crypto";
 import type { MessageHandlers } from "../application/message-router/index.js";
 import type { ExecutionService } from "../application/execution-service/index.js";
 import { rejectionRef } from "../application/execution-service/index.js";
@@ -34,6 +35,8 @@ export interface HandlerDeps {
   readonly metrics: Pick<Metrics, "recordRejectedRequest">;
   readonly logger: Logger;
   readonly pending: PendingTasks;
+  /** Correlation id for internal events that carry no sender-supplied eventId (RECONCILE_TICK, G-8). Defaults to `randomUUID`. */
+  readonly newCorrelationId?: () => string;
 }
 
 /** Wraps the coordinator so each outcome it persisted is announced afterwards (SUPERSEDED, DEPLOY_WINDOW_CLOSED, LOCK_TIMEOUT, DEPLOY_FAILED, UNKNOWN_TARGET_STATE, SUCCEEDED). */
@@ -62,6 +65,7 @@ const roleOf = (senderId: string | undefined): string => (senderId === undefined
 
 export function createMessageHandlers(deps: HandlerDeps): MessageHandlers {
   const { executionService, coordinator, notifier, logger } = deps;
+  const newCorrelationId = deps.newCorrelationId ?? randomUUID;
 
   return {
     async deployRequested(validated) {
@@ -110,6 +114,9 @@ export function createMessageHandlers(deps: HandlerDeps): MessageHandlers {
     },
 
     async reconcileTick() {
+      // G-8: the tick has no external identity; the correlation id is generated here, inside the trusted boundary.
+      // No event mark exists for it: reconcile is idempotent by design (DD-13), so a redelivered or duplicated tick is harmless.
+      logger.info("RECONCILE_TICK consumed", { correlationId: newCorrelationId() });
       await deps.reconciler.reconcile();
       await deps.pending.idle();
     },

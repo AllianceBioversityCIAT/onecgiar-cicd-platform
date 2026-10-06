@@ -177,7 +177,7 @@ describe.skipIf(!dynamoDbLocalAvailable())("composition root on DynamoDB Local (
     const later = { now: () => new Date(Date.now() + 10 * 60_000) };
     const second = await boot(later, table);
     const tick = await second.executor.handle(
-      message("tick-1", { specVersion: 1, eventId: randomUUID(), eventType: "RECONCILE_TICK", timestamp: later.now().toISOString(), source: "scheduler" }, `${SCHEDULER_ROLE}:s`),
+      message("tick-1", { specVersion: 1, eventType: "RECONCILE_TICK", timestamp: later.now().toISOString(), source: "scheduler" }, `${SCHEDULER_ROLE}:s`),
     );
     expect(tick.ack).toBe(true);
     await second.queue.drain(second.executor.handle);
@@ -205,7 +205,7 @@ describe.skipIf(!dynamoDbLocalAvailable())("composition root on DynamoDB Local (
     const later = { now: () => new Date(Date.now() + 31 * 60_000) }; // beyond the 1,800 s budget
     const second = await boot(later, table);
     await second.executor.handle(
-      message("tick-lt", { specVersion: 1, eventId: randomUUID(), eventType: "RECONCILE_TICK", timestamp: later.now().toISOString(), source: "scheduler" }, `${SCHEDULER_ROLE}:s`),
+      message("tick-lt", { specVersion: 1, eventType: "RECONCILE_TICK", timestamp: later.now().toISOString(), source: "scheduler" }, `${SCHEDULER_ROLE}:s`),
     );
     const item = await new ExecutionRepository(second.client, table).get(executionId);
     expect(item).toMatchObject({ status: "FAILED", error: { code: "LOCK_TIMEOUT" } });

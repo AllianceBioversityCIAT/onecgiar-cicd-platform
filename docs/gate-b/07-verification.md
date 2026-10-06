@@ -92,14 +92,14 @@ Expected: an `assumed-role/<OPERATOR_ROLE_NAME>/...` ARN. Equivalent explicit fo
 | Secrets exist | `describe-secret` per ref ([02](02-secrets.md)) | All present |
 | Startup | Executor console ([05](05-run-executor-node22.md)) | `executor started` with the right `deployments` count; no refusal |
 | Heartbeat | Console heartbeat lines; the healthcheck file's timestamp | Updated about every minute. The CloudWatch heartbeat metric has **no data** in this run (EMF not shipped); do not treat the alarm state as a failure |
-| Scheduler-originated `RECONCILE_TICK` consumed | | **BLOCKED by G-8.** The schedule stays DISABLED; do not enable it. Record as not executed |
+| Scheduler-originated `RECONCILE_TICK` consumed | **Checkpoint.** Only when the Executor is running ([05](05-run-executor-node22.md)) and you decide to enable the schedule. In your local `executor/.local/gate-b/samconfig.toml`, change `ReconcileScheduleState=DISABLED` to `ReconcileScheduleState=ENABLED` in `parameter_overrides` (keep every other value), then run the checkpoint D deploy command of [01](01-aws-sam.md) unchanged. The changeset must show only `Modify` on `ReconcileSchedule`; answer `n` otherwise. Wait at least 5 minutes. To stop ticks, set it back to `DISABLED` in the same file and redeploy the same way | Executor console shows the line `RECONCILE_TICK consumed` (with a generated `correlationId`) about every 5 minutes; `aws scheduler get-schedule --name cicd-reconcile-dev --query State --output text` prints `ENABLED`; the DLQ stays empty. G-8 is resolved: the tick carries no `eventId` |
 | Negative: the Executor role cannot read an application secret | `aws secretsmanager get-secret-value --secret-id <APPLICATION_SECRET_NAME> --profile <EXECUTOR_PROFILE_NAME>` and `aws ecr describe-repositories --profile <EXECUTOR_PROFILE_NAME>` | `AccessDeniedException` for both |
 
 ## B2. GitHub OIDC to SQS to the local Executor
 
 | Evidence | How | Expected |
 |---|---|---|
-| Public-safe workflow log | [03](03-github.md), section 8 | No account id, registry host or queue URL visible |
+| Public-safe workflow log | [03](03-github.md), section 8 | No credential-like value; the role ARN and account id are expected (G-10); masking of the registry host and queue URL is hygiene only |
 | Request accepted | Executor console, then the dedupe and execution `get-item` | The log shows the message acknowledged; the execution exists and `status` first `QUEUED` |
 | Sender identity (P-A4) | `senderRef` on the execution item | The CI role id (stack output `CiRoleId`), without a session suffix (the Executor stores the role-id part only); record the observed form |
 | Window closed outcome | Execution item (target registry has `deployWindowPolicy: required` and no window is open) | `status` `FAILED` with `DEPLOY_WINDOW_CLOSED`; no SSH connection was made |
@@ -115,7 +115,7 @@ Common setup: the target has `deployWindowPolicy: required` and **no window open
 |---|---|---|
 | Re-run of the same run | In GitHub, **Re-run all jobs** on a finished run | A GitHub re-run increments the run attempt, so the request id is `<RUN_ID>-<NEXT_ATTEMPT>`: a **new** dedupe key and a new execution with the **same** `runNumber` (equal order is not older). It is not `SUPERSEDED`. A true duplicate (the same request id delivered twice) is logged as `duplicate DEPLOY_REQUESTED ignored` and creates no second execution; you cannot force it from outside (the queue accepts requests only from the CI role). Record what you observe |
 | Older build after a newer one | Run the workflow twice (run N, then run N+1) and wait until N+1 is accepted; then **Re-run all jobs** on run N | The re-run of N has a lower order than `highestAccepted` on `TARGET#<LOCK_KEY>`: its execution is `SUPERSEDED`. Read the target state item to see `highestAccepted` |
-| Reconciler activity | | **BLOCKED by G-8** (the schedule must stay DISABLED). Record as not executed |
+| Reconciler activity | Requires the schedule enabled as in the checkpoint above | `RECONCILE_TICK consumed` lines appear and the reconciler acts on overdue executions; record what you observe. If you did not enable the schedule, record as not executed |
 | Poison message to the DLQ | Below | Message lands in the DLQ after 5 receives; the DLQ alarm fires |
 
 ### Wrong sender (negative; send as the operator role)

@@ -58,23 +58,28 @@ export interface DeployRequest {
 
 interface InternalEventEnvelope {
   readonly specVersion: 1;
-  readonly eventId: string;
   readonly timestamp: string;
 }
 
-export interface LockRetryRequestedEvent extends InternalEventEnvelope {
+/** Envelope of the events whose sender supplies a UUID `eventId` (every internal type except RECONCILE_TICK, G-8). */
+interface IdentifiedEventEnvelope extends InternalEventEnvelope {
+  readonly eventId: string;
+}
+
+export interface LockRetryRequestedEvent extends IdentifiedEventEnvelope {
   readonly eventType: "LOCK_RETRY_REQUESTED";
   readonly source: "executor";
   readonly executionId: string;
   readonly attempt: number;
 }
 
+/** G-8: minimal contract; no `eventId` from the sender (the Executor generates its correlation id). */
 export interface ReconcileTickEvent extends InternalEventEnvelope {
   readonly eventType: "RECONCILE_TICK";
   readonly source: "scheduler";
 }
 
-export interface DeployWindowOpenRequestedEvent extends InternalEventEnvelope {
+export interface DeployWindowOpenRequestedEvent extends IdentifiedEventEnvelope {
   readonly eventType: "DEPLOY_WINDOW_OPEN_REQUESTED";
   readonly source: "operator";
   readonly lockKey: string;
@@ -84,7 +89,7 @@ export interface DeployWindowOpenRequestedEvent extends InternalEventEnvelope {
   readonly note?: string;
 }
 
-export interface DeployWindowCloseRequestedEvent extends InternalEventEnvelope {
+export interface DeployWindowCloseRequestedEvent extends IdentifiedEventEnvelope {
   readonly eventType: "DEPLOY_WINDOW_CLOSE_REQUESTED";
   readonly source: "operator";
   readonly lockKey: string;
@@ -92,7 +97,7 @@ export interface DeployWindowCloseRequestedEvent extends InternalEventEnvelope {
   readonly note?: string;
 }
 
-export interface TargetResolutionRecordedEvent extends InternalEventEnvelope {
+export interface TargetResolutionRecordedEvent extends IdentifiedEventEnvelope {
   readonly eventType: "TARGET_RESOLUTION_RECORDED";
   readonly source: "operator";
   readonly lockKey: string;

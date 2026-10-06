@@ -18,7 +18,7 @@ const fixtures: Record<string, Record<string, unknown>> = {
     source: "executor", executionId: "prms-reporting-dev-184", attempt: 2,
   },
   RECONCILE_TICK: {
-    ...envelope, eventId: "8f14e45f-ceea-4d1a-9e65-fa93b3b0b7f2", eventType: "RECONCILE_TICK", source: "scheduler",
+    ...envelope, eventType: "RECONCILE_TICK", source: "scheduler", // G-8: no eventId
   },
   DEPLOY_WINDOW_OPEN_REQUESTED: {
     ...envelope, eventId: "8f14e45f-ceea-4d1a-9e65-fa93b3b0b7f3", eventType: "DEPLOY_WINDOW_OPEN_REQUESTED",
@@ -66,7 +66,13 @@ describe("schemas/event.schema.json (FR-04, internal types)", () => {
     ["window close carrying closesAt", "DEPLOY_WINDOW_CLOSE_REQUESTED", (e) => { e.closesAt = "2026-10-05T14:00:00Z"; }, " unevaluatedProperties closesAt"],
     ["window close carrying openedBy", "DEPLOY_WINDOW_CLOSE_REQUESTED", (e) => { e.openedBy = "operator-1"; }, " unevaluatedProperties openedBy"],
     ["resolution carrying attempt", "TARGET_RESOLUTION_RECORDED", (e) => { e.attempt = 1; }, " unevaluatedProperties attempt"],
-    ["a non-UUID eventId", "RECONCILE_TICK", (e) => { e.eventId = "nope"; }, "/eventId format"],
+    ["a non-UUID eventId", "LOCK_RETRY_REQUESTED", (e) => { e.eventId = "nope"; }, "/eventId format"],
+    ["RECONCILE_TICK carrying an eventId (G-8: not accepted from the sender)", "RECONCILE_TICK", (e) => { e.eventId = "8f14e45f-ceea-4d1a-9e65-fa93b3b0b7f2"; }, "/eventId false schema"],
+    ["RECONCILE_TICK without timestamp", "RECONCILE_TICK", (e) => { delete e.timestamp; }, " required timestamp"],
+    ["LOCK_RETRY_REQUESTED without eventId", "LOCK_RETRY_REQUESTED", (e) => { delete e.eventId; }, " required eventId"],
+    ["window open without eventId", "DEPLOY_WINDOW_OPEN_REQUESTED", (e) => { delete e.eventId; }, " required eventId"],
+    ["window close without eventId", "DEPLOY_WINDOW_CLOSE_REQUESTED", (e) => { delete e.eventId; }, " required eventId"],
+    ["resolution without eventId", "TARGET_RESOLUTION_RECORDED", (e) => { delete e.eventId; }, " required eventId"],
     ["RECONCILE_TICK from an operator", "RECONCILE_TICK", (e) => { e.source = "operator"; }, "/source const"],
     ["LOCK_RETRY_REQUESTED without executionId", "LOCK_RETRY_REQUESTED", (e) => { delete e.executionId; }, " required executionId"],
     ["LOCK_RETRY_REQUESTED without attempt", "LOCK_RETRY_REQUESTED", (e) => { delete e.attempt; }, " required attempt"],

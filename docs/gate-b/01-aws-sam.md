@@ -22,7 +22,7 @@ Run everything from the repository root. Use your admin profile for AWS commands
 | `CiEcrRepositoryArn` / `CreateProbeEcrRepository` | Either your own repository ARN, or `CreateProbeEcrRepository=true` (creates `cicd-poc-dev-probe`, immutable tags). One repository only (known limitation) |
 | `ExecutorTrustedPrincipalArn`, `OperatorTrustedPrincipalArn` | IAM user or role ARNs **in the same account** that you will assume from (documented, not enforced). The Executor profile in [05](05-run-executor-node22.md) must run as the principal you put here. If you use an SSO permission-set role, the assumed-role session ARN differs from the role ARN; if an assume-role is denied later, share the error before changing anything |
 | `SecretIdPrefix` | e.g. `cicd-poc/dev/` (must end with `/`). Must equal the Executor setting `CICD_SECRET_ID_PREFIX` ([02](02-secrets.md)) |
-| `ReconcileScheduleState` | **`DISABLED`. Do not change it.** Blocked until spec gap G-8 is decided (the Scheduler event id is not a UUID, so every tick would be rejected and land in the DLQ) |
+| `ReconcileScheduleState` | **`DISABLED`** for this deploy. G-8 is resolved (owner decision 2026-10-06: minimal `RECONCILE_TICK` contract, the Executor generates its own correlation id), but you enable the schedule deliberately in B1, after the Executor is running (see [07](07-verification.md)) |
 | `AlarmTopicArn`, `EnablePointInTimeRecovery` | Optional |
 
 Reference: [`../../infra/sam/parameters.example.json`](../../infra/sam/parameters.example.json) lists every parameter.
@@ -123,7 +123,7 @@ Expected: 16 rows, including `DeployQueueUrl`, `DeployQueueName`, `DeployQueueAr
 | `DeployQueueUrl`, `ExecutionsTableName` | `executor.env` ([05](05-run-executor-node22.md)) and the AWS CLI checks ([07](07-verification.md)) |
 | `ExecutorRoleArn` | `role_arn` of the Executor profile ([05](05-run-executor-node22.md)) |
 | `OperatorRoleArn` | `role_arn` of the operator profile ([07](07-verification.md)) |
-| `CiRoleArn` | GitHub Environment **secret** `CICD_ROLE_ARN` ([03](03-github.md)) |
+| `CiRoleArn` | GitHub Environment **variable** `CICD_ROLE_ARN` ([03](03-github.md)) |
 | `DeployQueueName` | GitHub Environment variable `CICD_DEPLOY_QUEUE_NAME` |
 | `CiEcrRepositoryArn` | The repository **name** (last path segment) becomes `CICD_ECR_REPOSITORY` |
 | `CiRoleId`, `ExecutorRoleId`, `OperatorRoleId`, `SchedulerRoleId` | Contents of the identifier secrets ([02](02-secrets.md)). Role IDs, not ARNs |
@@ -153,7 +153,7 @@ Also confirm the schedule is disabled:
 aws scheduler get-schedule --name cicd-reconcile-dev --query State --output text --profile <AWS_PROFILE_ADMIN> --region <AWS_REGION>
 ```
 
-Expected: `DISABLED`. **Do not enable it** (blocked until G-8 is decided).
+Expected: `DISABLED`. Leave it disabled in this step: you enable it in B1 only after the Executor is running (set `ReconcileScheduleState=ENABLED` in your local samconfig `parameter_overrides` and redeploy, see [07](07-verification.md)).
 
 ## Why `resolve_s3` stays
 

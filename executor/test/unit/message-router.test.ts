@@ -48,7 +48,7 @@ const internalEvents: Record<string, { event: Record<string, unknown>; handler: 
   RECONCILE_TICK: {
     handler: "reconcileTick",
     event: {
-      specVersion: 1, eventId: "8f14e45f-ceea-4d1a-9e65-fa93b3b0b7f2", eventType: "RECONCILE_TICK",
+      specVersion: 1, eventType: "RECONCILE_TICK",
       timestamp: "2026-10-05T12:00:00Z", source: "scheduler",
     },
   },
@@ -312,6 +312,16 @@ describe("message-router: eventType routing", () => {
 
     expect(result).toEqual({ ack: true, outcome: "UNAUTHORIZED", eventType: "RECONCILE_TICK" });
     expect(h.calls).toEqual([{ handler: "unauthorizedInternalEvent", arg: { eventType: "RECONCILE_TICK", senderId: "ROLE_ID_X:s" } }]);
+  });
+
+  it("a RECONCILE_TICK carrying an eventId is schema-invalid: the sender does not supply the correlation id (G-8)", async () => {
+    const h = harness();
+    const result = await routeMessage(
+      { body: body({ ...internalEvents["RECONCILE_TICK"]!.event, eventId: "8f14e45f-ceea-4d1a-9e65-fa93b3b0b7f2" }), senderId: "ROLE_ID_2:session" },
+      h.deps,
+    );
+
+    expect(result).toMatchObject({ ack: false, reason: "INVALID_INTERNAL_EVENT" });
   });
 
   it("an event type that does not match its sender class in the body is schema-invalid (RECONCILE_TICK claiming operator)", async () => {

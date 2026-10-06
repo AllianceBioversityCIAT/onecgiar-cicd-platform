@@ -87,7 +87,7 @@ Parameters:
     Type: String
     Default: DISABLED
     AllowedValues: [ENABLED, DISABLED]
-    Description: State of the RECONCILE_TICK schedule. Keep DISABLED until spec gap G-8 is resolved (the Scheduler execution id is not a UUID, so ticks would be rejected and land in the DLQ).
+    Description: State of the RECONCILE_TICK schedule. G-8 is resolved (minimal RECONCILE_TICK contract, owner decision 2026-10-06); the schedule is created DISABLED and the owner enables it deliberately in B1, once the Executor is running, by redeploying with ENABLED.
   AlarmTopicArn:
     Type: String
     Default: ""
@@ -416,14 +416,12 @@ Resources:
           Value: cicd-poc
 
   # ---------------------------------------------------------------- Reconcile schedule (DD-13)
-  # Input follows the RECONCILE_TICK envelope of schemas/event.schema.json; the Scheduler context
-  # attributes supply eventId (execution id) and timestamp (scheduled time, ISO 8601), but eventId
-  # does not satisfy the schema (see G-8 below).
-  # SPEC GAP G-8 (owner decision pending): the Scheduler execution id is NOT a UUID (the AWS
-  # documentation example looks like d32c5kddcf5bb8c3), while the event schema requires
-  # eventId format uuid, so the current schema rejects these ticks (INVALID_INTERNAL_EVENT).
-  # The schedule MUST stay DISABLED (the default) until the owner resolves G-8 (a schema or
-  # design change, or another UUID source).
+  # Input is the minimal RECONCILE_TICK contract of schemas/event.schema.json: specVersion, eventType,
+  # source and timestamp (the Scheduler context attribute for the scheduled time, ISO 8601). It carries
+  # NO eventId: G-8 is resolved by owner decision 2026-10-06 (minimal internal contract; the Scheduler
+  # cannot produce a UUID, so the Executor generates the correlation id itself).
+  # The schedule stays DISABLED by default; the owner enables it deliberately in B1 (after the Executor
+  # is running and locally validated) with a deploy that sets ReconcileScheduleState=ENABLED.
   ReconcileSchedule:
     Type: AWS::Scheduler::Schedule
     Properties:
@@ -436,7 +434,7 @@ Resources:
       Target:
         Arn: !GetAtt DeployQueue.Arn
         RoleArn: !GetAtt SchedulerRole.Arn
-        Input: '{"specVersion":1,"eventId":"<aws.scheduler.execution-id>","eventType":"RECONCILE_TICK","timestamp":"<aws.scheduler.scheduled-time>","source":"scheduler"}'
+        Input: '{"specVersion":1,"eventType":"RECONCILE_TICK","source":"scheduler","timestamp":"<aws.scheduler.scheduled-time>"}'
 
   # ---------------------------------------------------------------- Logs
   ExecutorLogGroup:
@@ -581,7 +579,7 @@ Outputs:
     Description: State table name (Executor configuration step).
     Value: !Ref ExecutionsTable
   CiRoleArn:
-    Description: CI role ARN (GitHub Environment secret CICD_ROLE_ARN, plan §12).
+    Description: CI role ARN (GitHub Environment variable CICD_ROLE_ARN, plan §12; not a secret, G-10).
     Value: !GetAtt CiRole.Arn
   ExecutorRoleArn:
     Description: Executor role ARN (workstation assume-role step, B1).

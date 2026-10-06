@@ -391,33 +391,26 @@ describe("reconcile schedule (DD-13)", () => {
     expect(target().RoleArn).toEqual(getAttArn("SchedulerRole"));
   });
 
-  const substitute = (executionId: string): Record<string, unknown> =>
-    JSON.parse(
-      (target().Input as string)
-        .replace("<aws.scheduler.execution-id>", executionId)
-        .replace("<aws.scheduler.scheduled-time>", "2026-10-06T12:00:00Z"),
-    ) as Record<string, unknown>;
+  // The only placeholder is the Scheduler scheduled time; 2026-10-06T12:05:00Z is a real-format value.
+  const sample = (): Record<string, unknown> =>
+    JSON.parse((target().Input as string).replace("<aws.scheduler.scheduled-time>", "2026-10-06T12:05:00Z")) as Record<string, unknown>;
 
-  it("uses the Scheduler context attributes for eventId and timestamp", () => {
+  it("uses the Scheduler context attribute for the timestamp only", () => {
     const raw = target().Input as string;
-    expect(raw).toContain("<aws.scheduler.execution-id>");
     expect(raw).toContain("<aws.scheduler.scheduled-time>");
-    expect(substitute("x").eventType).toBe("RECONCILE_TICK");
+    expect(raw).not.toContain("<aws.scheduler.execution-id>");
+    expect(sample().eventType).toBe("RECONCILE_TICK");
   });
 
-  it("every field of the Input other than eventId is valid (a UUID is substituted ONLY to isolate eventId)", () => {
-    const sample = substitute("8f14e45f-ceea-4d1a-9e65-fa93b3b0b7f2");
-    expect(validate(sample), JSON.stringify(validate.errors)).toBe(true);
+  it("the Input carries no eventId (G-8: the Executor generates its own correlation id)", () => {
+    expect(Object.keys(sample())).not.toContain("eventId");
   });
 
-  it("spec gap G-8: the Scheduler execution id is not a UUID, so the tick is rejected by the current schema", () => {
-    // d32c5kddcf5bb8c3 is the documented real-format Scheduler execution id.
-    const sample = substitute("d32c5kddcf5bb8c3");
-    expect(validate(sample)).toBe(false);
-    expect((validate.errors ?? []).some((e) => e.instancePath === "/eventId" && e.keyword === "format")).toBe(true);
+  it("the Input validates against the event schema with no substitution of any id (G-8 resolved)", () => {
+    expect(validate(sample()), JSON.stringify(validate.errors)).toBe(true);
   });
 
-  it("the schedule defaults to DISABLED until G-8 is resolved", () => {
+  it("the schedule defaults to DISABLED until the owner enables it in B1", () => {
     expect(template.Parameters.ReconcileScheduleState!.Default).toBe("DISABLED");
   });
 });
