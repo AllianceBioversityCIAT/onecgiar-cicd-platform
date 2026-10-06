@@ -37,6 +37,15 @@ function infoFor(deploymentId: string): DeploymentInfo {
 
 const catalog: DeploymentCatalog = { getDeployment: async (deploymentId) => infoFor(deploymentId) };
 
+/** Name, code and message of an unexpected rejection, so a failure shows WHAT was thrown instead of a bare count mismatch. */
+function describeError(reason: unknown): string {
+  if (reason instanceof Error) {
+    const code = (reason as { code?: unknown }).code;
+    return `${reason.name}${code === undefined ? "" : ` [${String(code)}]`}: ${reason.message}`;
+  }
+  return String(reason);
+}
+
 function uniqueDeploymentId(): string {
   return `d-${randomUUID().slice(0, 18)}`;
 }
@@ -113,6 +122,9 @@ describe.skipIf(!dynamoDbLocalAvailable())("execution-service (DynamoDB Local)",
       const created = settled.filter((s) => s.status === "fulfilled" && s.value.outcome === "CREATED");
       const duplicates = settled.filter((s) => s.status === "fulfilled" && s.value.outcome === "DUPLICATE");
       const busy = settled.filter((s) => s.status === "rejected" && s.reason instanceof ClaimInProgressError);
+      // Name the offender: a rejection that is not ClaimInProgressError is an infrastructure error or a service bug, never a race outcome.
+      const unexpected = settled.flatMap((s) => (s.status === "rejected" && !(s.reason instanceof ClaimInProgressError) ? [describeError(s.reason)] : []));
+      expect(unexpected, `rep ${String(rep)}: contenders rejected with an error that is neither a CREATED/DUPLICATE outcome nor ClaimInProgressError`).toEqual([]);
       expect(created, `rep ${String(rep)}: exactly one winner`).toHaveLength(1);
       expect(created.length + duplicates.length + busy.length, `rep ${String(rep)}: no other outcome or error`).toBe(CONTENDERS);
 

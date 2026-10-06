@@ -44,6 +44,7 @@ The operator CLI issues `DEPLOY_WINDOW_OPEN_REQUESTED` and `DEPLOY_WINDOW_CLOSE_
 | Open | Supply `openedBy` and an `externalJobsDisabled[]` that **covers every** `externalDeployers` entry declared for that target in the registry. A partial list is rejected (design §7.7's coverage rule) |
 | Before opening | Announce the window to the owning application team; confirm in Jenkins that none of the jobs in `externalJobsDisabled[]` have a build in progress; disable those jobs ("Disable Project", reversible, no Jenkinsfile change — proposal §12) |
 | Duration | Maximum 8 h; the reconciler auto-closes it on expiry via the GSI2 index (design §7.7) |
+| Extend | There is no extend operation: **close the window, then open a new one** (same coverage rule; each window is at most 8 h) |
 | Close | On request, or automatically at `closesAt`. Re-enable the Jenkins jobs and record the window in `docs/jenkins-coexistence-log.md` (who, when, jobs, executions, migration state before/after, DB snapshot taken, incidents) |
 | Revalidation | The window is re-checked at four points during a deploy attempt (V1–V4, design §7.7). If it has closed, the execution fails with `DEPLOY_WINDOW_CLOSED` **without ever opening SSH** |
 | If the window closes mid-script | The running script is **not** interrupted (killing a migration mid-flight is worse). `windowClosedDuringRun` is recorded and a notification sent; close the window manually afterward if the reconciler has not yet |
@@ -56,10 +57,11 @@ Given only an `executionId` (no access to Jenkins is needed or used):
    requested it (`senderRef`), the commit (`commitSha`), the digests (`artifacts`), the
    definition (`definitionRef`) and `scriptChecksum`, the order (`order`), the GitHub run link
    (`ci.runUrl`), `status`, `result`/`error`, `lockLostDuringRun`, `targetWriteRejected`,
-   `windowClosedDuringRun` and timestamps. There are no step items in Model B.
+   `windowClosedDuringRun`, `cicdResultMissing` and timestamps. There are no step items in Model B.
 2. **CloudWatch Logs**: every entry carries `executionId`, `requestId` and `deploymentId`. Use
    the saved "execution timeline" Logs Insights query, or filter directly, for the ordered
-   sequence and exact durations (`LockWaitMs`, `DispatchLatencyMs`, `DeployDurationMs`).
+   sequence; derive durations from the entry timestamps (the `LockWaitMs` and `DispatchLatencyMs`
+   recorders exist but are not emitted yet, and `DeployDurationMs` is not implemented; design §12).
 3. **Slack**: the root message and its thread give a human-readable timeline with the GitHub
    run link.
 4. Open the GitHub run (`ci.runUrl`) only to see how the images were built and pushed.
@@ -127,8 +129,9 @@ in design §7.6 would predict), check:
    reasonable margin, escalate — this would indicate a defect in the lock-acquisition path,
    not an operator fix.
 
-An execution past its deadline raises the `ExecutionsPastDeadline` alarm (once wired, see
-`infra/RESOURCES.md` **Alarms**): the reconciler re-drives overdue `QUEUED` and `WAITING_LOCK`
+An execution past its deadline raises the `ExecutionsPastDeadline` alarm (the reconciler emits
+the metric on every tick, 0 included; the alarm itself is configured per `infra/RESOURCES.md`
+**Alarms**): the reconciler re-drives overdue `QUEUED` and `WAITING_LOCK`
 executions (design §7.1); anything else needs the checks above.
 
 ## 12.1 Stale local mutex on the target (design §12.1, kept)
@@ -163,6 +166,14 @@ design §7.3). Newer requests may proceed; the target mutex and the script's "re
 running image" keep them safe. The unresolved entry stays in `unresolved[]` on
 `TARGET#{lockKey}` until it is cleared by step 6 below.
 
+**`TARGET.currentImages` may lag `lastDeployed`:** when an execution carries
+`cicdResultMissing` (the script exited 0/10/20/30/40 but no `CICD_RESULT` line was parsed), the
+Executor still writes `lastDeployed` but leaves `currentImages`/`previousImages` untouched rather
+than guess them (design §5.1). Trust the digests observed on the target (step 3), not
+`currentImages`, for that `lockKey` until a later deploy with a parsed `CICD_RESULT` rewrites them.
+A `previousImages` value of the form `unresolved:sha256:<id>` is an image ID (the running
+container had no matching repository digest), never a digest of the repository.
+
 | Step | Operator action | Evidence recorded |
 |---|---|---|
 | 1 | From the notification, read `executionId`, `lockKey`, `execStartedAt`, `lockLostDuringRun`, `targetWriteRejected` | DynamoDB execution item |
@@ -170,17 +181,29 @@ running image" keep them safe. The unresolved entry stays in `unresolved[]` on
 | 3 | On the target, list the digest each unit's container is running and compare with the execution's `artifacts` and the previous digests | Digests (logical names only in Git) |
 | 4 | If a migration may have run, check migration state read-only (`migration:check:ci`) and escalate to the application team on any doubt | Migration state |
 | 5 | Decide: target healthy on the new digests, healthy on the previous ones, or broken. If broken: re-run the **newest** workflow (a newer-or-equal deploy; the script restores automatically on start/health failure, FR-13) or escalate. **Deploying an older digest on purpose, or resetting the order state, is OD-A8: open, and not available in the PoC** | Decision and actor |
-| 6 | Record the resolution with the operator CLI: `tools/ resolve-target --lock-key <k> --execution-id <id> --observed <unit>=<digest>…`. It sends `TARGET_RESOLUTION_RECORDED` | `LOG#` audit entry; coexistence log line |
+| 6 | Record the resolution with the operator CLI: `tools/resolve-target --lock-key <k> --execution-id <id> --observed <unit>=<digest>…`. It sends `TARGET_RESOLUTION_RECORDED` | `LOG#RESOLUTION#{eventId}` audit entry; coexistence log line |
 
 Step 6 details (design §12.2):
 
 - **Who:** the operator principal only (DD-25 per-type binding); any other sender is `REJECTED`.
 - **Preconditions** (checked by the Executor): the execution is `UNKNOWN_TARGET_STATE` and is
   listed in `unresolved[]`; the `lockKey` has no live lock owner.
-- **Effect:** removes that entry (conditional write) and writes an audit `LOG#` item (actor =
-  `SenderId` role plus `resolvedBy`, time, observed digests).
+- **Effect:** writes an audit item `TARGET#{lockKey}` / `LOG#RESOLUTION#{eventId}` (actor =
+  `SenderId` role plus `resolvedBy`, time, observed digests; idempotent per event), then removes
+  that entry (conditional write). A crash between the two leaves the audit item without the
+  removal, never the reverse: re-send the resolution.
 - **It never edits** `lastDeployed`, `highestDispatched`, `highestAccepted` or any terminal
   state. Resetting order is OD-A8 and does not exist in the PoC.
+
+### Exit 50 followed by a lost cleanup
+
+If the SSH session drops after the script returned exit 50 (`TARGET_BUSY`) and before the
+Executor removed `/tmp/cicd-{executionId}/` on the target, the next attempt of that execution
+finds the directory already present. The Executor refuses any pre-existing directory (design
+§5.2), so that attempt ends `FAILED (SSH_CONNECT)` (X11): terminal, visible, and nothing was
+executed. **Recover with a new request** (re-run or dispatch the newest workflow); the new
+execution gets a new `executionId` and therefore a fresh directory. Never retry the old
+execution by hand.
 
 ## Rollback
 

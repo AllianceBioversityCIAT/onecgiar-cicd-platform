@@ -2,152 +2,152 @@
 
 ## Document Control
 
-| Campo | Valor |
+| Field | Value |
 |---|---|
 | Spec Path | `changes/cicd-executor-poc` |
-| Alcance autorizado | **Gate A únicamente (T-00 a T-22)**. Aprobado por el owner (CI/CD Platform Team) el 2026-10-05. Detenerse tras T-22 |
-| Repositorio | `https://github.com/AllianceBioversityCIAT/onecgiar-cicd-platform.git`. Commits y push autorizados para Gate A |
+| Authorized scope | **Gate A only (T-00 to T-22)**. Approved by the owner (CI/CD Platform Team) on 2026-10-05. Stop after T-22 |
+| Repository | `https://github.com/AllianceBioversityCIAT/onecgiar-cicd-platform.git`. Commits and push authorized for Gate A |
 | Approval Mode | `gated` |
-| Triad | Leader `opus` (T1) · Implementer `sonnet` (T2) · Reviewer `opus` (T3) en un contexto independiente (author ≠ auditor) |
-| Personas | `.agents/` creadas por la **constitución mínima** aprobada por el owner (2026-10-05): `CLAUDE.md`, `AGENTS.md`, `.agents/{leader,implementer,reviewer}.md`. Sin wrappers de Step 8E: los subagentes se lanzan con la persona por referencia |
-| Entorno | Node 20.19.5, npm 10.8.2, Java 17 (DynamoDB Local y ElasticMQ). **El daemon de Docker no estaba disponible** al empezar; el owner decidió arrancarlo él. T-01 y T-14 completan sus verificaciones con Docker cuando el daemon responda |
-| Budget (design §13) | 37 tareas · ~8.700 LOC · ~50 rondas de review. Gate A: 23 tareas, ~7.900 LOC |
+| Triad | Leader `opus` (T1) · Implementer `sonnet` (T2) · Reviewer `opus` (T3) in an independent context (author ≠ auditor) |
+| Personas | `.agents/` created by the **minimal constitution** approved by the owner (2026-10-05): `CLAUDE.md`, `AGENTS.md`, `.agents/{leader,implementer,reviewer}.md`. No Step 8E wrappers: subagents are launched with the persona by reference |
+| Environment | Node 20.19.5, npm 10.8.2, Java 17 (DynamoDB Local and ElasticMQ). **The Docker daemon was not available** at the start; the owner decided to start it himself. T-01 and T-14 complete their verifications with Docker once the daemon responds |
+| Budget (design §13) | 37 tasks · ~8,700 LOC · ~50 review rounds. Gate A: 23 tasks, ~7,900 LOC |
 
 ## Task Execution History
 
-### T-00 — Vincular el workspace al repositorio canónico y excluir el análisis local · **PASS**
+### T-00 — Link the workspace to the canonical repository and exclude the local analysis · **PASS**
 
-| Campo | Valor |
+| Field | Value |
 |---|---|
-| Fecha | 2026-10-05 |
-| Intentos | 1 |
-| Archivos | `.gitignore` (nuevo), `.git/` (init + `origin` + `main` siguiendo `origin/main`), `LICENSE` (traído del remoto, sin editar) |
-| Verificación (Implementer) | `git status --porcelain` sin los archivos `JENKINS_REPLACEMENT_*`; `git ls-files \| grep -c JENKINS_REPLACEMENT_` = 0; `git check-ignore` → `.gitignore:2` y `:3`; ambos archivos siguen en disco; HEAD `41f4c3e` |
-| Red run | Antes del `.gitignore`: ambos `JENKINS_REPLACEMENT_*` aparecían como `??` |
-| Falsifier | Quitar la línea `..._AKILI_CONTEXT.md` → reaparece `?? JENKINS_REPLACEMENT_AKILI_CONTEXT.md`; revertido |
-| Re-run de evidencia | **VERIFIED** (Leader inline): mismas salidas |
-| Reviewer | **PASS** (`opus`, contexto independiente). Override (f), superficie de seguridad, aplicado |
-| ADVISORY | (1) Registrar P-26 → hecho; (2) `safe.directory` global → informado al owner; (3) `.env.*` ignora `.env.example`: añadir `!.env.example` si una tarea lo crea; (4) `.local/` y `.codegraph/` ignorados, ninguna tarea debe versionar ahí |
-| Requisitos | NFR-02, NFR-10 · design §4.1, §4.2 |
-| Decisiones | **Edición de spec en ejecución:** design §11, fila P-26 → verificada (`git ls-tree -r --name-only origin/main` → `LICENSE`, `41f4c3e`) y línea de conteo → 4 verificadas / 23 `UNVERIFIED` (Low 13). No cambia el significado de ningún requisito |
-| Decisión del Leader | Se añade `.gitattributes` (`* text=auto eol=lf`, `*.sh eol=lf`) porque la configuración global usa `autocrlf` y el script de deploy debe tener LF para correr en Linux. Es higiene del repo y no amplía el alcance funcional |
-| Desviación | El Implementer añadió `git config --global --add safe.directory D:/executor_component` porque Git no operaba por un desajuste de propietario en Windows. Es una configuración de máquina, fuera del repo. Revertible con `git config --global --unset safe.directory D:/executor_component` |
+| Date | 2026-10-05 |
+| Attempts | 1 |
+| Files | `.gitignore` (new), `.git/` (init + `origin` + `main` tracking `origin/main`), `LICENSE` (fetched from the remote, unedited) |
+| Verification (Implementer) | `git status --porcelain` without the `JENKINS_REPLACEMENT_*` files; `git ls-files \| grep -c JENKINS_REPLACEMENT_` = 0; `git check-ignore` → `.gitignore:2` and `:3`; both files still on disk; HEAD `41f4c3e` |
+| Red run | Before the `.gitignore`: both `JENKINS_REPLACEMENT_*` files appeared as `??` |
+| Falsifier | Removing the `..._AKILI_CONTEXT.md` line → `?? JENKINS_REPLACEMENT_AKILI_CONTEXT.md` reappears; reverted |
+| Evidence re-run | **VERIFIED** (Leader inline): same outputs |
+| Reviewer | **PASS** (`opus`, independent context). Override (f), security surface, applied |
+| ADVISORY | (1) Record P-26 → done; (2) global `safe.directory` → reported to the owner; (3) `.env.*` ignores `.env.example`: add `!.env.example` if a task creates it; (4) `.local/` and `.codegraph/` ignored, no task may version anything there |
+| Requirements | NFR-02, NFR-10 · design §4.1, §4.2 |
+| Decisions | **Spec edit during execution:** design §11, row P-26 → verified (`git ls-tree -r --name-only origin/main` → `LICENSE`, `41f4c3e`) and count line → 4 verified / 23 `UNVERIFIED` (Low 13). Does not change the meaning of any requirement |
+| Leader decision | `.gitattributes` added (`* text=auto eol=lf`, `*.sh eol=lf`) because the global configuration uses `autocrlf` and the deploy script must have LF to run on Linux. It is repository hygiene and does not widen the functional scope |
+| Deviation | The Implementer added `git config --global --add safe.directory D:/executor_component` because Git would not operate due to an ownership mismatch on Windows. It is a machine configuration, outside the repo. Reversible with `git config --global --unset safe.directory D:/executor_component` |
 | spawns | implementer 23 calls, 64577 tokens, ended complete; reviewer 8 calls, 51233 tokens, ended complete |
 
-### T-01 — Esqueleto del proyecto Executor y puertos · en curso
+### T-01 — Executor project skeleton and ports · in progress
 
-| Campo | Valor |
+| Field | Value |
 |---|---|
-| Intento 1 | Archivos: `executor/` (package.json, tsconfig, eslint, vitest, Dockerfile, .dockerignore, puertos ×9, stubs según §4.2, `test/unit/dockerfile-boundary.test.ts`). Verificación del Implementer: typecheck, lint y tests verdes (3/3). Falsifier: `apt-get install docker.io` → rojo. Re-run de evidencia: **VERIFIED** (Leader inline). Construcción e inspección de la imagen: **DIFERIDAS** (sin daemon de Docker) |
-| Reviewer intento 1 | **FAIL** (`opus`). (1) La guarda estática tiene puntos ciegos: `FROM docker:27-cli`, `COPY --from=docker`, `apk add docker`, `get.docker.com`, JDKs ≠ openjdk, `python3-pip`, npm/pnpm/yarn/corepack y `USER 0`. El Red run de la tarea no se pone rojo. (2) La imagen runtime conserva npm/npx/corepack y ejecuta `npm ci` → viola NFR-01. (3) Node 20 terminó su soporte el 2026-04-30 → no es LTS (DD-15). Reporte completo copiado al intento 2 |
-| ADVISORY intento 1 | `WriteCondition` solo con `expectedVersion` (considerar `expectedStatus` antes de T-08); `StepHandler` necesitará una forma en dos fases para T6 de `ssh` (T-13); `tsconfig.build.json` con `skipLibCheck: false` para src; `validate` es un TODO que sale con 0 (riesgo de falso verde antes de T-21); el socket montado en ejecución se comprueba en el host (DD-18); vulnerabilidades de solo desarrollo en vitest 2.x |
-| Intento 2 | En curso: esfuerzo alto; Node 22 LTS; escáner con fixtures negativos; runtime sin npm |
-| spawns | implementer 65 calls, 136483 tokens, ended partial (imagen diferida); reviewer 7 calls, 73126 tokens, ended complete |
-| Intento 2 | Archivos: `executor/Dockerfile` (3 etapas, `node:22-slim`, runtime sin npm/npx/corepack, no root), `package.json` (engines `>=22`, `@types/node ^22`), `test/support/dockerfile-boundary-scanner.ts`, `test/unit/dockerfile-boundary{,-scanner}.test.ts`. 27/27 tests. Falsifier `FROM docker:27-cli AS runtime` → rojo. Re-run de evidencia: **VERIFIED** (27/27) |
-| Reviewer intento 2 | **FAIL** (`opus`). Hallazgos 2 y 3 resueltos. Quedan bypasses del escáner: (1) alias de etapa (`FROM docker AS tools` + `COPY --from=tools`), `--platform`, `${ARG}`; (2) `FROM builder` como etapa final evita la regla de borrado de npm; (3) se evalúa el primer `USER`, no el último; (4) `NODE_ENV=… npm`, rutas absolutas, forma exec, `npx`, borrado laxo; (5) yarn queda en `/opt/yarn-*` |
-| Adjudicación del Leader (antes del intento 3) | Según el texto de T-01, el **gate es la inspección de la imagen construida**. El escáner estático es un pre-check de mejor esfuerzo, no el gate. Un analizador estático completo frente a un revisor adversarial queda fuera del alcance de la tarea (narrow-never-widen). El intento 3 corrige los 5 hallazgos con fixtures y añade `scripts/inspect-image.mjs` (gate real). Sin daemon, ese script devuelve `DEFERRED` con un código distinto y nunca PASS |
-| spawns (intento 2) | implementer 34 calls, 99064 tokens, ended partial (imagen diferida); reviewer 10 calls, 67069 tokens, ended complete |
-| Intento 3 | Archivos: `test/support/dockerfile-boundary-scanner.ts` (5 hallazgos corregidos), `Dockerfile` (+ `rm -rf /opt/yarn-*`), `scripts/inspect-image.mjs` (gate real; `DEFERRED` con exit 3 sin daemon), `package.json` (`inspect:image`), `test/fixtures/dockerfiles/Dockerfile.falsifier-docker-cli`, tests (44/44). Falsifier: 13 tests nuevos rojos contra la lógica del intento 2 y verdes tras el arreglo. Re-run de evidencia: **VERIFIED** (44/44; `inspect:image` → `DEFERRED`, exit 3) |
-| Reviewer intento 3 | **FAIL** (`opus`). Los 5 hallazgos del intento 2 y el Dockerfile están conformes. El gate real tiene (1) un punto ciego en symlinks: el `find` usa solo `-type f`/`-type d`, y en Debian mvn, java, gradle y el npm/yarn de apt son symlinks a `/usr/share` o `/usr/lib/jvm`, fuera de `SCAN_DIRS` → falso PASS; (2) no comprueba el socket montado (`Config.Volumes`, `/var/run/docker.sock`), que la verificación de la tarea exige |
-| ADVISORY intento 3 | `process.exit()` dentro de `try` evita el `finally` (no limpia la imagen de prueba); los errores de `find` ocultos → falta un control positivo (`/usr/local/bin/node` debe encontrarse); mensaje de `DEFERRED` más específico; huecos del escáner estático fuera de alcance; pin por digest pendiente |
-| spawns (intento 3) | implementer 49 calls, 159899 tokens, ended partial (imagen diferida); reviewer ended complete |
+| Attempt 1 | Files: `executor/` (package.json, tsconfig, eslint, vitest, Dockerfile, .dockerignore, ports ×9, stubs per §4.2, `test/unit/dockerfile-boundary.test.ts`). Implementer verification: typecheck, lint and tests green (3/3). Falsifier: `apt-get install docker.io` → red. Evidence re-run: **VERIFIED** (Leader inline). Image build and inspection: **DEFERRED** (no Docker daemon) |
+| Reviewer attempt 1 | **FAIL** (`opus`). (1) The static guard has blind spots: `FROM docker:27-cli`, `COPY --from=docker`, `apk add docker`, `get.docker.com`, JDKs other than openjdk, `python3-pip`, npm/pnpm/yarn/corepack and `USER 0`. The task's Red run does not turn red. (2) The runtime image keeps npm/npx/corepack and runs `npm ci` → violates NFR-01. (3) Node 20 reached end of support on 2026-04-30 → not LTS (DD-15). Full report copied into attempt 2 |
+| ADVISORY attempt 1 | `WriteCondition` with `expectedVersion` only (consider `expectedStatus` before T-08); `StepHandler` will need a two-phase shape for `ssh` T6 (T-13); `tsconfig.build.json` with `skipLibCheck: false` for src; `validate` is a TODO that exits 0 (false-green risk before T-21); the socket mounted at run time is checked on the host (DD-18); development-only vulnerabilities in vitest 2.x |
+| Attempt 2 | In progress: high effort; Node 22 LTS; scanner with negative fixtures; runtime without npm |
+| spawns | implementer 65 calls, 136483 tokens, ended partial (image deferred); reviewer 7 calls, 73126 tokens, ended complete |
+| Attempt 2 | Files: `executor/Dockerfile` (3 stages, `node:22-slim`, runtime without npm/npx/corepack, non-root), `package.json` (engines `>=22`, `@types/node ^22`), `test/support/dockerfile-boundary-scanner.ts`, `test/unit/dockerfile-boundary{,-scanner}.test.ts`. 27/27 tests. Falsifier `FROM docker:27-cli AS runtime` → red. Evidence re-run: **VERIFIED** (27/27) |
+| Reviewer attempt 2 | **FAIL** (`opus`). Findings 2 and 3 resolved. Scanner bypasses remain: (1) stage alias (`FROM docker AS tools` + `COPY --from=tools`), `--platform`, `${ARG}`; (2) `FROM builder` as the final stage evades the npm-removal rule; (3) the first `USER` is evaluated, not the last; (4) `NODE_ENV=… npm`, absolute paths, exec form, `npx`, lax removal; (5) yarn remains in `/opt/yarn-*` |
+| Leader adjudication (before attempt 3) | Per the T-01 text, the **gate is the inspection of the built image**. The static scanner is a best-effort pre-check, not the gate. A complete static analyzer against an adversarial reviewer is outside the task's scope (narrow-never-widen). Attempt 3 fixes the 5 findings with fixtures and adds `scripts/inspect-image.mjs` (the real gate). Without a daemon, that script returns `DEFERRED` with a distinct code and never PASS |
+| spawns (attempt 2) | implementer 34 calls, 99064 tokens, ended partial (image deferred); reviewer 10 calls, 67069 tokens, ended complete |
+| Attempt 3 | Files: `test/support/dockerfile-boundary-scanner.ts` (5 findings fixed), `Dockerfile` (+ `rm -rf /opt/yarn-*`), `scripts/inspect-image.mjs` (real gate; `DEFERRED` with exit 3 without a daemon), `package.json` (`inspect:image`), `test/fixtures/dockerfiles/Dockerfile.falsifier-docker-cli`, tests (44/44). Falsifier: 13 new tests red against the attempt-2 logic and green after the fix. Evidence re-run: **VERIFIED** (44/44; `inspect:image` → `DEFERRED`, exit 3) |
+| Reviewer attempt 3 | **FAIL** (`opus`). The 5 attempt-2 findings and the Dockerfile are conformant. The real gate has (1) a symlink blind spot: `find` uses only `-type f`/`-type d`, and on Debian mvn, java, gradle and apt's npm/yarn are symlinks into `/usr/share` or `/usr/lib/jvm`, outside `SCAN_DIRS` → false PASS; (2) it does not check the mounted socket (`Config.Volumes`, `/var/run/docker.sock`), which the task's verification requires |
+| ADVISORY attempt 3 | `process.exit()` inside `try` skips the `finally` (the test image is not cleaned up); `find` errors hidden → a positive control is missing (`/usr/local/bin/node` must be found); more specific `DEFERRED` message; static-scanner gaps out of scope; digest pin pending |
+| spawns (attempt 3) | implementer 49 calls, 159899 tokens, ended partial (image deferred); reviewer ended complete |
 
 ## HALT: T-01
 
-| Campo | Valor |
+| Field | Value |
 |---|---|
-| Causa | 3 intentos con Reviewer FAIL (límite de rework) |
-| FAIL 1 | Guarda regex estrecha; runtime con npm; Node 20 fuera de soporte |
-| FAIL 2 | Bypasses del escáner estático (alias de etapa, `FROM builder`, último `USER`, normalización de npm, yarn en `/opt`) |
-| FAIL 3 | El gate real `inspect-image.mjs` no sigue symlinks ni amplía las rutas de búsqueda (mvn, java, gradle, npm de apt); no comprueba el socket montado |
-| Verificación final | typecheck y lint limpios; 44/44 tests; `inspect:image` → `DEFERRED` (exit 3) |
-| Hipótesis del Leader | **No es una ambigüedad de la spec ni un enfoque inviable.** La causa es la combinación de (a) un gate que no puede ejecutarse (sin daemon de Docker), lo que obliga a aproximarlo con lógica estática que el Reviewer ataca de forma adversarial, y (b) huecos reales pero acotados en cada iteración. Los defectos restantes son concretos y pequeños (symlinks y rutas de búsqueda, chequeo de socket) |
-| Estado del árbol | Solo los cambios de T-01 sin commitear (`executor/`). T-00 ya estaba commiteado. **No se aplicó rollback:** el Leader suspendió el `git restore`/`git clean` del protocolo hasta la decisión del owner, para no destruir trabajo mayoritariamente conforme (esqueleto, puertos y Dockerfile aprobados por el Reviewer) |
-| Decisión del owner tras el HALT | Autoriza un **4.º intento excepcional** limitado al gate de inspección de imagen: symlinks y rutas de búsqueda, chequeo del socket y los tres advisory de robustez (limpieza en `finally`, control positivo y estado de `find`, mensaje `DEFERRED` específico). Si pasa, T-01 queda `[~]` solo por la ejecución real diferida hasta tener Docker, y se continúa con T-02 |
-| Intento 4 (excepcional) | Archivos: `scripts/inspect-image.mjs` (reescrito con funciones puras), `scripts/inspect-image.d.mts`, `test/unit/inspect-image.test.ts` (20), `test/fixtures/dockerfiles/Dockerfile.falsifier-maven`, `dockerfile-boundary.test.ts`. 65/65. Falsifiers: el filtro `-type l` y el chequeo de volúmenes se ponen rojos al revertirlos. `inspect:image` → `DEFERRED` específico, exit 3. Re-run de evidencia: **VERIFIED** |
-| Reviewer intento 4 | **FAIL** (`opus`). Resueltos: symlinks, volúmenes y los tres advisory. Nuevos huecos de falso PASS en el gate: (1) `/app` se excluye entero → npm/pnpm/yarn como dependencia de producción (o binarios copiados a `/app`) son invisibles; (2) el barrido corre como usuario no root y filtra "permission denied" → no ve toolchains bajo `/root`; (3) el control positivo (`command -v node`) no prueba que `find` corrió; no se lee el estado de salida de `find`; un fallo de `/tmp` o `grep` deja el barrido vacío y "limpio" |
-| ADVISORY intento 4 | `VOLUME /run` (en Debian `/var/run` → `/run`); el chequeo del socket dentro del contenedor no puede dispararse, porque el montaje se decide al desplegar: el mensaje no debe sobreafirmarlo; el mensaje PASS debe mencionar los chequeos de volúmenes y socket |
-| spawns (intento 4) | implementer 48 calls, 122459 tokens, ended partial (imagen diferida); reviewer ended complete |
-| Decisión del owner (validación por entorno) | El owner no puede ejecutar Docker en su máquina Windows por restricciones de permisos y entorno. **Instrucción:** validar localmente todo lo que no requiera Docker. `docker build`, la inspección de la imagen en runtime, la verificación NFR-01 en runtime y el arranque y salud del contenedor quedan como **validación diferida por entorno**, obligatoria antes de desplegar en el servidor de microservicios. No se debilita NFR-01, no se cambia la arquitectura, no se instalan alternativas a Docker ni se cambia la configuración de la máquina. **Edición de spec:** `tasks.md` T-01, nueva fila "Validación por entorno". No cambia el significado de ningún requisito |
-| Intento 5 (flujo continúa con la decisión del owner) | Corregir los 3 hallazgos del intento 4 en el gate diferido (barrido de `/app`; barrido como root con chequeo de no-root por separado; el control positivo prueba que `find` se ejecutó y se lee su estado de salida) y los advisory (`/run`, mensajes sin sobreafirmar). Añadir chequeo de dependencias. Verificación solo local |
-| Intento 5 | Archivos: `scripts/inspect-image.mjs` (barre `/app`; corre como root con `--user 0`; usuario no root comprobado por `Config.User`; `find` es su propio control positivo; se lee su estado de salida; cualquier error de `find` = FAIL; `/run` incluido; mensaje PASS acotado), `scripts/inspect-image.d.mts`, `test/unit/inspect-image.test.ts` (41), `package.json` (`check:deps`, `check:local`). Verificación local: `check:local` verde (86/86, `npm audit --omit=dev` sin vulnerabilidades). `inspect:image` → `DEFERRED` (exit 3). Falsifiers: 4 mutaciones en rojo, revertidas. Re-run de evidencia: **VERIFIED** |
-| Reviewer intento 5 | **PASS** (`opus`). Los 3 hallazgos y el advisory resueltos; sin rutas de falso PASS en el Dockerfile ni en los fixtures; gate local cumplido; sin regresión de NFR-01 |
-| ADVISORY final | (1) `evaluateUser` comprueba el nombre, no el UID: un `useradd -o -u 0` pasaría (hoy inalcanzable); conviene resolver el UID efectivo en la ejecución real. (2) Paquetes scoped o renombrados (`@yarnpkg/cli-dist`, `@pnpm/exe`). (3) Comentario desactualizado del Dockerfile ("find/id"). (4) `check:deps` necesita acceso al registry. (5) Pin por digest de `node:22-slim` pendiente |
-| **VALIDACIÓN DIFERIDA POR ENTORNO (obligatoria antes de desplegar)** | En un entorno con Docker: `npm run inspect:image` contra el `Dockerfile` real (esperado PASS) y contra `test/fixtures/dockerfiles/Dockerfile.falsifier-docker-cli` y `Dockerfile.falsifier-maven` (esperado FAIL), más arranque y salud del contenedor. Pendiente también el pin por digest |
-| Estado final | **PASS (porción local)**. T-01 `[x]` según la decisión del owner, con la validación por entorno diferida y registrada |
-| Requisitos | NFR-01, NFR-08 · DD-01, DD-05, DD-15, DD-19, §4.2 |
-| Decisiones | Adjudicación del Leader (el gate es la imagen real; el escáner es un pre-check); 4.º intento excepcional autorizado por el owner; reclasificación de la validación por entorno por decisión del owner; `CLAUDE.md` actualizado (Node 22 LTS, `check:local`, `inspect:image`) |
-| Budget | T-01 consumió 5 rondas de review (≈1,5 presupuestadas por tarea). Acumulado del spec: 7 rondas en 2 tareas. Dentro del total (~50), con una tendencia que se vigila |
-| spawns (intento 5) | implementer 62 calls, 157412 tokens, ended partial (Docker diferido por decisión del owner); reviewer ended complete |
+| Cause | 3 attempts with Reviewer FAIL (rework limit) |
+| FAIL 1 | Narrow regex guard; runtime with npm; Node 20 out of support |
+| FAIL 2 | Static scanner bypasses (stage alias, `FROM builder`, last `USER`, npm normalization, yarn in `/opt`) |
+| FAIL 3 | The real gate `inspect-image.mjs` does not follow symlinks or widen its search paths (mvn, java, gradle, apt's npm); does not check the mounted socket |
+| Final verification | typecheck and lint clean; 44/44 tests; `inspect:image` → `DEFERRED` (exit 3) |
+| Leader hypothesis | **Not a spec ambiguity nor an unviable approach.** The cause is the combination of (a) a gate that cannot run (no Docker daemon), which forces approximating it with static logic that the Reviewer attacks adversarially, and (b) real but bounded gaps in each iteration. The remaining defects are concrete and small (symlinks and search paths, socket check) |
+| Tree state | Only the uncommitted T-01 changes (`executor/`). T-00 was already committed. **No rollback applied:** the Leader suspended the protocol's `git restore`/`git clean` until the owner's decision, so as not to destroy mostly conformant work (skeleton, ports and Dockerfile approved by the Reviewer) |
+| Owner decision after the HALT | Authorizes an **exceptional 4th attempt** limited to the image-inspection gate: symlinks and search paths, socket check and the three robustness advisories (cleanup in `finally`, positive control and `find` status, specific `DEFERRED` message). If it passes, T-01 stays `[~]` only for the real run deferred until Docker is available, and work continues with T-02 |
+| Attempt 4 (exceptional) | Files: `scripts/inspect-image.mjs` (rewritten with pure functions), `scripts/inspect-image.d.mts`, `test/unit/inspect-image.test.ts` (20), `test/fixtures/dockerfiles/Dockerfile.falsifier-maven`, `dockerfile-boundary.test.ts`. 65/65. Falsifiers: the `-type l` filter and the volume check turn red when reverted. `inspect:image` → specific `DEFERRED`, exit 3. Evidence re-run: **VERIFIED** |
+| Reviewer attempt 4 | **FAIL** (`opus`). Resolved: symlinks, volumes and the three advisories. New false-PASS gaps in the gate: (1) `/app` is excluded entirely → npm/pnpm/yarn as a production dependency (or binaries copied into `/app`) are invisible; (2) the sweep runs as a non-root user and filters "permission denied" → it does not see toolchains under `/root`; (3) the positive control (`command -v node`) does not prove that `find` ran; `find`'s exit status is not read; a failure of `/tmp` or `grep` leaves the sweep empty and "clean" |
+| ADVISORY attempt 4 | `VOLUME /run` (on Debian `/var/run` → `/run`); the socket check inside the container cannot trigger, because the mount is decided at deploy time: the message must not overstate it; the PASS message should mention the volume and socket checks |
+| spawns (attempt 4) | implementer 48 calls, 122459 tokens, ended partial (image deferred); reviewer ended complete |
+| Owner decision (environment validation) | The owner cannot run Docker on his Windows machine because of permission and environment restrictions. **Instruction:** validate locally everything that does not require Docker. `docker build`, runtime image inspection, runtime NFR-01 verification and container start and health become **environment-dependent deferred validation**, mandatory before deploying to the microservices server. NFR-01 is not weakened, the architecture is not changed, no Docker alternatives are installed and the machine configuration is not changed. **Spec edit:** `tasks.md` T-01, new row "Environment validation". Does not change the meaning of any requirement |
+| Attempt 5 (flow continues under the owner's decision) | Fix the 3 attempt-4 findings in the deferred gate (sweep of `/app`; sweep as root with a separate non-root check; the positive control proves that `find` ran and its exit status is read) and the advisories (`/run`, messages without overstatement). Add a dependency check. Local verification only |
+| Attempt 5 | Files: `scripts/inspect-image.mjs` (sweeps `/app`; runs as root with `--user 0`; non-root user checked via `Config.User`; `find` is its own positive control; its exit status is read; any `find` error = FAIL; `/run` included; bounded PASS message), `scripts/inspect-image.d.mts`, `test/unit/inspect-image.test.ts` (41), `package.json` (`check:deps`, `check:local`). Local verification: `check:local` green (86/86, `npm audit --omit=dev` with no vulnerabilities). `inspect:image` → `DEFERRED` (exit 3). Falsifiers: 4 mutations red, reverted. Evidence re-run: **VERIFIED** |
+| Reviewer attempt 5 | **PASS** (`opus`). The 3 findings and the advisory resolved; no false-PASS paths in the Dockerfile or the fixtures; local gate met; no NFR-01 regression |
+| Final ADVISORY | (1) `evaluateUser` checks the name, not the UID: a `useradd -o -u 0` would pass (unreachable today); the effective UID should be resolved in the real run. (2) Scoped or renamed packages (`@yarnpkg/cli-dist`, `@pnpm/exe`). (3) Stale Dockerfile comment ("find/id"). (4) `check:deps` needs registry access. (5) Digest pin of `node:22-slim` pending |
+| **ENVIRONMENT-DEPENDENT DEFERRED VALIDATION (mandatory before deploying)** | In an environment with Docker: `npm run inspect:image` against the real `Dockerfile` (expected PASS) and against `test/fixtures/dockerfiles/Dockerfile.falsifier-docker-cli` and `Dockerfile.falsifier-maven` (expected FAIL), plus container start and health. The digest pin is also pending |
+| Final status | **PASS (local portion)**. T-01 `[x]` per the owner's decision, with the environment validation deferred and recorded |
+| Requirements | NFR-01, NFR-08 · DD-01, DD-05, DD-15, DD-19, §4.2 |
+| Decisions | Leader adjudication (the gate is the real image; the scanner is a pre-check); exceptional 4th attempt authorized by the owner; reclassification of the environment validation by owner decision; `CLAUDE.md` updated (Node 22 LTS, `check:local`, `inspect:image`) |
+| Budget | T-01 consumed 5 review rounds (≈1.5 budgeted per task). Spec cumulative: 7 rounds in 2 tasks. Within the total (~50), with a trend being watched |
+| spawns (attempt 5) | implementer 62 calls, 157412 tokens, ended partial (Docker deferred by owner decision); reviewer ended complete |
 
-> **Modo de avance (2026-10-05):** la instrucción del owner ("ejecutar T-00 a T-22 y detenerse al final") se trata como aprobación del avance rutinario dentro del Gate A: los gates de continuar o pausar entre tareas se pasan con el registro `auto-approved (owner Gate A mandate)`. HALT, Pivot, budget tripwire, `FATAL_FAIL`, una decisión abierta o una validación diferida por entorno siguen deteniendo para el owner.
+> **Progress mode (2026-10-05):** the owner's instruction ("run T-00 to T-22 and stop at the end") is treated as approval of routine progress within Gate A: the continue-or-pause gates between tasks are passed with the record `auto-approved (owner Gate A mandate)`. HALT, Pivot, budget tripwire, `FATAL_FAIL`, an open decision or an environment-dependent deferred validation still stop for the owner.
 
-### T-04 — Máquina de estados: lista cerrada T1–T13 · en curso
+### T-04 — State machine: closed list T1–T13 · in progress
 
-| Campo | Valor |
+| Field | Value |
 |---|---|
-| Intento 1 | Archivos: `executor/src/domain/state-machine/index.ts`, `executor/src/domain/errors/index.ts`, `executor/test/unit/state-machine.test.ts` (576 tests; cartesiano de 520 casos). Falsifier T9 50→40 → 5 rojos. Red run (rechazar todo) → 69 rojos. Re-run de evidencia: **VERIFIED** (576/576, 0 errores de tipos en sus archivos, lint limpio) |
-| Reviewer intento 1 | **FAIL** (`opus`). (1) Falta la máquina de estados de **ejecución** (QUEUED…CANCELLED), dentro del alcance de T-04 según FR-05. (2) Las guardas nunca se prueban con valores falsos: borrar casi cualquier guarda deja la suite en verde. (3) T7/T8 aceptan códigos que evitan §7.2 y la regla canónica (`FAILED(TARGET_BUSY)`, `LOCK_TIMEOUT`, `INVALID_TRANSITION`, `DEPLOY_WINDOW_CLOSED` en no-ssh, FAILED sin código) |
-| ADVISORY intento 1 | Tests tautológicos (L259, L489, L210); T3 no incrementa `attempt`; T6 de `ssh` sin entrada V4; deadlines a cargo de la capa de aplicación; `classifyDeployExitCode` lanza excepción con 0 |
-| Intento 2 | En curso. Esfuerzo xhigh. Guía del Leader: la cadena de ejecución está especificada en la fuente (proposal §10.6 y la tabla de FR-05): QUEUED→RUNNING→{SUCCEEDED, FAILED, TIMED_OUT, CANCELLED}. No inventar transiciones; un hueco se reporta como hueco de la spec |
-| spawns (intento 1) | implementer 49 calls, 184284 tokens, ended complete; reviewer 14 calls, 89825 tokens, ended complete |
+| Attempt 1 | Files: `executor/src/domain/state-machine/index.ts`, `executor/src/domain/errors/index.ts`, `executor/test/unit/state-machine.test.ts` (576 tests; Cartesian product of 520 cases). Falsifier T9 50→40 → 5 red. Red run (reject everything) → 69 red. Evidence re-run: **VERIFIED** (576/576, 0 type errors in its files, lint clean) |
+| Reviewer attempt 1 | **FAIL** (`opus`). (1) The **execution** state machine (QUEUED…CANCELLED) is missing, and it is within T-04's scope per FR-05. (2) Guards are never tested with false values: deleting almost any guard leaves the suite green. (3) T7/T8 accept codes that bypass §7.2 and the canonical rule (`FAILED(TARGET_BUSY)`, `LOCK_TIMEOUT`, `INVALID_TRANSITION`, `DEPLOY_WINDOW_CLOSED` on non-ssh, FAILED without a code) |
+| ADVISORY attempt 1 | Tautological tests (L259, L489, L210); T3 does not increment `attempt`; `ssh` T6 without a V4 entry; deadlines owned by the application layer; `classifyDeployExitCode` throws on 0 |
+| Attempt 2 | In progress. Effort xhigh. Leader guidance: the execution chain is specified in the source (proposal §10.6 and the FR-05 table): QUEUED→RUNNING→{SUCCEEDED, FAILED, TIMED_OUT, CANCELLED}. Do not invent transitions; a gap is reported as a spec gap |
+| spawns (attempt 1) | implementer 49 calls, 184284 tokens, ended complete; reviewer 14 calls, 89825 tokens, ended complete |
 
-### T-02 — Schemas versionados y definición semántica · en curso
+### T-02 — Versioned schemas and semantic definition · in progress
 
-| Campo | Valor |
+| Field | Value |
 |---|---|
-| Intento 1 | Archivos: `schemas/{pipeline,targets,event}.schema.json`, `pipeline-definitions/prms/reporting-dev.yaml`, `pipeline-definitions/targets/dev.yaml`, `executor/test/contract/*` (25 tests), `executor/package.json` (ajv, ajv-formats y yaml como dev). Falsifier: quitar `deployWindowPolicy` de `oneOf[0].required` → rojo. Re-run de evidencia: **VERIFIED** (`check:local` 687/687; búsqueda de identificadores internos limpia) |
-| Reviewer intento 1 | **FAIL** (`opus`). (1) Falta un caso negativo para "omite la declaración de desplegadores externos" y un positivo de la rama `none` + `not-required`. (2) Tensión de spec: `none` ⇒ `not-required` en el schema frente a la tabla de §7.7, que permitía `required` + vacío. (3) `interpolableString` acepta `$(...)` y backticks (script embebido, FR-01 `AND IT MUST`) |
-| ADVISORY intento 1 | Mensaje "reservado, no habilitado" → T-03 (lista reutilizable en `$defs`); `STEP_RETRY`/`LOCK_RETRY` exigen `status` (validar con T-07); `openedBy`/`externalJobsDisabled` en el nivel superior y falta `closesAt`; ajv y yaml deberán pasar a dependencias de producción en T-03; sin caso dedicado para la omisión de `migrationCompatibility` |
-| **Enmienda de spec (tensión → owner)** | El owner aprobó "`none` ⇒ `not-required`". Edición de design §7.7 (tabla y "Forma versionada"): la lista vacía exige `not-required`, y `required` + vacío es inválido. Se registra para el brief del Reviewer de la próxima tarea |
-| Intento 2 | En curso: casos de corpus para (1), rechazo de `$(`, backticks y `$` suelto para (3), `$comment` alineado con la enmienda para (2) |
-| spawns (intento 1) | implementer 79 calls, 205259 tokens, ended complete; reviewer 12 calls, 92152 tokens, ended complete |
-| Intento 2 | Archivos: `schemas/pipeline.schema.json` (`interpolableString` estricto, `argString` sin `;|&<>`), `schemas/targets.schema.json` (`$comment` alineado con la enmienda), `executor/test/contract/{targets,pipeline}-schema.contract.test.ts` (33 tests). Falsifiers: quitar `externalDeployersRef` del `required` → rojo; permitir `$(` → rojo; permitir backtick → rojo. Re-run de evidencia: **VERIFIED** (33/33; búsqueda de identificadores internos limpia) |
-| Reviewer intento 2 | **PASS** (`opus`). Los 3 hallazgos resueltos; conforme a design §7.7 enmendado el 2026-10-05; sin regresiones en las interpolaciones permitidas |
-| ADVISORY final | (1) `\n`/`\r` no se excluyen en `argString`. (2) Los valores de `env` de CodeBuild aceptan texto con forma de bucle (no los evalúa el Executor). (3) `migration.check`/`run` son texto libre que llega al target. (4) Un solo caso por chequeo en ssh args |
-| Forward pointers (registrados) | **T-03:** limitar `migration.check`/`run` a un patrón de nombre de script y considerar cerrar las claves de `env` de CodeBuild; mensaje "tipo reservado, no habilitado"; `ajv`/`yaml` como dependencias de producción. **T-13:** cada arg SSH se pasa escapado (sin interpretación de shell); rechazar o escapar `\n`/`\r` |
-| Estado final | **PASS** |
-| Requisitos | FR-01, FR-02, FR-04 · §6.1, §7.7 (enmendado), DD-11, DD-21, DD-23 |
-| spawns (intento 2) | implementer 50 calls, 120796 tokens, ended complete; reviewer ended complete |
-| Intento 2 | Archivos: los mismos 3 (máquina de ejecución E1/E2, falsifiers por guarda, restricción de códigos de T7/T8 con blocklist, advisory). 623 tests. Re-run de evidencia: **VERIFIED** |
-| Reviewer intento 2 | **FAIL** (`opus`). Los hallazgos 1–3 del intento 1 resueltos. Nuevos: (1) T9 no comprueba que el código 50 sea del intento vigente (un 50 obsoleto devuelve a `WAITING_LOCK` un intento vivo); (2) la blocklist sigue aceptando `SUPERSEDED`, `TIMED_OUT` como `FAILED` y códigos de exit en T7 desde `DISPATCHING`; (3) T7 no relaciona `reason` y `failureCode`. Advisory: T12 desde `RUNNING` ssh/codebuild con `externalRef` contradice la tabla de recuperación |
-| Huecos de spec (para el owner) | (a) Ninguna regla define **qué estado terminal** toma una ejecución (agregado de sus steps). (b) `QUEUED → CANCELLED` (y cualquier disparador de `CANCELLED`) no está especificado. No se inventan transiciones |
-| Intento 3 (último) | En curso: allowlists por transición derivadas de §7.2; identidad del intento en T9; `reason` ⇔ código en T7; T12 alineado con la tabla de recuperación |
-| spawns (intento 2) | implementer 79 calls, 203145 tokens, ended complete; reviewer ended complete |
-| Intento 3 | Allowlists por transición y tipo derivadas de §7.2; T9 con `matchesCurrentAttempt`; T7 con `reason` ⇔ `DEPLOY_WINDOW_CLOSED`; T12 desde `RUNNING` aceptado para lambda/source/notify y rechazado para ssh/codebuild. Hubo una continuación del mismo intento porque la directiva del Leader sobre T12 fue demasiado estrecha y el Leader la corrigió. 646 tests (794 en total). Falsifiers: 6 mutaciones en rojo, revertidas. Re-run de evidencia: **VERIFIED** |
-| Reviewer intento 3 | **PASS** (`opus`). Hallazgos del intento 2 resueltos; allowlists fieles a §7.2; T12/T13 conformes con la tabla de recuperación; terminales inmutables |
-| ADVISORY final | `notify` sin códigos en T7: el handler debe llegar siempre a T6 o a un resultado (T-16/T-19); un `RUNNING codebuild` cuyo build no encuentra `BatchGetBuilds` no tiene salida → T-11 debe tratarlo; T10 confía en el flag `retryable` del llamador |
-| Forward pointers | **T-11 (reconciler):** build no encontrado por `BatchGetBuilds` → definir el cierre sin inventar estados (escalar si la spec no lo cubre). **T-10:** derivar `retryable` de los códigos de §7.2. **T-16/T-19:** el handler `notify` siempre alcanza T6 o un resultado |
-| Estado final | **PASS** |
-| Requisitos | FR-05, FR-11, FR-16 · §7.2, §7.3, DD-03, DD-04 |
-| continuations | 1 (directiva T12, error del Leader) |
-| spawns (intento 3) | implementer 86 calls, 231870 tokens, ended complete; reviewer ended complete |
+| Attempt 1 | Files: `schemas/{pipeline,targets,event}.schema.json`, `pipeline-definitions/prms/reporting-dev.yaml`, `pipeline-definitions/targets/dev.yaml`, `executor/test/contract/*` (25 tests), `executor/package.json` (ajv, ajv-formats and yaml as dev). Falsifier: removing `deployWindowPolicy` from `oneOf[0].required` → red. Evidence re-run: **VERIFIED** (`check:local` 687/687; internal-identifier search clean) |
+| Reviewer attempt 1 | **FAIL** (`opus`). (1) A negative case for "omits the external deployers declaration" and a positive one for the `none` + `not-required` branch are missing. (2) Spec tension: `none` ⇒ `not-required` in the schema versus the §7.7 table, which allowed `required` + empty. (3) `interpolableString` accepts `$(...)` and backticks (embedded script, FR-01 `AND IT MUST`) |
+| ADVISORY attempt 1 | Message "reserved, not enabled" → T-03 (reusable list in `$defs`); `STEP_RETRY`/`LOCK_RETRY` require `status` (validate with T-07); `openedBy`/`externalJobsDisabled` at the top level and `closesAt` missing; ajv and yaml must become production dependencies in T-03; no dedicated case for omitting `migrationCompatibility` |
+| **Spec amendment (tension → owner)** | The owner approved "`none` ⇒ `not-required`". Edit of design §7.7 (table and "Versioned form"): the empty list requires `not-required`, and `required` + empty is invalid. Recorded for the next task's Reviewer brief |
+| Attempt 2 | In progress: corpus cases for (1), rejection of `$(`, backticks and a bare `$` for (3), `$comment` aligned with the amendment for (2) |
+| spawns (attempt 1) | implementer 79 calls, 205259 tokens, ended complete; reviewer 12 calls, 92152 tokens, ended complete |
+| Attempt 2 | Files: `schemas/pipeline.schema.json` (strict `interpolableString`, `argString` without `;|&<>`), `schemas/targets.schema.json` (`$comment` aligned with the amendment), `executor/test/contract/{targets,pipeline}-schema.contract.test.ts` (33 tests). Falsifiers: removing `externalDeployersRef` from `required` → red; allowing `$(` → red; allowing a backtick → red. Evidence re-run: **VERIFIED** (33/33; internal-identifier search clean) |
+| Reviewer attempt 2 | **PASS** (`opus`). The 3 findings resolved; conformant with design §7.7 as amended on 2026-10-05; no regressions in the allowed interpolations |
+| Final ADVISORY | (1) `\n`/`\r` are not excluded in `argString`. (2) CodeBuild `env` values accept loop-shaped text (not evaluated by the Executor). (3) `migration.check`/`run` are free text that reaches the target. (4) A single case per check in ssh args |
+| Forward pointers (recorded) | **T-03:** restrict `migration.check`/`run` to a script-name pattern and consider closing the CodeBuild `env` keys; message "type reserved, not enabled"; `ajv`/`yaml` as production dependencies. **T-13:** every SSH arg is passed escaped (no shell interpretation); reject or escape `\n`/`\r` |
+| Final status | **PASS** |
+| Requirements | FR-01, FR-02, FR-04 · §6.1, §7.7 (amended), DD-11, DD-21, DD-23 |
+| spawns (attempt 2) | implementer 50 calls, 120796 tokens, ended complete; reviewer ended complete |
+| Attempt 2 | Files: the same 3 (execution machine E1/E2, falsifiers per guard, restriction of T7/T8 codes with a blocklist, advisories). 623 tests. Evidence re-run: **VERIFIED** |
+| Reviewer attempt 2 | **FAIL** (`opus`). Attempt-1 findings 1–3 resolved. New: (1) T9 does not check that code 50 belongs to the current attempt (a stale 50 returns a live attempt to `WAITING_LOCK`); (2) the blocklist still accepts `SUPERSEDED`, `TIMED_OUT` as `FAILED` and exit codes in T7 from `DISPATCHING`; (3) T7 does not relate `reason` and `failureCode`. Advisory: T12 from `RUNNING` ssh/codebuild with `externalRef` contradicts the recovery table |
+| Spec gaps (for the owner) | (a) No rule defines **which terminal state** an execution takes (aggregate of its steps). (b) `QUEUED → CANCELLED` (and any trigger of `CANCELLED`) is not specified. No transitions are invented. **Obsolete under Model B** (Gate A closure): the execution-level closed list X1–X16 (design §7.3) replaces the step aggregate, and Model B has no `CANCELLED` state |
+| Attempt 3 (last) | In progress: per-transition allowlists derived from §7.2; attempt identity in T9; `reason` ⇔ code in T7; T12 aligned with the recovery table |
+| spawns (attempt 2) | implementer 79 calls, 203145 tokens, ended complete; reviewer ended complete |
+| Attempt 3 | Per-transition and per-type allowlists derived from §7.2; T9 with `matchesCurrentAttempt`; T7 with `reason` ⇔ `DEPLOY_WINDOW_CLOSED`; T12 from `RUNNING` accepted for lambda/source/notify and rejected for ssh/codebuild. There was one continuation of the same attempt because the Leader's directive on T12 was too narrow and the Leader corrected it. 646 tests (794 in total). Falsifiers: 6 mutations red, reverted. Evidence re-run: **VERIFIED** |
+| Reviewer attempt 3 | **PASS** (`opus`). Attempt-2 findings resolved; allowlists faithful to §7.2; T12/T13 conformant with the recovery table; terminals immutable |
+| Final ADVISORY | `notify` without codes in T7: the handler must always reach T6 or a result (T-16/T-19); a `RUNNING codebuild` whose build `BatchGetBuilds` cannot find has no exit → T-11 must handle it; T10 trusts the caller's `retryable` flag |
+| Forward pointers | **T-11 (reconciler):** build not found by `BatchGetBuilds` → define the closure without inventing states (escalate if the spec does not cover it). **T-10:** derive `retryable` from the §7.2 codes. **T-16/T-19:** the `notify` handler always reaches T6 or a result |
+| Final status | **PASS** |
+| Requirements | FR-05, FR-11, FR-16 · §7.2, §7.3, DD-03, DD-04 |
+| continuations | 1 (T12 directive, Leader error) |
+| spawns (attempt 3) | implementer 86 calls, 231870 tokens, ended complete; reviewer ended complete |
 
-### T-03 — `DefinitionSource` y validación semántica · en curso
+### T-03 — `DefinitionSource` and semantic validation · in progress
 
-| Campo | Valor |
+| Field | Value |
 |---|---|
-| Intento 1 | Archivos: `application/definition-service/*` (index, semantic-rules, registry-rules, reference-resolution, schema-validation), `adapters/bundled-definition-source`, `schemas/targets.schema.json` (`scriptName` para migraciones, `portRef`), `pipeline-definitions/targets/dev.yaml`, tests unitarios (5 archivos) y de contrato. `ajv`, `ajv-formats` y `yaml` pasan a dependencias de producción. Continuación (el Leader resolvió que no hay bloqueo por OD-Q7, porque el empaquetado DD-19 está en alcance): `Dockerfile` con la raíz del repo como contexto, copia de las 3 carpetas, `.dockerignore` en la raíz, build arg `DEFINITION_REF`, `deploy-scripts/README.md`, `resolveBuildContext` en `inspect-image`. 801/801. Re-run de evidencia: **VERIFIED** |
-| Reviewer intento 1 | **FAIL** (`opus`). (1) **Frontera NFR-01:** el arranque resuelve todas las referencias, incluido `envSecretRef` (secreto de aplicación). (2) La detección de duplicados sobre valores resueltos está incompleta: no resuelve `name`, agrupa por el secreto de conexión completo (no por host) y compara el mapeo de puerto entero en lugar del puerto publicado. (3) La imagen arranca en producción sin `DEFINITION_REF` inyectado; `BUILD_INFO.json` malformado se ignora en silencio |
-| ADVISORY intento 1 | `portRef` y advisory (b) aceptables; raíz de definiciones por variable de entorno en lugar de recorrer directorios hacia arriba; un caso end-to-end por regla de esquema a través del servicio; T-18 debe llamar a `validateForStartup` antes de consumir; ampliar el test de sustitución cuando existan el planner y los handlers |
-| Intento 2 | En curso: allowlist de campos a resolver (`envSecretRef` opaco), forma del valor de conexión resuelto con `host`, puerto publicado, `name` resuelto, `requireInjectedRef` en producción y `CICD_DEFINITIONS_ROOT` |
-| spawns (intento 1) | implementer 136 calls, 318403 tokens, ended complete (con continuación); reviewer ended complete |
-| continuations | 1 (empaquetado DD-19) |
+| Attempt 1 | Files: `application/definition-service/*` (index, semantic-rules, registry-rules, reference-resolution, schema-validation), `adapters/bundled-definition-source`, `schemas/targets.schema.json` (`scriptName` for migrations, `portRef`), `pipeline-definitions/targets/dev.yaml`, unit tests (5 files) and contract tests. `ajv`, `ajv-formats` and `yaml` become production dependencies. Continuation (the Leader ruled there is no OD-Q7 block, because DD-19 packaging is in scope): `Dockerfile` with the repo root as context, copy of the 3 folders, `.dockerignore` at the root, build arg `DEFINITION_REF`, `deploy-scripts/README.md`, `resolveBuildContext` in `inspect-image`. 801/801. Evidence re-run: **VERIFIED** |
+| Reviewer attempt 1 | **FAIL** (`opus`). (1) **NFR-01 boundary:** startup resolves every reference, including `envSecretRef` (an application secret). (2) Duplicate detection over resolved values is incomplete: it does not resolve `name`, groups by the full connection secret (not by host) and compares the whole port mapping instead of the published port. (3) The image starts in production without an injected `DEFINITION_REF`; a malformed `BUILD_INFO.json` is silently ignored |
+| ADVISORY attempt 1 | `portRef` and advisory (b) acceptable; definitions root from an environment variable instead of walking directories upward; one end-to-end case per schema rule through the service; T-18 must call `validateForStartup` before consuming; widen the substitution test once the planner and handlers exist |
+| Attempt 2 | In progress: allowlist of fields to resolve (`envSecretRef` opaque), resolved connection value shaped with `host`, published port, resolved `name`, `requireInjectedRef` in production and `CICD_DEFINITIONS_ROOT` |
+| spawns (attempt 1) | implementer 136 calls, 318403 tokens, ended complete (with continuation); reviewer ended complete |
+| continuations | 1 (DD-19 packaging) |
 
-### T-06 — Política de lock · en curso
+### T-06 — Lock policy · in progress
 
-| Campo | Valor |
+| Field | Value |
 |---|---|
-| Intento 1 | Archivos: `executor/src/domain/lock-policy/index.ts`, `executor/test/unit/lock-policy.test.ts` (27). Red run sin recorte → 3 rojos. Falsifiers: tope 1000 → rojo (tras corregir una tautología con el literal 900); elapsed como suma → rojo. Re-run de evidencia: **VERIFIED** |
-| Reviewer intento 1 | **FAIL** (`opus`). La lógica es conforme. El test del tope de 10 intentos es tautológico: usa la constante exportada, así que cambiar 10 a 11 no lo pone rojo |
-| ADVISORY intento 1 | `delaySeconds` fraccional (SQS exige entero); el token de fencing se reinicia si el TTL borra y recrea el lock → T-08 debe usar una condición monotónica; constante de renovación de 60 s; falta un test de cadena |
-| Forward pointers | **T-08:** condición de escritura del target con fencing monotónico (`token ≥ stored`) y no borrar locks vivos por TTL. **T-11:** redondear y usar `LOCK_RENEWAL_INTERVAL_SECONDS` |
-| spawns (intento 1) | implementer 49 calls, 149248 tokens, ended complete; reviewer ended complete |
-| Intento 2 | El test del tope usa los literales `lockWaitAttempts` 9 y 8. `delaySeconds` es entero (`ceil`, nunca > 900). Se exporta `LOCK_RENEWAL_INTERVAL_SECONDS = 60`. 30/30. Falsifier: tope 11 → rojo. Re-run de evidencia: **VERIFIED** |
-| Reviewer intento 2 | **PASS** (`opus`). Hallazgo resuelto; el redondeo `ceil` es conforme con §7.6 |
-| Estado final | **PASS** |
-| Requisitos | FR-11, FR-16 F17–F18 · DD-09, §7.6 |
-| spawns (intento 2) | implementer 23 calls, 81903 tokens, ended complete; reviewer ended complete |
+| Attempt 1 | Files: `executor/src/domain/lock-policy/index.ts`, `executor/test/unit/lock-policy.test.ts` (27). Red run without clamping → 3 red. Falsifiers: cap 1000 → red (after fixing a tautology with the literal 900); elapsed as a sum → red. Evidence re-run: **VERIFIED** |
+| Reviewer attempt 1 | **FAIL** (`opus`). The logic is conformant. The test of the 10-attempt cap is tautological: it uses the exported constant, so changing 10 to 11 does not turn it red |
+| ADVISORY attempt 1 | Fractional `delaySeconds` (SQS requires an integer); the fencing token restarts if the TTL deletes and recreates the lock → T-08 must use a monotonic condition; 60 s renewal constant; a chain test is missing |
+| Forward pointers | **T-08:** target write condition with monotonic fencing (`token ≥ stored`) and never delete live locks by TTL. **T-11:** round and use `LOCK_RENEWAL_INTERVAL_SECONDS` |
+| spawns (attempt 1) | implementer 49 calls, 149248 tokens, ended complete; reviewer ended complete |
+| Attempt 2 | The cap test uses the literals `lockWaitAttempts` 9 and 8. `delaySeconds` is an integer (`ceil`, never > 900). `LOCK_RENEWAL_INTERVAL_SECONDS = 60` is exported. 30/30. Falsifier: cap 11 → red. Evidence re-run: **VERIFIED** |
+| Reviewer attempt 2 | **PASS** (`opus`). Finding resolved; the `ceil` rounding is conformant with §7.6 |
+| Final status | **PASS** |
+| Requirements | FR-11, FR-16 F17–F18 · DD-09, §7.6 |
+| spawns (attempt 2) | implementer 23 calls, 81903 tokens, ended complete; reviewer ended complete |
 | Attempt 2 | Allowlists for resolved refs (`envSecretRef` never resolved); resolved-value duplicate detection by parsed `host`, resolved container `name`, published host port; `requireInjectedRef` in production; `BUILD_INFO.json` removed; `CICD_DEFINITIONS_ROOT`; end-to-end `validateForCi` cases; English translation of touched files. check:local 846/846. Evidence re-run: **VERIFIED** (T-03 suites 86/86, 0 type errors, 0 prod vulns) |
 | Reviewer attempt 2 | **FAIL** (`opus`). Attempt-1 findings resolved; §7.7 (amended) conformant. New: (1) three Spanish fragments left (`.dockerignore`, `definition-service/index.ts`, `reference-resolution.ts`); (2) `parseResolvedExternalDeployers` echoes resolved values into error text (NFR-02, DD-23); (3) **spec tension**: design §7 `definition-service` row prohibits reading secret values, while startup reads GitHub/Slack tokens and the SSH connection secret (host+user+credential) only to prove existence (DD-23) |
 | **Owner ruling (spec tension, 2026-10-05)** | **"Existence without reading" (least privilege).** `SecretProvider` gains an existence-only check (AWS: `DescribeSecret`, never the value). Credential refs (`repository.credentialRef`, Slack `tokenRef`, and the new SSH `credentialRef`) are existence-checked only at startup. `getSecret` is used at startup only for non-sensitive identifier refs. The Target Registry splits the connection into `connectionRef` (non-sensitive identity JSON `{host, port, user}`) and `credentialRef` (SSH key or password, read only by the SSH handler at use time and kept in memory). Spec amendment to DD-23 and design §7 to be applied once the in-progress English translation of `design.md` lands |
@@ -197,7 +197,7 @@
 |---|---|
 | Attempt 1 | Files: `domain/planner/index.ts`, `test/unit/planner.test.ts` (9). Falsifier `.every`→`.some` → fan-in red. Evidence re-run: **VERIFIED** |
 | Reviewer attempt 1 | **FAIL** (`opus`): implementation conformant; missing evidence for FR-06 "dependency failure" clauses — no in-flight-after-failure test; TIMED_OUT never exercised |
-| Spec gaps for the owner (added) | (c) outcome precedence when FAILED and TIMED_OUT coexist (implementer chose FAILED > TIMED_OUT, documented); (d) whether independent pending steps keep being dispatched after a failure; (e) execution outcome when a step is SKIPPED by supersede (T4) |
+| Spec gaps for the owner (added) | (c) outcome precedence when FAILED and TIMED_OUT coexist (implementer chose FAILED > TIMED_OUT, documented); (d) whether independent pending steps keep being dispatched after a failure; (e) execution outcome when a step is SKIPPED by supersede (T4). **Obsolete under Model B** (Gate A closure): there are no steps, no planner and no `TIMED_OUT`; the execution-level closed list X1–X16 (design §7.3) defines every outcome |
 | spawns (attempt 1) | implementer 30 calls, 140812 tokens, complete; reviewer complete |
 | Attempt 2 | Added in-flight-after-failure and TIMED_OUT tests; cheap advisories (skip reason, T4 comment, missing finally snapshot as PENDING, ssh finally routing note). 11/11. Falsifiers: 3 mutations red. Evidence re-run: **VERIFIED** |
 | Reviewer attempt 2 | **PASS** (`opus`) |
@@ -566,3 +566,39 @@
 | Done criterion | "Executor runs end-to-end locally with a fake transport": composition integration drives DEPLOY_REQUESTED to SUCCEEDED, a rejection, LOCK_TIMEOUT and SUPERSEDED, and a crash/restart resumed from DynamoDB state. SenderId on real SQS **DEFERRED** to N-26 |
 | Landing | One commit for N-17a + N-17b (shared files); the full working tree equals HEAD + N-17 and was verified green |
 | Status | **Done** |
+
+### N-22 — Gate A closure: spec sync (editorial, no new decision)
+
+| Field | Value |
+|---|---|
+| Rule | Editorial and consistency sync of facts already decided and implemented. Anything that would need a decision is listed below for the owner, not resolved |
+| `design.md` v4.5 | §5.1: `highestAccepted` is a separate conditional update after X1 (the "same transaction as X1" wording removed; DD-27 item 3 aligned); execution attribute `cicdResultMissing` added and the semantics of `windowClosedDuringRun`/`cicdResultMissing` stated; write-once audit fields `scriptChecksum` and `slackThreadTs`; event-mark key shape for `REJECTED` (`EXEC#REJECT#{deploymentId}#{requestId}` or `EXEC#REJECT#MSG#{sqsMessageId}`, `EVT#{eventKey}`); resolution audit item `TARGET#{lockKey}` / `LOG#RESOLUTION#{eventId}`. §5.2: `/tmp/cicd-{executionId}.result.json`, fresh 0700 directory rule and 0500 script file. §6.5: `--unit` carries the `deploymentId`. §12: metric names as implemented (`ExecutionsStarted/Succeeded/Failed`, `RejectedRequests{reason}`, `NotificationFailures{provider}`, `ExecutorHeartbeat`, `ExecutionsPastDeadline`), recorders without a caller (`LockWaitMs`, `DispatchLatencyMs`) and listed-but-unimplemented names (`ExecutionsSuperseded`, `DeployDurationMs`); FR-17 alarm `ExecutionsPastDeadline` > 0. §12.2: `tools/resolve-target` path and audit item name. DD-29: trailing version comment "where useful"; guard 7 also scans `*.reusable.yaml` |
+| `requirements.md` v3.5 | FR-01: `lockKey` reached through `targetRef` (registry); FR-15: "orphan locks" replaced by lease expiry (FR-11, design §7.5); glossary "Reconciler" aligned |
+| `tasks.md` v4.5 | N-09/N-10 scope text aligned (E2); §6.1 Gate B prerequisite (Secrets Manager `SecretProvider` adapter before N-25/N-32) and carry-overs; §7.1 Gate C carry-overs |
+| `docs/runbook.md` | `currentImages` may lag `lastDeployed` under `cicdResultMissing`; `unresolved:sha256:<id>` previous images; exit 50 followed by a lost cleanup (next attempt `FAILED (SSH_CONNECT)`, recover with a new request); "close, then reopen" to extend a window; `LOG#RESOLUTION#{eventId}` and audit-before-removal order; metric wording |
+| `execution.md` | Older T-task entries translated into English (meaning, IDs, hashes and tables unchanged); pre-AC-01 spec gaps (a)–(e) marked obsolete under Model B |
+
+#### Spec gaps for the owner (Gate A closure)
+
+| # | Gap | Where it surfaced | Current safe behavior |
+|---|---|---|---|
+| G-1 | FR-12 allows a password "only if the entry marks it temporary", but the Target Registry schema (design §6.3) has no temporary-password marker | N-13 | The SSH adapter is key-only (`temporaryPassword: false` in the composition) |
+| G-2 | No `QUEUED → FAILED` transition exists for configuration errors (e.g. a resolved value that would produce an unsafe script argument); X1–X16 is closed | N-17b | Startup refuses such definitions (`verifyPlansAtStartup`); the runtime throw remains a backstop that leaves the execution `QUEUED` and the tick in the DLQ |
+| G-3 | `CICD_BOUND_REF` variable precedence between Environment and repository/organization levels is **UNVERIFIED** (P-G13); a same-named repository or organization variable may satisfy the bound-ref check when the Environment variable is unset | N-21 | Candidate mitigation (not adopted): a Gate B check (N-24/N-29) that no such variable exists, plus observation at N-32 |
+| G-4 | `ci.workflowRef` form: caller `workflow_ref` vs SHA-pinned `job_workflow_ref` (P-G11), and what `source.workflowRef` must resolve to | N-05, N-21 | Exact equality, fail closed (`CONSISTENCY_MISMATCH`); to be pinned at N-24 before N-32 |
+| G-5 | `--unit` naming: the script argument carries the `deploymentId`, which collides with the meaning of `artifacts[].unit`; renaming the argument would change the script CLI contract | N-17b | Value is used only for temporary paths and logs |
+| G-6 | Metrics listed up to design v4.4 but not implemented (`ExecutionsSuperseded`, `DeployDurationMs`), and implemented recorders with no caller (`LockWaitMs`, `DispatchLatencyMs`, the latter named by NFR-05): add, drop or wire is a decision | N-16, closure sync | Design §12 states the implemented names; NFR-05 evidence is due in Gate C (N-34) |
+| G-7 | Pre-AC-01 step-model gaps (a)–(e) (T-04, T-05) | T-04, T-05 | **Obsolete under Model B**; no action |
+
+### N-22 — Gate A closure · done
+
+| Field | Value |
+|---|---|
+| Spec sync | design v4.5, requirements v3.5, tasks v4.5, runbook: editorial alignment with the implementation (metric names, §5.1 attributes, §5.2 temp paths, `tools/resolve-target`, DD-29 "where useful", FR-01/FR-15 wording, stale N-09/N-10 text); Gate B prerequisite (Secrets Manager `SecretProvider`) and Gate B/C carry-overs recorded in tasks. Older Spanish log entries translated. No new decision |
+| Flake diagnosis | ~5,000 race repetitions under concurrent load: not reproduced; every conditional-write outcome in execution-service is mapped; most likely a non-conditional SDK/infrastructure error from a CPU-starved DynamoDB Local (unproven). The test now names any unexpected rejection; service unchanged |
+| Gate evidence (Leader, Node **v20.19.5**; Node 22 not available locally → Node 22 run **DEFERRED**) | `npm run check:local` exit 0 (typecheck 0 errors, lint clean, build, validate, vitest 937 passed / 74 skipped / 1 todo, `npm audit --omit=dev` 0 vulnerabilities); `run-all.mjs --require-workflow` 8/8 PASS incl. guard 7 on the real reusable workflow and guard 8 with **0 PENDING** entries; `npm run test:integration` exit 0, 12 files / 69 tests, race min=max=1; `npm run test:sqs-emulator` 4 passed + 1 todo (SenderId DEFERRED to N-26); deploy-script shim suite 20 run / 0 failed / 1 assertion skipped (0600 bits); `npm run inspect:image` **DEFERRED** (no Docker daemon); no emulator JVM left |
+| Falsifier | Recreated `executor/src/domain/planner/index.ts` → guard 8 FAIL "is marked DELETED … but still exists"; removed → PASS |
+| Coverage | Not measurable locally: no coverage provider installed (`@vitest/coverage-v8` absent); not added without owner approval |
+| Size | `executor/src`: 78 TypeScript files, 9,510 lines (incl. comments) |
+| Spec gaps for the owner | G-1 temporary-password marker (FR-12 vs §6.3); G-2 no QUEUED→FAILED edge for configuration errors; G-3 `CICD_BOUND_REF` variable precedence UNVERIFIED; G-4 `ci.workflowRef` form (N-24); G-5 `--unit` naming; G-6 unemitted/unimplemented metrics (`DispatchLatencyMs` for NFR-05, `LockWaitMs`, `ExecutionsSuperseded`, `DeployDurationMs`); G-7 pre-AC-01 step gaps obsolete |
+| Status | **Done** — Gate A complete; Gate B not started |

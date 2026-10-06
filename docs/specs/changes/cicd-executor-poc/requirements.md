@@ -10,7 +10,7 @@
 |---|---|
 | Spec Path | `changes/cicd-executor-poc` |
 | Phase | Phase 1: Requirements |
-| Version | **v3.4** (owner approval 2026-10-06; aligned with `proposal.md` v3.4) |
+| Version | **v3.5** (Gate A closure editorial sync, no new decision). v3.4 (owner approval 2026-10-06; aligned with `proposal.md` v3.4) |
 | Depth | **Full** (new infrastructure, trust boundary, concurrency, deployment and migrations) |
 | Type | Change |
 | Approval Mode | `gated` (inherited from the proposal) |
@@ -27,6 +27,7 @@
 |---|---|
 | v2 | Requirements for proposal v2: Executor coordinates Lambda (quality), CodeBuild (images) and SSH from step-graph definitions. Judgment Day APPROVED with round 1–2 adjustments (code 50, mandatory window policy, window revalidation, single backward transition, canonical `LOCK_TIMEOUT`, sanitization) |
 | **v3** | **AC-01 / proposal v3 (Model B).** CI moves to GitHub Actions. Removed: FR-06, FR-08, FR-09, FR-10, FR-19, FR-20. Rewritten: FR-01, FR-03, FR-04, FR-05, FR-07, FR-11, FR-13–FR-18, NFR-01, NFR-02, NFR-04–NFR-08, NFR-10. New: FR-21 request authentication, FR-22 CI contract, FR-23 supersede ordering, FR-24 deploy windows (split from FR-18), FR-25 CI trust boundary. All Judgment Day round 1–2 adjustments are preserved (mapping in §10) |
+| **v3.5** | Gate A closure editorial sync (no new decision): FR-01 states that the `lockKey` is reached through `targetRef` (the Target Registry holds it, design §6.2/§6.3); FR-15 replaces "orphan locks" with lease expiry, as already approved in FR-11 and design §7.5 |
 | **v3.4** | **owner approval 2026-10-06:** OD-A2 resolved (FR-21 owner statements); OD-A1 resolved for the PoC under the single-source invariant (FR-23); new FR-22 scenario "actions pinned by commit SHA" with FR-25 cross-reference |
 | **v3.3** | Editorial E1–E5 after JD APPROVED (2026-10-06): bound-ref source in FR-25, `TARGET_RESOLUTION_RECORDED` in FR-04, OD-A6 wording. No new decision |
 | **v3.2** | **JD round-2 correction:** FR-25 trust bound to direct IAM keys (`job_workflow_ref` at an immutable SHA, repository and owner IDs, Environment) instead of a custom subject; guard checks the bound ref for both events; FR-23 equal-value scenario; FR-03 dedupe wording |
@@ -80,7 +81,7 @@
 | Supersede | Rule by which an **older** request never replaces a **newer** deployment of the same `lockKey` (FR-23) |
 | Deploy window | Per-target period in which deploys are allowed; required while external deployers (Jenkins) share the target (FR-24) |
 | Target mutex | Kernel file lock taken by the script on the target; second barrier (FR-13) |
-| Reconciler | Periodic process that closes stuck executions, expired leases and expired windows (FR-15) |
+| Reconciler | Periodic process that closes stuck executions, expired lock waits and expired windows (FR-15); expired lock leases free themselves (FR-11) |
 | OD | Open Decision |
 
 ---
@@ -159,7 +160,7 @@
 
 ### FR-01 — Deployment Definitions
 
-The system SHALL determine each deployment's behavior exclusively from a versioned, **flat** Deployment Definition validated against a schema. A definition declares: `deploymentId`, environment, `targetRef`, the approved deploy script, static script parameters (logical containers, port references, an image repository reference per artifact unit), `lockKey`, timeout, notification channel, and an `allowedSender` **logical reference**. It contains no step graph.
+The system SHALL determine each deployment's behavior exclusively from a versioned, **flat** Deployment Definition validated against a schema. A definition declares: `deploymentId`, environment, `targetRef`, the approved deploy script, static script parameters (logical containers, port references, an image repository reference per artifact unit), the `lockKey` (through `targetRef`: the Target Registry entry holds it, design §6.2/§6.3), timeout, notification channel, and an `allowedSender` **logical reference**. It contains no step graph.
 
 #### Scenario: valid definition
 - GIVEN a definition that satisfies the schema and whose references resolve
@@ -481,7 +482,7 @@ The system SHALL notify the **deploy lifecycle** from the Executor through a not
 
 ### FR-15 — Reconciliation (deploy state only)
 
-The system SHALL run, every 5 minutes or less, from a scheduled tick, a reconciliation that closes executions alive past their deadline, expired lock waits, orphan locks and expired deploy windows. It SHALL NOT reconcile any CI state.
+The system SHALL run, every 5 minutes or less, from a scheduled tick, a reconciliation that closes executions alive past their deadline, expired lock waits and expired deploy windows. An orphan lock needs no reconciliation action: it is freed by lease expiry, never by deleting the record (FR-11 "orphan lock", design §7.5). It SHALL NOT reconcile any CI state.
 
 #### Scenario: wait budget exhausted
 - GIVEN an execution in `WAITING_LOCK` past its wait budget

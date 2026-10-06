@@ -10,7 +10,7 @@
 |---|---|
 | Spec Path | `changes/cicd-executor-poc` |
 | Phase | Phase 3: Tasks |
-| Version | **v4.4** (Model B; owner approval 2026-10-06) |
+| Version | **v4.5** (Gate A closure editorial sync; no new decision). v4.4 (Model B; owner approval 2026-10-06) |
 | Status | **APPROVED by the owner (2026-10-06)** after the scoped Judgment Day returned `APPROVED`. Execution may resume with Gate A (N-01…N-22) under `/akili-execute` |
 | Sources of truth | `architecture-change-01.md` (AC-01, APPROVED), `proposal.md` v3, `requirements.md` v3 (+ RL-1…RL-7), `design.md` v4, `judgment.md` |
 | Repository | `onecgiar-cicd-platform` (design §4.1). Commits only in `/akili-execute`, with owner approval |
@@ -26,6 +26,7 @@
 | v3.x | 37 tasks (T-00…T-36) for the v2 model (Lambda + CodeBuild + SSH). Gate A paused at 12/23 under AC-01 |
 | **v4** | Rewritten for AC-01 / proposal v3 / requirements v3 / design v4. New `N-` plan; OLD → NEW mapping (§3); obsolescence driven by design §15; DD-25 and DD-27 tasks required owner confirmation before execution (granted in v4.4) |
 | **v4.1** | JD round-1 correction (CS-1, CS-2, CC-1, CC-2, SU-1, CW-1…CW-6): scopes of N-01, N-03–N-05, N-07–N-12, N-14, N-19–N-21, N-24, N-29, N-32 extended; T-06 reworked (CW-4); budget total equals components (CW-6) |
+| **v4.5** | Gate A closure editorial sync (no new decision): N-09/N-10 scope text aligned with design §5.1 (`highestAccepted` is a separate conditional update after X1, E2); Gate B prerequisite (Secrets Manager `SecretProvider` adapter) and Gate B/C carry-overs from the execution log recorded in §6 and §7 |
 | **v4.4** | **owner approval 2026-10-06:** DD-25 and DD-27 approved; [confirm] markers removed from N-06, N-07, N-09; new guard 7 "action-pinning" in N-19; N-21 depends on it; N-22 closure checks it |
 | **v4.3** | Editorial E1–E5 after JD APPROVED (2026-10-06): N-21 bound-ref source, N-29 stale P-A6 text. No new decision |
 | **v4.2** | JD round-2 correction (R2-A1…R2-A6, R2-1…R2-8): N-24/N-32 trust checks on direct IAM keys, guard bound-ref for both events (N-21), equality rule (N-09), resolution CLI (N-11, N-20), misplaced cell text moved to the verification column (R2-2) |
@@ -288,7 +289,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 | Depends on | N-07, N-08 |
 | Requirements / Design | FR-11, FR-23 · design §5.1, DD-09, DD-27; T-06 forward pointer |
 | Files | `target-state-repository.ts`, its integration test |
-| Scope | Stale fencing rejected; `highestDispatched` and `highestAccepted` are written in the same `TransactWriteItems` as X9 / X1 with condition `stored <= new` (equal accepted for the same execution after exit 50 and same-run re-runs), never fenced (CS-2, R2-1); the `unresolved[]` append shares the X16 transaction (R2-8); `unresolved[]`; replaces `lastDeployedSequence` |
+| Scope | Stale fencing rejected; `highestDispatched` is written in the same `TransactWriteItems` as X9 and `highestAccepted` by a separate conditional update after X1 (E2, design §5.1), both with condition `stored <= new` (equal accepted for the same execution after exit 50 and same-run re-runs), never fenced (CS-2, R2-1); the `unresolved[]` append shares the X16 transaction (R2-8); `unresolved[]`; replaces `lastDeployedSequence` |
 | Tests / verification | DynamoDB Local race: two `highestAccepted` and two `highestDispatched` updates in parallel → max wins (≥ 50 reps); a stale-fence holder can still raise `highestDispatched`; an equal value is accepted, a lower one rejected (R2-1) |
 | Falsifier | Unconditional put → lower value overwrites higher |
 | Red run | Cite the regression |
@@ -306,7 +307,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 | Depends on | N-05, N-08 (N-06/N-07 via ports; fakes until confirmed) |
 | Requirements / Design | FR-03, FR-07, FR-23 · DD-20, design §7.3 |
 | Files | `application/execution-service`, tests |
-| Scope | No sequence for rejections; duplicate `deploymentId` + `requestId` → no-op; X1 and `highestAccepted` in one transaction; concurrent duplicates → one execution |
+| Scope | No sequence for rejections; duplicate `deploymentId` + `requestId` → no-op; X1, then a separate conditional `highestAccepted` raise (E2, design §5.1); concurrent duplicates → one execution |
 | Tests / verification | Integration with DynamoDB Local: parallel duplicates (≥ 50 reps) → 1 execution, 0 extra sequence numbers Foreign deployment pre-claiming the victim's `requestId` → victim still created (CC-2). |
 | Falsifier | Increment the sequence before the claim → extra numbers consumed |
 | Red run | Cite the gap |
@@ -517,7 +518,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-22 — Gate A closure
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · S · **A** |
+| Status / Size / Gate | **[x] done** · S · **A** |
 | Goal | Prove Gate A complete: obsolescence guard with an empty pending list; `check:local` and `validate` green, **including guard 7 "action-pinning" on the real reusable workflow**; coverage matrix (§9) re-checked |
 | Depends on | N-01…N-21 |
 | Requirements / Design | NFR-01, NFR-08 · design §15 |
@@ -546,6 +547,17 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 | **N-28** | CI for this platform repo | N-22 | NFR-01, NFR-08 | **OD-N1** | Guards fail a PR with their mutation | checklist |
 | **N-29** | Pin premises at primary source | — | FR-23, FR-25 · DD-24, DD-27 | **P-A3** (pin statement), **P-G12** (`run_number` reset on rename/recreate; P-A6 itself is VERIFIED), **OD-A9** incl. the organization plan (P-A5, P-G7, CC-1), P-G10 format check for the repo (with N-24) | Citations recorded in design §13; P-A6 is VERIFIED at source; the real re-run in N-34 remains an end-to-end check | checklist |
 
+### 6.1 Gate B prerequisite and carry-overs from Gate A (recorded at the Gate A closure; `execution.md`)
+
+| Item | Owner task | Source |
+|---|---|---|
+| **Prerequisite:** Secrets Manager `SecretProvider` adapter (`exists()` via `DescribeSecret`, `getSecret` at point of use, no ARN or account ID in errors). Design §15 marks it KEEP but no Gate A task owns it; it must exist **before N-25 and N-32** | to be assigned by the owner (Gate B) | N-17b Leader decision; T-03 forward pointer |
+| Queue policy: explicit `Deny` for every principal outside the four bound senders (an `Allow` alone does not block same-account IAM principals); CI role states DEV-only scope; operator principal is a role | N-24 | N-20 forward pointer |
+| `ci.workflowRef` form: pin which GitHub value it carries (caller `workflow_ref` vs SHA-pinned `job_workflow_ref`, P-G11) and what `source.workflowRef` resolves to, or every real request ends `CONSISTENCY_MISMATCH` | N-24, verified at N-32 | N-05, N-21 forward pointers (open spec gap) |
+| No repository- or organization-level variable named `CICD_BOUND_REF` (variable precedence UNVERIFIED, P-G13) — candidate check, owner decision pending | N-24 / N-29 (if the owner adopts it) | N-21 escalation (open spec gap) |
+| `SenderId` format and authorization on real SQS (ElasticMQ does not provide it) | N-26 | N-17a (DEFERRED) |
+| CI integration-runner SKIP path counts as failure; `validate` runs with `--require-workflow`; a Node 22 run of the full local gate (Gate A evidence was observed on Node 20.19.5) | N-28 (OD-N1) | N-08, N-19, T-21 forward pointers |
+
 ---
 
 ## 7. Gate C: end to end on the target (blocked)
@@ -558,6 +570,15 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 | **N-33** | SSH and window validation without deploy | N-30, N-11 | FR-12, FR-24 | Window approved by the Jenkins admin | Deploy without window → fails fast, no SSH (real negative) | checklist |
 | **N-34** | Acceptance E2E in a window: AC1–AC18 incl. duplicates, concurrency, broken migration, broken health, Executor kill, poison, code 50, wrong sender, **late older build and real re-run (AC17)** | N-31, N-32, N-33 | All FRs of requirements v3 (FR-01–FR-05, FR-07, FR-11–FR-18, FR-21–FR-25), NFR-03, NFR-05, NFR-06 | Window, snapshot, P-23, **P-A6 proven** | Each AC with cited evidence; NFR-05 over ≥ 10 runs with spread reported | full |
 | **N-35** | Measurement report and coexistence close-out: GitHub minutes, Executor resources, cost vs proposal §14.2, windows log, jobs re-enabled (AC14) | N-34 | NFR-05, NFR-07, FR-18 | — | Jenkins jobs re-enabled and working | checklist |
+
+### 7.1 Carry-overs from Gate A (environment-dependent; recorded at the Gate A closure)
+
+| Item | Owner task | Source |
+|---|---|---|
+| Real image inspection: `npm run inspect:image` on a Docker-capable host against the real `Dockerfile` (expected PASS) and the falsifier fixtures (docker-cli, maven, git; expected FAIL); container start and health; `node:22-slim` digest pin | before N-25 (mandatory before deployment) | T-01, N-18 (DEFERRED) |
+| Real Docker and kernel `flock` behavior of `deploy-container.sh`: `docker ps` image reporting for digest-started containers, RepoDigests resolution, `rmi`/pruning by digest, 0600 runtime files, a container whose image cannot be inspected | N-33 / N-34 (old T-33) | T-14, N-15 (DEFERRED) |
+| Digest capture via RepoDigests on GitHub-hosted runners; Environment secrets and variables visible in a called workflow (P-G14); `ci.workflowRef` form observed on a real token | N-32 | N-21 (DEFERRED) |
+| Observed `sub`, `job_workflow_ref` and related claims match the trust policy (P-G10, P-G11) | N-24 / N-32 | N-20, N-21 |
 
 ---
 
