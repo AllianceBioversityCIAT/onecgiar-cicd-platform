@@ -551,7 +551,7 @@ Gate B is split per `gate-b-plan.md` (approved 2026-10-06). **B0** is the reposi
 | [x] **K-6** | `executor.env.example` and `tools/gate-b/run-executor.{ps1,sh}` (Node 22 check, dry-run) | K-2 | Dry-run prints the resolved, redacted configuration and refuses Node ≠ 22 | checklist |
 | [x] **K-7** | Probe tooling `tools/gate-b/probe/` (read-only target probe, SSH preflight) outside the deploy-script allowlist and the image | Gate A | Dockerfile-boundary guard still passes; probe makes no write outside its own lock | full |
 | [x] **K-8** | Owner runbook `docs/gate-b/` (SAM checkpoints A–D, GitHub setup, Executor startup, target values, B1–B5 checklists, teardown) | K-1…K-7 | Commands reference only placeholders; validation and deploy are separate steps | checklist |
-| [ ] **K-9** | B0 closure evidence | K-1…K-8 | `check:local`, guards 8/8 strict, integration suite; NOT EXECUTED items listed | checklist |
+| [x] **K-9** | B0 closure evidence | K-1…K-8 | `check:local`, guards 8/8 strict, integration suite; NOT EXECUTED items listed | checklist |
 
 ### 6.0.1 Owner milestones (B1–B5; not authorized for Claude)
 

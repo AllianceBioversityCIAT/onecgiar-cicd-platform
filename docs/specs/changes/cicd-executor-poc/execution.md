@@ -682,3 +682,22 @@
 | Attempt 1 | `docs/gate-b/README.md` and `01`–`08` (SAM checkpoints A–D as separate steps with STOP conditions; secrets with `file://` values; GitHub Environment with one secret and four variables; definitions and target; portable Node 22 run; target probes; verification queries; teardown). `samconfig.example.toml` comments (copy under `executor/.local/gate-b/`; `resolve_s3` kept because unverified, extra managed stack torn down), `infra/RESOURCES.md` intro (OD-Q7 resolved: SAM), `docs/runbook.md` pointer. Leader corrections: plan B3 (a GitHub re-run is a new `requestId`, so a new execution with the same `runNumber`, not superseded; dedupe applies to SQS redelivery), `docs/resources.md` OD-Q7 row. Implementer falsifier (12-digit number) → guard 4 red. Review: **FAIL** — the setup allowed `deployWindowPolicy: not-required`, which would turn B2 into a real SSH deployment before B4/OD-Q5; the wrong-sender negative was missing |
 | Attempt 2 | `required` policy with no window for B1–B4 and STOP lines; wrong-sender negative via the operator role; corrected untrusted-trigger claim; consistent key newline guidance; OIDC-provider redeploy guidance; empty overrides removed; G-2/G-4/G-6 added to limitations; history-safe prompts; exact launcher messages. Leader evidence: guards 8/8, npm test 1086 passed / 74 skipped / 1 todo, link check 90/0; Leader falsifier (public IPv4 in 07) → guard 4 red, restored → green. Review: **PASS**; its four accuracy advisories (bare role-id `senderRef`, unknown deployment also `UNAUTHORIZED_SENDER`, empty port prompt, lowercase launcher message) applied by the Leader |
 | Not executed | Every documented command (owner, B1–B5) |
+
+### K-9 — B0 closure (2026-10-06)
+
+| Evidence | Result |
+|---|---|
+| `npm run check:local` (typecheck, lint, build, validate, tests, `check:deps`) | exit 0; vitest 1086 passed / 74 skipped / 1 todo (48 files passed, 13 skipped); 0 vulnerabilities |
+| `npm run validate -- --require-workflow` | guards 1–8 PASS (strict) |
+| `npm run test:integration` (DynamoDB Local) | 69/69, 12 files |
+| `npm run test:sqs-emulator` (ElasticMQ) | 4 passed + 1 todo (SenderId deferred to real SQS) |
+| Deploy-script shim suite | 20 run, 0 failed (shim only: not production Docker or Linux `flock` readiness) |
+| Emulator processes after the run | none left |
+| `executor/src` | 80 TypeScript files, 9,770 lines |
+| Runtime used | Node 20.19.5 (Node 22 not observed: DEFERRED to the owner's B1) |
+
+**NOT EXECUTED (owner-executed or deferred):** `sam validate --lint` (B1 checkpoint B), `sam deploy` (checkpoint D), every AWS, GitHub and target command in `docs/gate-b/`, the Executor under Node 22, real `flock` contention, real SQS `SenderId` (P-A4), `inspect:image` (Docker), P-G11/P-G14/P-G10 observations.
+
+**Spec gaps open for the owner:** G-1…G-6 (Gate A), G-8 (scheduler execution id is not a UUID; reconcile schedule DISABLED), G-9 (unparsable definition files skipped at Executor startup).
+
+B0 is complete. **B1 is not started and requires the owner's separate approval.**
