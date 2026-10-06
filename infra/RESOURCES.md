@@ -3,10 +3,18 @@
 <!-- @akili-spec changes/cicd-executor-poc design DD-17, DD-23, DD-24, DD-25, DD-29, §4.1, §5.1, §11, §12; proposal §14.1; requirements FR-17, FR-18, FR-25, NFR-06, NFR-09 -->
 
 This is the **DEV resource contract** for the PoC (design DD-17): what must exist, with what
-configuration and permissions, and why. It is **tool-agnostic on purpose** — the IaC tool
-(CDK, Terraform, or something else) is **OD-Q7, an open decision**. Nothing here chooses it.
-Until OD-Q7 is resolved, this file **is** the infrastructure: every resource below is created
-by hand or by a one-off script, and this table is the source of truth to reconcile against.
+configuration and permissions, and why. **OD-Q7 is resolved (owner decision D-1, 2026-10-06):
+the PoC infrastructure is AWS SAM / CloudFormation**, defined in `infra/sam/template.yaml`
+(stack for Gate B DEV; names derive from the `Stage` parameter, default `dev`, e.g.
+`cicd-events-${Stage}`, `cicd-executions-${Stage}`). This file stays the contract the template is
+reconciled against; the owner-run deployment steps are in `docs/gate-b/`.
+
+Not in the SAM template (created by hand or by a later gate): the Executor ECR repository (#5), the
+GitHub-side configuration (#8), every Secrets Manager secret value (#13, #14; the owner creates them
+with documented commands), the Logs Insights saved query (#18), the target profile and host (#19, #20).
+Differences to note: the ECR repository for CI pushes is an owner-chosen parameter (or an optional
+probe repository), and the reconcile schedule (#10) is created **DISABLED** until spec gap G-8 is
+decided (the Scheduler event id is not a UUID).
 
 **Model B (AC-01):** CI runs in GitHub Actions and builds and pushes images itself; the
 Executor only coordinates the deploy. The following Model A resources no longer exist and must

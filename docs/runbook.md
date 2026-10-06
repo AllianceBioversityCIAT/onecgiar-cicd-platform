@@ -12,6 +12,8 @@ step or webhook ingress to troubleshoot.
 **Publication policy:** no real host, account ID, job name, ARN or secret name appears below.
 Logical references (`<…>`) stand in for them, per design §4.1/DD-23.
 
+**Gate B integration run (SAM deploy, secrets, GitHub, local Executor, target validation):** the owner's step-by-step kit is [`docs/gate-b/README.md`](gate-b/README.md).
+
 ## Quick path
 
 1. Something looks wrong → check Slack for the thread and CloudWatch for the alarm that fired.

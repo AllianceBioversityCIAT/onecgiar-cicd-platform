@@ -105,4 +105,4 @@ aws secretsmanager create-secret --name "<PREFIX><REF_NAME>" --secret-string fil
 [IO.File]::WriteAllText("$PWD\value.txt", '<VALUE>')   # no trailing newline; absolute path (.NET ignores $PWD for relative paths)
 ```
 
-For multi-line values (host key lines, private key) the last line must not be followed by a newline either. Delete `value.txt` afterwards: it may hold a plaintext private key.
+For multi-line values (host key lines) the last line must not be followed by a newline either. The private key is the exception: the SSH library trims it before parsing and it is never a script argument, so a trailing newline is harmless there (either form works). Delete `value.txt` afterwards: it may hold a plaintext private key.

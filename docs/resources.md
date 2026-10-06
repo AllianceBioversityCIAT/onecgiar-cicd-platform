@@ -47,7 +47,7 @@ permissions.
 
 | Open decision | Blocks |
 |---|---|
-| OD-Q7 | Choosing the IaC tool (this file and `infra/RESOURCES.md` stay the contract until then) |
+| OD-Q7 | **Resolved (owner, 2026-10-06, Gate B decision D-1):** AWS SAM / CloudFormation for the PoC — `infra/sam/template.yaml` |
 | OD-Q11 | Confirming the Executor's host |
 | OD-Q12 | How the Executor's AWS credentials are delivered on that host |
 | OD-Q5 | How `<PRMS_REPORTING_DEV_TARGET>` obtains its own AWS permissions |

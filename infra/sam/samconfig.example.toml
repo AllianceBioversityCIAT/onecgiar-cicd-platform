@@ -1,4 +1,6 @@
-# Example only. Copy to samconfig.toml (kept out of Git) and replace every <PLACEHOLDER>.
+# Example only. Copy it to a path that Git ignores and replace every <PLACEHOLDER>:
+#   executor/.local/gate-b/samconfig.toml   (`.local/` is in .gitignore; `samconfig.toml` itself is NOT ignored)
+# then pass it with --config-file. See docs/gate-b/01-aws-sam.md.
 # Review and `sam validate --lint` come first; deployment is a separate owner step (plan section 11).
 version = 0.1
 
@@ -7,7 +9,15 @@ stack_name = "cicd-poc-dev"
 region = "<AWS_REGION>"
 capabilities = "CAPABILITY_IAM"
 confirm_changeset = true
+# resolve_s3 is kept because it is unverified whether `sam deploy` works without a bucket; the
+# template has no local artifacts. It creates one extra CloudFormation stack
+# (aws-sam-cli-managed-default) and a bucket; docs/gate-b/08-teardown.md removes both.
 resolve_s3 = true
+# Empty-valued parameters are omitted because their defaults are already empty. Add
+#   "ExistingGitHubOidcProviderArn=<EXISTING_OIDC_PROVIDER_ARN>"  (if the account already has the GitHub OIDC provider)
+#   "CiEcrRepositoryArn=<ECR_REPOSITORY_ARN>"  (instead of CreateProbeEcrRepository=true)
+#   "AlarmTopicArn=<SNS_TOPIC_ARN>"  (optional)
+# when you need them.
 parameter_overrides = [
   "Stage=dev",
   "GitHubRepositoryId=<GITHUB_REPOSITORY_ID_DIGITS>",
@@ -16,13 +26,10 @@ parameter_overrides = [
   "PlatformWorkflowRepository=<GITHUB_ORG>/<PLATFORM_REPO>",
   "PinnedWorkflowSha=<PINNED_COMMIT_SHA_40_HEX>",
   "GitHubOidcSub=<ENVIRONMENT_FORM_SUB>",
-  "ExistingGitHubOidcProviderArn=",
-  "CiEcrRepositoryArn=",
   "CreateProbeEcrRepository=true",
   "ExecutorTrustedPrincipalArn=<OWNER_IAM_PRINCIPAL_ARN>",
   "OperatorTrustedPrincipalArn=<OPERATOR_IAM_PRINCIPAL_ARN>",
   "SecretIdPrefix=<SECRET_ID_PREFIX_ENDING_WITH_SLASH>",
   "ReconcileScheduleState=DISABLED",
-  "AlarmTopicArn=",
   "EnablePointInTimeRecovery=false",
 ]
