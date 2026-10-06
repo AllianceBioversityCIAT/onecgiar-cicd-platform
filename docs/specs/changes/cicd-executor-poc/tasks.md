@@ -355,7 +355,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-13 — SSH deployer adapter
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · M · **A** |
+| Status / Size / Gate | **[x] done** · M · **A** |
 | Goal | `DeployTransport` over `ssh2`: pinned host key, memory-only credential, SFTP delivery + checksum, escaped args, `CICD_RESULT` parse, ≤ 2 connect retries before exec |
 | Depends on | N-12 (port) |
 | Requirements / Design | FR-12 · DD-10, design §7.5 |

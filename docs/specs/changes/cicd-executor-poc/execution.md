@@ -525,7 +525,7 @@
 | Committed snapshot | HEAD + N-14 files: tsc 0, lint, guards PASS, vitest 850 / 63 skipped |
 | Status | **Done** |
 
-### N-13 — SSH deployer adapter · in progress
+### N-13 — SSH deployer adapter · done
 
 | Field | Value |
 |---|---|
@@ -543,3 +543,9 @@
 | Leader reproduction | 3 consecutive full integration runs: 62/62 each — not reproduced |
 | Safety assessment | The single CREATED, sequence = 1 and BOUND assertions were not reached in that run; in production an unexpected error leaves the message un-acked and redelivered (idempotent), so no duplicate deploy is possible, but an unclassified race outcome exists |
 | Owner | **N-22:** diagnose (log the unexpected error type in the test, run the race repeatedly), and either classify the outcome in execution-service or fix the test isolation |
+| Hardening amendment (N-13) | Fresh `/tmp/cicd-{id}` mkdir 0700 only (any pre-existing directory refused, no exec, no removal); script file 0500 before the checksum; generic SSH error messages without host/IP/port (DD-23); `connectRetries` removed (coordinator owns the §7.2 loop). 43 tests; falsifier (accept pre-existing dir) → 4 red |
+| Evidence re-run (N-13) | **MISMATCH** (Leader): the ssh-deployer suite is flaky — 3 of 8 runs failed with `Cannot parse privateKey: Malformed OpenSSH private key` in different tests. Counts as FAIL → attempt 2: root-cause the key generation or credential handling, ≥ 20 consecutive green runs |
+| Attempt 2 (N-13) | Root cause of the flake: `ssh2`'s `utils.generateKeyPairSync("ed25519")` emits ~1.1% keys its own parser rejects (leading zero byte dropped → 31-byte field; 22/2000 reproduced). Test support now generates ed25519 keys with `node:crypto` and a hand-written OpenSSH encoder (armor assembled at runtime); new `ssh-test-keys.test.ts` parses 1000 keys. Production unaffected (keys from ssh-keygen; credentials passed byte for byte). Evidence re-run (Leader): three ssh suites 12/12 consecutive runs, 44/44 — **VERIFIED** |
+| Reviewer confirmation (N-13) | **PASS** (`opus`): hardening conforms to FR-12/DD-23/§7.2; no executionId can become stuck (worst case: a session drop between exit 50 and cleanup → next attempt X11 SSH_CONNECT, terminal and visible) |
+| Committed snapshot (N-13) | HEAD + N-13 files: tsc 0, lint, guards PASS, vitest 894 / 63 skipped |
+| Status (N-13) | **Done** |
