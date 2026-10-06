@@ -10,14 +10,14 @@
 |---|---|
 | Spec Path | `changes/cicd-executor-poc` |
 | Phase | Phase 2: Design |
-| Version | **v4.3** (editorial E1–E5 after JD APPROVED: bound-ref source, X1 `highestAccepted`, §5.1 attribute, stale text; no new decision). v4.2 (JD round-2 correction: R2-A1, R2-1…R2-8, R2-A2…R2-A6). v4.1 (JD round-1 correction: CS-1, CS-2, CC-1, CC-2, SU-1, CW-1…CW-6). v4 (Model B). History: v3.2 (2026-10-05, owner amendments), v3.1, v3, v2 — detail in `judgment.md` |
+| Version | **v4.4** (owner approval 2026-10-06: DD-25 / OD-A2 APPROVED; DD-27 / OD-A1 APPROVED for the PoC under the single-source invariant; new action-pinning rule in DD-29 and guard 7). v4.3 (editorial E1–E5 after JD APPROVED: bound-ref source, X1 `highestAccepted`, §5.1 attribute, stale text; no new decision). v4.2 (JD round-2 correction: R2-A1, R2-1…R2-8, R2-A2…R2-A6). v4.1 (JD round-1 correction: CS-1, CS-2, CC-1, CC-2, SU-1, CW-1…CW-6). v4 (Model B). History: v3.2 (2026-10-05, owner amendments), v3.1, v3, v2 — detail in `judgment.md` |
 | Depth | Full (re-checked in §14) |
-| Requirements | `requirements.md` v3 (+ Leader rulings RL-1…RL-6) |
-| Intent | `proposal.md` v3, under `architecture-change-01.md` (**AC-01**, APPROVED 2026-10-06) |
+| Requirements | `requirements.md` v3.4 (+ Leader rulings RL-1…RL-7) |
+| Intent | `proposal.md` v3.4, under `architecture-change-01.md` (**AC-01**, APPROVED 2026-10-06) |
 | Evidence | FA and ctx = local-only documents, cited by sanitized section reference only. External premises P-A1–P-A7 (AC-01 §3) |
 | Repository | `https://github.com/AllianceBioversityCIAT/onecgiar-cicd-platform.git` (§4.1) |
 | Skills applied | `software-architect` (Decision Spine: scenarios → tactics → patterns → DDs). No UI |
-| Open decisions | OD-Q5, OD-Q7, OD-Q11–OD-Q15, OD-N1, OD-A1–OD-A9 **remain open**. OD-A1 and OD-A2 carry a **recommendation pending owner confirmation** (DD-25, DD-27) |
+| Open decisions | OD-Q5, OD-Q7, OD-Q11–OD-Q15, OD-N1, OD-A3–OD-A9 **remain open**. **OD-A1 and OD-A2 RESOLVED (owner, 2026-10-06)**: DD-27 and DD-25 approved |
 | Date | 2026-10-06 |
 
 ### 1.1 v3.2 → v4 summary
@@ -35,9 +35,9 @@
 | Split | GitHub Actions = CI (reusable workflow, DD-29); Executor = deploy coordination; target script = procedure | FR-22, NFR-01 |
 | Style | Hexagonal modular monolith, one deployable, stateless worker (DD-01) | NFR-01, NFR-08 |
 | Consistency | DynamoDB conditional writes with optimistic `version` (DD-03) | FR-05, FR-07, NFR-03 |
-| Trust | OIDC `sub` = repo + Environment (DD-24); sender bound per message type via SQS `SenderId` (DD-25, recommended) | FR-21, FR-25 |
+| Trust | OIDC `sub` = repo + Environment (DD-24); sender bound per message type via SQS `SenderId` (DD-25, **approved by the owner**) | FR-21, FR-25 |
 | Artifacts | Digest only; repository from trusted config (DD-26) | FR-03, FR-13 |
-| Ordering | Bound source + in-source `runNumber` (DD-27, **recommended, pending owner**) | FR-23 |
+| Ordering | Single source per `lockKey` + in-source `runNumber` (DD-27, **approved for the PoC by the owner**) | FR-23 |
 | State | Execution-level closed list X1–X16 (§7.3); one backward edge (code 50) | FR-05 |
 | Remote effect | Two-phase intent before exec (DD-28); never re-run automatically | FR-07, FR-12 |
 | Locks | DynamoDB lock (lease, owner, fencing) + kernel mutex on the target (DD-09, DD-22) | FR-11, FR-13 |
@@ -192,7 +192,7 @@ There is no orchestration API. Contracts are messages, schemas and a CLI.
 | `ci.workflowRef` | string ≤ 256 (audit; consistency check against the bound workflow) |
 | `ci.runId` | `^[0-9]{1,20}$` |
 | `ci.runAttempt` | integer ≥ 1 |
-| `ci.runNumber` | integer ≥ 1 — **ordering input under DD-27 (recommended)** |
+| `ci.runNumber` | integer ≥ 1 — **ordering input under DD-27 (approved by the owner, 2026-10-06; inside the single source only)** |
 
 `additionalProperties: false` at every level. Maximum body 8 KB. The `ci.*` fields never authorize anything (DD-25).
 
@@ -477,7 +477,7 @@ MaxSessionDuration: 1 h
 - **Rejected:** environment-only `sub` (admits `pull_request_target`/`workflow_run` on the default branch); custom subject template (unnecessary once the claims are direct keys); branch-based `sub`; `StringLike`/wildcards; static keys; relying on P-A3.
 - **Residual:** repo admins can weaken branch/Environment rules (proposal §13.4); GitHub issuer compromise is bounded to ECR push + SQS send.
 
-### DD-25 — Sender binding per message type (OD-A2: **recommended, pending owner confirmation**)
+### DD-25 — Sender binding per message type (OD-A2: **APPROVED by the owner, 2026-10-06**)
 - **Problem:** the queue accepts messages from several principals; a request for `deploymentId` Y must come only from Y's CI role (FR-21).
 - **Decision:** the consumer requests the `SenderId` system attribute (P-A4: `ROLEID:session` for roles). The authorizer takes the role-ID prefix and maps it to a principal class using **resolved references**:
   - `allowedSenderRef` (per definition) and `executorPrincipalRef`, `schedulerPrincipalRef`, `operatorPrincipalRef` (platform config) resolve at startup, through `SecretProvider` as **non-sensitive identifier references** (DD-23), to role IDs. No role ID or ARN is committed.
@@ -485,13 +485,17 @@ MaxSessionDuration: 1 h
   - Mismatch → X2 `REJECTED (UNAUTHORIZED_SENDER)`, metric + alarm, ack.
 - **Defense in depth:** a queue policy allowing `SendMessage` only to those principals.
 - **Fail-closed:** a recreated role gets a new role ID → requests are rejected and alarmed until the reference is updated.
+- **Owner approval (2026-10-06), binding statements:**
+  - Authorization uses the **AWS-provided sender identity** (the role ID in `SenderId`) and the **trusted `allowedSender` binding** resolved from configuration.
+  - **Caller-controlled session names are never an authorization input**; the `SenderId` suffix is logged as untrusted audit data only.
+  - A CI sender is authorized **only for the event types and the `deploymentId` values explicitly assigned to it**; anything else is `REJECTED (UNAUTHORIZED_SENDER)`.
 - **Alternatives evaluated:** payload signature (needs a signing key in GitHub — a new secret in public repos); one queue per repository (more resources; still needs binding inside). Both rejected for the PoC.
 
 ### DD-26 — Immutable artifact identity
 - **Decision:** the request carries digests only (`sha256:<64-hex>`); the Executor builds `<repository from imageRepositoryRef>@<digest>` and passes it as `--artifact`; the script rejects anything else (exit 2) and pulls by digest. Previous images are recorded by digest.
 - **Consequence:** tags are irrelevant to deploys. Tag immutability on the shared repository stays OD-A7. CI must not push tags colliding with Jenkins's integer tags (FR-22; P-16).
 
-### DD-27 — Supersede ordering (OD-A1: **recommended, pending owner confirmation**)
+### DD-27 — Supersede ordering (OD-A1: **APPROVED for the PoC by the owner, 2026-10-06, under the single-source invariant**)
 
 **Safety goal (FR-23):** an older build that finishes or is re-run later never replaces a newer deployment of the same `lockKey`.
 
@@ -509,7 +513,20 @@ MaxSessionDuration: 1 h
 | Simplicity | Low | High | High | High | High |
 | Rests on | GitHub API availability | **P-A6 (VERIFIED at source; P-G12 rename reset UNVERIFIED)** | — | Client-set dates | Definition validation |
 
-**Recommendation (pending owner confirmation): (e) + (b).**
+**Decision (owner approval 2026-10-06): (e) + (b) under the single-source invariant.**
+
+| Invariant (owner) | Rule |
+|---|---|
+| One deployment per lock | Exactly one `deploymentId` per `lockKey` |
+| One source per deployment | Exactly one trusted GitHub source per `deploymentId`; source identity = repository + workflow + environment + allowed sender |
+| In-source order | `ci.runNumber` orders runs **inside that source only**; an equal `runNumber` is the same logical run or a re-run, not older |
+| Acceptance | `highestAccepted` protects acceptance (S1) |
+| Deployment | `highestDispatched` protects deployment once X9 is reached (S2) |
+| Safety | An older run never deploys after a newer run reached the deployment intent boundary (X9) |
+| Scope | **Multi-source ordering is out of the PoC.** If a future architecture lets several repositories or sources deploy one `lockKey`, DD-27 must be revisited, and `runNumber` values must **never** be compared across sources |
+| Rename / reset | Accepted **fail-safe limitation**: if the trusted workflow is renamed or its counter resets, deploys stop (newer-looking-older runs are superseded) rather than risk an older deploy. Renaming or rebinding the trusted workflow requires the future audited OD-A8 procedure |
+
+Implementation detail of the approved decision:
 1. **Bound source:** each `lockKey` is served by exactly one `deploymentId`; each `deploymentId` is bound to one source (`repositoryRef`, `workflowRef`, `environmentRef`) and one `allowedSender`. Validated at startup (§6.3). The request's `ci.repository` and `ci.workflowRef` must match the resolved source (consistency check; authorization is DD-25).
 2. **In-source order:** `ci.runNumber`. Newer ⇔ higher `runNumber`; equal (re-run of the same run) ⇒ not older: deploys and the script's idempotent path applies.
 3. **Where:** `highestAccepted` (monotonic, at X1) feeds S1; S2 uses `max(lastDeployed, highestDispatched)`, where `highestDispatched` is written atomically with every X9 intent and is never fenced (CS-2). Outcome of the newer dispatch does not matter: once a newer value reached X9, no older one deploys.
@@ -521,8 +538,8 @@ MaxSessionDuration: 1 h
 |---|---|---|
 | Re-run behavior of `run_number` | A re-run of an older run must not look newer | P-A6 VERIFIED at source ("does not change if you re-run"); AC17 keeps a real re-run as E2E confirmation |
 | `runNumber` is body-asserted | A compromised CI role could send a high number: regression of **its own** deployment, or blocking later runs | Bounded by DD-25 to one deployment; alarm on gaps > N; resetting `TARGET` order is an operator override that exists only if OD-A8 (open) defines it; not available in the PoC |
-| Workflow renamed or recreated (counter may restart; UNVERIFIED) | New runs look older | Out of the PoC: renaming or recreating the bound workflow is not supported until OD-A8 (open) defines an audited order reset (P-G12) |
-| Several branches deploying one unit (today's 8 Jenkins variants, C8) | Not expressible | Out of the PoC; only one source per `lockKey`; Jenkins variants stay disabled in windows. A multi-source rule needs a new decision |
+| Workflow renamed or recreated (counter may restart; UNVERIFIED) | New runs look older and are superseded: deploys stop | **Accepted fail-safe limitation (owner, 2026-10-06).** Renaming or rebinding the trusted workflow requires the future audited OD-A8 procedure (P-G12) |
+| Several branches or sources deploying one unit (today's 8 Jenkins variants, C8) | Not expressible | **Out of the PoC (owner).** Only one source per `lockKey`; Jenkins variants stay disabled in windows. A multi-source architecture requires revisiting DD-27; `runNumber` is never compared across sources |
 | A newer request that was accepted (S1) or dispatched (S2) later fails, or ends `UNKNOWN_TARGET_STATE` | Older requests stay superseded; nothing older deploys | Safe direction; the operator verifies (runbook §12.2) and re-runs the newest workflow |
 
 ### DD-28 — Two-phase intent before the remote exec
@@ -531,7 +548,8 @@ MaxSessionDuration: 1 h
 
 ### DD-29 — Reusable workflow owned by the platform repo
 - **Decision:** `.github/workflows/deploy-request.reusable.yml` implements FR-22: inputs (`deploymentId`, build contexts per unit), a `guard` job enforcing the event allowlist and an Environment-job first step enforcing the bound ref from `CICD_BOUND_REF` for `push` and `workflow_dispatch` (DD-24 item 2, E1), Environment-bound job, OIDC, build + push, digest capture from the push output, one `aws sqs send-message` of a schema-valid body with `requestId = ${run_id}-${run_attempt}`, identifiers only from secrets (P-G8). Callers call it at the immutable commit SHA that the trust policy's `job_workflow_ref` pins (DD-24); a tag or branch reference does not match the trust and is not used for this workflow (owner direction, 2026-10-06). OD-A6 keeps open the approval to add callers to application repositories (E5). Statically validated in Gate A; first real run in Gate C (N-32).
-- **Rejected:** per-repo copies (drift); deploy logic in the workflow (option C, proposal §11).
+- **Action pinning (owner security rule, 2026-10-06):** every GitHub Action referenced inside the trusted reusable workflow — third-party **and** GitHub-owned, `uses: owner/repo[/path]@ref` — is pinned by an **immutable full 40-hex commit SHA**, with the human-readable version as a trailing comment (e.g. `uses: <owner>/<action>@<40-hex-sha> # v4.1.0`). Mutable refs (`@main`, `@master`, branches, tags including `@v4`) are **prohibited**. `docker://` references must be pinned by image digest (`@sha256:<64-hex>`). Local `./` references are the only exemption. This matters most for the steps that obtain AWS credentials via OIDC, log in to and publish to ECR, handle artifacts that influence the request, and build or send `DEPLOY_REQUESTED`: a moved tag there would change trusted code without changing `job_workflow_ref`. Enforced by the static **guard 7 "action-pinning"** (N-19), which scans `.github/workflows/*.reusable.yml` and fails on any non-compliant `uses:`.
+- **Rejected:** per-repo copies (drift); deploy logic in the workflow (option C, proposal §11); tag-pinned actions (mutable).
 
 ### 10.4 Reversal challenge
 
@@ -558,6 +576,7 @@ MaxSessionDuration: 1 h
 | Queue policy: only CI roles, Executor, scheduler, operator principals | SQS | DD-25 |
 | Sender binding per message type, fail-closed | Executor | DD-25 |
 | Strict schema; digest only; repository from config | Executor + script | DD-26 |
+| Every action in the trusted reusable workflow pinned by a full commit SHA (`docker://` by digest; `./` exempt); guard 7 | Reusable workflow + guards | DD-29 |
 | Dedupe on `{deploymentId, requestId}` with `requestId` validated against `ci.*`; replay after dedupe TTL is still safe (same digests → idempotent; older `runNumber` → `SUPERSEDED`) | Executor | DD-20, DD-27 |
 | Production approval: GitHub Environment required reviewers **before** the request exists; Executor deploy windows **after**. No approval engine in the Executor | GitHub / Executor | DD-21, DD-24 |
 | Public CI logs: role ARN, registry and queue URL only from **secrets** (variables render unmasked, P-G8); account ID masked explicitly; `publication-policy` guard also scans workflow files | GitHub / guards | DD-23 |
@@ -624,7 +643,7 @@ MaxSessionDuration: 1 h
 | P-A1 | Standard hosted runners free on public repos | VERIFIED (AC-01 §3) | Cost only | — |
 | P-A2 | **Corrected (JD round 1):** the default `sub` includes `pull_request` "only if the job doesn't reference an environment"; when a job references an environment, the environment form is used **regardless of the triggering event**. `id-token: write` is required | VERIFIED [GH-OIDC] (read 2026-10-06) | — (the corrected reading is what DD-24 now designs for) | — |
 | P-A3 | Fork `pull_request` runs get no OIDC token or secrets | `UNVERIFIED — confirm at source before relying on it` | None: DD-24 does not rely on it | Design-time pin of the primary GitHub statement |
-| P-A4 | SQS returns `SenderId` (`ROLEID:session`) for roles | VERIFIED (AC-01 §3) | DD-25 falls back to OD-A2 alternatives (High) | Real format check at Gate B |
+| P-A4 | SQS returns `SenderId` (`ROLEID:session`) for roles | VERIFIED (AC-01 §3) | DD-25 (approved) would need re-decision with the owner (High) | Real format check at Gate B |
 | P-A5 | Repositories in scope are public | `UNVERIFIED — confirm at source before relying on it` | **High:** for a private repo, Environment protection depends on the plan (P-G7). On a plan without environments for private repos, DD-24 cannot be configured and must be redesigned; otherwise cost changes too | OD-A9, Gate B (N-29); re-checked at Gate C (N-32) |
 | P-A6 | `run_number` increases per run and is unchanged on re-run: "A unique number for each run of a particular workflow in a repository. This number begins at 1 for the workflow's first run, and increments with each new run. This number does not change if you re-run the workflow run." | VERIFIED [GH-CTX] (read 2026-10-06). The AC17 real re-run stays as an E2E check | — | — |
 | P-A7 | Public repo logs and workflow files are readable by anyone | `UNVERIFIED — confirm at source before relying on it` (treated as true) | Over-masking only (Low) | — |
@@ -680,7 +699,7 @@ Tripwire: `/akili-execute` stops and escalates if these are exceeded. Several PR
 
 | Gate | Meaning | Blocked by |
 |---|---|---|
-| **A** | Core implementation (domain, schemas, validation, store with DynamoDB Local, coordinator with a fake transport, workflow static validation) | Scoped Judgment Day `APPROVED`; owner approves the plan and **confirms or replaces DD-25 (OD-A2) and DD-27 (OD-A1)** before the tasks that implement them. No other OD |
+| **A** | Core implementation (domain, schemas, validation, store with DynamoDB Local, coordinator with a fake transport, workflow static validation) | Scoped Judgment Day `APPROVED`; owner approved the plan and **approved DD-25 (OD-A2) and DD-27 (OD-A1)** on 2026-10-06. No OD blocks Gate A |
 | **B** | DEV infra and Executor deployed (infra only; no real CI run) | OD-Q11 (P-19), OD-Q12, OD-Q7, OD-N1 (platform CI task), P-11, P-7, **OD-A9 incl. the organization plan (P-A5, P-G7)**, P-A4 real format, P-A3 pinned, P-8/P-16 |
 | **C** | First real CI run of the caller (held by a closed window), then E2E deploy on `<PRMS_REPORTING_DEV_TARGET>` | OD-A6 (caller) + repo-admin Environment setup and trust-policy IDs and SHA pin observed (P-G10, P-G11), P-G7 re-checked, OD-Q5 (P-14), P-13, P-23, P-24, P-6, P-5, AC17 real re-run as E2E confirmation of P-A6 |
 | **D** | Retire Jenkins | OD-A3, OD-A4, OD-N1, OD-Q14, inventory, H1–H3, Jira, every wave validated |

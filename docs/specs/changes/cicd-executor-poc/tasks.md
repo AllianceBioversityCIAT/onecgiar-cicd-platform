@@ -10,8 +10,8 @@
 |---|---|
 | Spec Path | `changes/cicd-executor-poc` |
 | Phase | Phase 3: Tasks |
-| Version | **v4** (Model B) |
-| Status | **DRAFT.** Execution stays **paused** until the scoped Judgment Day (AC-01 §16) returns `APPROVED` **and** the owner approves this plan |
+| Version | **v4.4** (Model B; owner approval 2026-10-06) |
+| Status | **APPROVED by the owner (2026-10-06)** after the scoped Judgment Day returned `APPROVED`. Execution may resume with Gate A (N-01…N-22) under `/akili-execute` |
 | Sources of truth | `architecture-change-01.md` (AC-01, APPROVED), `proposal.md` v3, `requirements.md` v3 (+ RL-1…RL-7), `design.md` v4, `judgment.md` |
 | Repository | `onecgiar-cicd-platform` (design §4.1). Commits only in `/akili-execute`, with owner approval |
 | Publication policy | No internal identifiers in Git (DD-23), extended to workflow files and CI logs |
@@ -24,8 +24,9 @@
 | Version | Change |
 |---|---|
 | v3.x | 37 tasks (T-00…T-36) for the v2 model (Lambda + CodeBuild + SSH). Gate A paused at 12/23 under AC-01 |
-| **v4** | Rewritten for AC-01 / proposal v3 / requirements v3 / design v4. New `N-` plan; OLD → NEW mapping (§3); obsolescence driven by design §15; DD-25 and DD-27 tasks require owner confirmation before execution |
+| **v4** | Rewritten for AC-01 / proposal v3 / requirements v3 / design v4. New `N-` plan; OLD → NEW mapping (§3); obsolescence driven by design §15; DD-25 and DD-27 tasks required owner confirmation before execution (granted in v4.4) |
 | **v4.1** | JD round-1 correction (CS-1, CS-2, CC-1, CC-2, SU-1, CW-1…CW-6): scopes of N-01, N-03–N-05, N-07–N-12, N-14, N-19–N-21, N-24, N-29, N-32 extended; T-06 reworked (CW-4); budget total equals components (CW-6) |
+| **v4.4** | **owner approval 2026-10-06:** DD-25 and DD-27 approved; [confirm] markers removed from N-06, N-07, N-09; new guard 7 "action-pinning" in N-19; N-21 depends on it; N-22 closure checks it |
 | **v4.3** | Editorial E1–E5 after JD APPROVED (2026-10-06): N-21 bound-ref source, N-29 stale P-A6 text. No new decision |
 | **v4.2** | JD round-2 correction (R2-A1…R2-A6, R2-1…R2-8): N-24/N-32 trust checks on direct IAM keys, guard bound-ref for both events (N-21), equality rule (N-09), resolution CLI (N-11, N-20), misplaced cell text moved to the verification column (R2-2) |
 
@@ -37,7 +38,7 @@
 
 | Gate | Tasks | State |
 |---|---|---|
-| **A**: local, no AWS, no GitHub runs | N-01…N-22 (22) | Executable after JD `APPROVED` + plan approval. **N-06, N-07, N-09 need owner confirmation of DD-25 / DD-27 first**; the rest of Gate A does not wait for it |
+| **A**: local, no AWS, no GitHub runs | N-01…N-22 (22) | Executable after JD `APPROVED` + plan approval. DD-25 and DD-27 approved by the owner (2026-10-06); no task waits on a confirmation |
 | **B**: DEV infra and Executor deployment | N-23…N-29 (7) | Blocked by OD-Q7, OD-Q11, OD-Q12, OD-N1, OD-A9 and premises P-7, P-8, P-11, P-16, P-19, P-22, P-A3, P-A4, P-G4, P-G7 (organization plan) |
 | **C**: end to end on `<PRMS_REPORTING_DEV_TARGET>` | N-30…N-35 (6) | Blocked by OD-Q5, OD-A6, P-3–P-6, P-13, P-14, P-23, P-24, AC17 real re-run (P-A6 verified at source; rename reset P-G12 UNVERIFIED) |
 | **D**: retire Jenkins | D-1…D-8 (tracking) | Outside the PoC |
@@ -60,7 +61,7 @@ N-01 ─┬─> N-02 ─> N-03 ────────────────�
       │         └─> N-08 ─> N-09* (needs N-07*)     ├─> N-10 ─> N-11 ─> N-12 ─> N-14 ─> N-17 ─> N-22
       ├─> N-07* (lock-policy ordering)              │            N-13 ─┘   N-16 ─┘
       ├─> N-15 (script; parallel)   N-18, N-19, N-20, N-21 (parallel, after N-01/N-02)
-      * = requires owner confirmation of DD-25 (N-06) or DD-27 (N-07, N-09)
+      DD-25 (N-06) and DD-27 (N-07, N-09) approved by the owner on 2026-10-06
 ```
 
 | PR | Tasks | Review first |
@@ -127,7 +128,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 
 - **Verification:** each task names its *Falsifier*; its *Red run* is **observed and cited** during execution, never predicted.
 - **First step:** a task owning an `UNVERIFIED` premise resolves it before building; if refuted, Pivot Protocol.
-- **Owner confirmation:** tasks marked **[confirm DD-25]** or **[confirm DD-27]** do not start until the owner confirms or replaces that recommendation. If replaced, the task is re-specified before execution.
+- **Owner approval (2026-10-06):** DD-25 and DD-27 are approved; N-06, N-07 and N-09 implement them as recorded (no confirmation markers remain).
 - **Deferred environment validations (carried):** real `inspect:image` needs a Docker daemon (DEFERRED, exit 3, never PASS); script tests run with shims, real `flock`/Linux behavior is proven in Gate C; local runs observed on **Node 20.19.5** while the target is **Node 22** (N-22 re-runs `check:local` on Node 22 or records DEFERRED); `shellcheck` absent = SKIPPED, not PASS.
 - **Sensitive data:** no fixture, test or document contains real internal identifiers.
 
@@ -225,10 +226,10 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 | Done | Guard pending entries for N-05 cleared |
 | Skills | `tdd`, `api-design-principles` |
 
-### N-06 — Sender authorizer **[confirm DD-25]**
+### N-06 — Sender authorizer (DD-25, approved)
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · S · **A** (needs owner confirmation of OD-A2) |
+| Status / Size / Gate | pending · S · **A** (OD-A2 resolved by the owner, 2026-10-06) |
 | Goal | Map the `SenderId` role ID to a principal class and enforce the per-type rule |
 | Depends on | N-03, N-05 |
 | Requirements / Design | FR-21, RL-2 · DD-25 |
@@ -243,10 +244,10 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 | Done | All four types bound; negatives green |
 | Skills | `tdd` |
 
-### N-07 — Supersede policy **[confirm DD-27]**
+### N-07 — Supersede policy (DD-27, approved)
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · S · **A** (needs owner confirmation of OD-A1) |
+| Status / Size / Gate | pending · S · **A** (OD-A1 resolved by the owner, 2026-10-06) |
 | Goal | Pure `SupersedePolicy`: bound source + in-source `runNumber`; S1 and S2 decisions |
 | Depends on | N-01 |
 | Requirements / Design | FR-23 · DD-27, design §7.3 |
@@ -279,7 +280,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 | Done | T-08 files committed in reduced form; guard pending entries for N-08 cleared |
 | Skills | `tdd`, `aws-serverless` |
 
-### N-09 — Target state with ordering and fencing **[confirm DD-27]**
+### N-09 — Target state with ordering and fencing (DD-27, approved)
 | Field | Value |
 |---|---|
 | Status / Size / Gate | pending · S · **A** |
@@ -459,22 +460,22 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 | Done | Static guard green; inspection DEFERRED recorded |
 | Skills | — |
 
-### N-19 — Guards retarget (T-21 guards 3 and 6)
+### N-19 — Guards retarget (T-21 guards 3 and 6) and guard 7 "action-pinning"
 | Field | Value |
 |---|---|
 | Status / Size / Gate | pending · S · **A** |
-| Goal | Guard 3 → `deployment.schema.json` expressions corpus; guard 6 → mock deployment definition (NFR-08); publication guard also scans `.github/workflows/` |
+| Goal | Guard 3 → `deployment.schema.json` expressions corpus; guard 6 → mock deployment definition (NFR-08); publication guard also scans `.github/workflows/`; **new guard 7 "action-pinning"** (owner rule, 2026-10-06) |
 | Depends on | N-03 |
-| Requirements / Design | NFR-01, NFR-02, NFR-08 · DD-23 |
-| Files | `scripts/guards/{pipeline-schema-expressions→deployment-schema-expressions, extensibility-fixture, publication-policy}.mjs`, `boundary-guards.test.ts` |
-| Scope | No new denylist entries without provenance Rework `test/fixtures/nfr08-second-definition/pipeline.yaml` into a deployment definition (CW-5). |
-| Tests / verification | Each guard with its negative case |
+| Requirements / Design | NFR-01, NFR-02, NFR-08, FR-22, FR-25 · DD-23, DD-29 |
+| Files | `scripts/guards/{pipeline-schema-expressions→deployment-schema-expressions, extensibility-fixture, publication-policy, action-pinning (new)}.mjs`, `run-all.mjs`, `boundary-guards.test.ts` |
+| Scope | No new denylist entries without provenance. Guard 7 scans `.github/workflows/*.reusable.yml`: every `uses: owner/repo[/path]@ref` must be a full 40-hex SHA (trailing version comment), `docker://` must be `@sha256:<64-hex>`, `./` exempt; any other ref fails. Rework `test/fixtures/nfr08-second-definition/pipeline.yaml` into a deployment definition (CW-5). |
+| Tests / verification | Each guard with its negative case; guard 7 negatives: `@v4`, `@main`, `@master`, a branch name, a 7-char short SHA, `docker://image:tag`; positives: full SHA, `docker://…@sha256:…`, `./local` |
 | Falsifier | Account-ID-shaped literal in a workflow file → publication guard red |
 | Red run | Cite it |
 | Disqualifier | — |
 | Consumers | N-21 |
 | Review | full |
-| Done | Guards green clean, red mutated |
+| Done | Seven guards green clean, red mutated; guard 7 wired into `npm run validate` |
 | Skills | — |
 
 ### N-20 — Infrastructure inventory and runbooks
@@ -500,7 +501,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 |---|---|
 | Status / Size / Gate | pending · M · **A** (no GitHub run in Gate A) |
 | Goal | `.github/workflows/deploy-request.reusable.yml` and `docs/examples/caller-workflow.yml` implementing FR-22 |
-| Depends on | N-02, N-19 |
+| Depends on | N-02, N-19 (guard 7 must exist so the real reusable workflow is checked) |
 | Requirements / Design | FR-22, FR-25 · DD-24, DD-26, DD-29 |
 | Files | the two workflow files; a contract test that parses them |
 | Scope | Environment-bound job; `id-token: write`; OIDC role; build + push; digest capture; one schema-valid send after all steps; `guard` job enforcing the event allowlist (`push` or `workflow_dispatch`) before the Environment job, and an Environment-job first step enforcing **the bound ref for both events** from the administrator-only `CICD_BOUND_REF` Environment variable, never a caller input (R2-3, E1); identifiers only from secrets, account ID masked explicitly (SU-1); `requestId = run_id-run_attempt`; no host/script/SSH. Adding the caller to the application repo is **Gate C (N-32, OD-A6)** |
@@ -517,7 +518,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 | Field | Value |
 |---|---|
 | Status / Size / Gate | pending · S · **A** |
-| Goal | Prove Gate A complete: obsolescence guard with an empty pending list; `check:local` and `validate` green; coverage matrix (§9) re-checked |
+| Goal | Prove Gate A complete: obsolescence guard with an empty pending list; `check:local` and `validate` green, **including guard 7 "action-pinning" on the real reusable workflow**; coverage matrix (§9) re-checked |
 | Depends on | N-01…N-21 |
 | Requirements / Design | NFR-01, NFR-08 · design §15 |
 | Files | `docs/specs/changes/cicd-executor-poc/execution.md` (record only) |
@@ -612,5 +613,5 @@ No clause is covered by citing another requirement.
 | N-15 | Script accumulates application logic | Generic; arguments only; project-identifier guard |
 | N-21 | Workflow gains deploy logic (host, SSH) | Contract test forbids it; option C rejected (proposal §11) |
 | N-11 / N-30 | Jenkins logic in the core | Opaque lists only; `grep -i jenkins executor/src` |
-| N-06 / N-07 / N-09 | Implementing an unconfirmed recommendation | Blocked on owner confirmation; re-specified if replaced |
+| N-06 / N-07 / N-09 | Drifting from the approved DD-25 / DD-27 (e.g. comparing `runNumber` across sources, authorizing on session names) | Review against the owner statements recorded in DD-25 and DD-27 |
 | N-28 | Choosing a CI without a decision | Blocked by OD-N1 |

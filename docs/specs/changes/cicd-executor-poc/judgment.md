@@ -254,3 +254,12 @@ JUDGMENT: APPROVED ✅ (with residual info items requiring an owner-approved edi
 | E5 | R3-A2 | N-29 stale P-A6 text removed; DD-29 and the OD-A6 rows say the reusable workflow is pinned by commit SHA wherever the trust depends on it (owner direction) |
 
 Checks after E1–E5: stale-text grep clean; Premise Ledger 15 VERIFIED / 25 UNVERIFIED (consistent with the count line); sanitization grep clean on all spec files; `npm run validate` 6/6 PASS.
+
+### Owner decisions after the Judgment Day (2026-10-06)
+
+| Item | Decision |
+|---|---|
+| DD-25 / OD-A2 | **APPROVED** as proposed: AWS-provided sender identity + trusted `allowedSender` binding; caller-controlled session names never authorize; a CI sender is authorized only for its assigned event types and `deploymentId` values |
+| DD-27 / OD-A1 | **APPROVED for the PoC under the single-source invariant** (one `deploymentId` per `lockKey`, one trusted source per `deploymentId`, `ci.runNumber` ordering inside that source, equal = same logical run). Multi-source ordering out of the PoC; rename/reset accepted as a fail-safe limitation (OD-A8 for rebinding) |
+| New security rule | Every GitHub Action referenced in the trusted reusable workflow is pinned by full commit SHA (version as a comment); mutable refs prohibited; static guard 7 "action-pinning" (N-19), checked against the real workflow in N-21 and at Gate A closure (N-22) |
+| Gate A | Implementation approved for N-01…N-22 after this specification commit |

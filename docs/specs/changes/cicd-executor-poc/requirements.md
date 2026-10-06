@@ -10,7 +10,7 @@
 |---|---|
 | Spec Path | `changes/cicd-executor-poc` |
 | Phase | Phase 1: Requirements |
-| Version | **v3** (aligned with `proposal.md` v3) |
+| Version | **v3.4** (owner approval 2026-10-06; aligned with `proposal.md` v3.4) |
 | Depth | **Full** (new infrastructure, trust boundary, concurrency, deployment and migrations) |
 | Type | Change |
 | Approval Mode | `gated` (inherited from the proposal) |
@@ -27,6 +27,7 @@
 |---|---|
 | v2 | Requirements for proposal v2: Executor coordinates Lambda (quality), CodeBuild (images) and SSH from step-graph definitions. Judgment Day APPROVED with round 1–2 adjustments (code 50, mandatory window policy, window revalidation, single backward transition, canonical `LOCK_TIMEOUT`, sanitization) |
 | **v3** | **AC-01 / proposal v3 (Model B).** CI moves to GitHub Actions. Removed: FR-06, FR-08, FR-09, FR-10, FR-19, FR-20. Rewritten: FR-01, FR-03, FR-04, FR-05, FR-07, FR-11, FR-13–FR-18, NFR-01, NFR-02, NFR-04–NFR-08, NFR-10. New: FR-21 request authentication, FR-22 CI contract, FR-23 supersede ordering, FR-24 deploy windows (split from FR-18), FR-25 CI trust boundary. All Judgment Day round 1–2 adjustments are preserved (mapping in §10) |
+| **v3.4** | **owner approval 2026-10-06:** OD-A2 resolved (FR-21 owner statements); OD-A1 resolved for the PoC under the single-source invariant (FR-23); new FR-22 scenario "actions pinned by commit SHA" with FR-25 cross-reference |
 | **v3.3** | Editorial E1–E5 after JD APPROVED (2026-10-06): bound-ref source in FR-25, `TARGET_RESOLUTION_RECORDED` in FR-04, OD-A6 wording. No new decision |
 | **v3.2** | **JD round-2 correction:** FR-25 trust bound to direct IAM keys (`job_workflow_ref` at an immutable SHA, repository and owner IDs, Environment) instead of a custom subject; guard checks the bound ref for both events; FR-23 equal-value scenario; FR-03 dedupe wording |
 | **v3.1** | **JD round-1 correction:** FR-25 (custom OIDC subject with `job_workflow_ref`, event allowlist, negatives for `pull_request`, `pull_request_target`, `workflow_run`, organization plan) CS-1/CC-1; FR-23 (supersede against every dispatched value; unknown-state and lost-lease scenarios) CS-2; FR-07/FR-21/FR-22 (dedupe scoped to `deploymentId`, `requestId` validated) CC-2; FR-22 (secrets, not variables) SU-1; FR-05 (`RECEIVED` removed) and FR-15 (aligned with X11/X16, stalled re-drive) CW-2/CW-3; P-A2 corrected |
@@ -43,7 +44,7 @@
 | RL-7 | Exit 2 (script usage error) is **not** a distinct outcome: the Executor cannot distinguish it from bash's own exit 2 (builtin misuse, syntax) that could occur after effects, so it maps to `UNKNOWN_TARGET_STATE` (RL-4 stands). Usage errors are prevented upstream by definition validation and the script's own tests |
 | RL-6 | Required reviewers apply to production environments in later waves; the PoC is DEV |
 
-**Rule for this specification:** OD-Q5, OD-Q7, OD-Q11–OD-Q15, OD-N1 and OD-A1–OD-A9 are **open decisions** (§9). No requirement assumes their answer. Where one conditions a requirement, the dependency is declared and the requirement states the **behavior**, not the mechanism. Premises P-A3, P-A5 and P-A7 stay `UNVERIFIED` (P-A6 was verified at source in JD round 2) and no requirement relies on them alone.
+**Rule for this specification:** OD-Q5, OD-Q7, OD-Q11–OD-Q15, OD-N1 and OD-A3–OD-A9 are **open decisions** (§9); OD-A1 and OD-A2 were **resolved by the owner on 2026-10-06**. No requirement assumes their answer. Where one conditions a requirement, the dependency is declared and the requirement states the **behavior**, not the mechanism. Premises P-A3, P-A5 and P-A7 stay `UNVERIFIED` (P-A6 was verified at source in JD round 2) and no requirement relies on them alone.
 
 ---
 
@@ -249,7 +250,7 @@ The system SHALL accept deployments only through a `DEPLOY_REQUESTED` message th
 #### Scenario: CI metadata is audit only
 - GIVEN the `ci` fields (repository, run id, run attempt, workflow ref)
 - THEN they are stored for traceability
-- BUT they must NOT drive authorization, target resolution or ordering unless OD-A1 explicitly selects one of them as an ordering input
+- BUT they must NOT drive authorization or target resolution; the only ordering input is `ci.runNumber`, inside the single bound source (OD-A1 resolved, FR-23)
 
 ### FR-04 — Event reception and validation
 
@@ -558,7 +559,9 @@ The system SHALL operate the PoC's real deploys only within test windows in whic
 
 ### FR-21 — Request authentication and deployment authorization (NEW)
 
-The system SHALL accept each message only from a sender identity authorized for that message type and, for `DEPLOY_REQUESTED`, only from the sender bound to the request's `deploymentId` (`allowedSender`). The sender identity SHALL come from a source the sender cannot forge. The mechanism is **OD-A2** (recommended: SQS `SenderId` role binding, P-A4).
+The system SHALL accept each message only from a sender identity authorized for that message type and, for `DEPLOY_REQUESTED`, only from the sender bound to the request's `deploymentId` (`allowedSender`). The sender identity SHALL come from a source the sender cannot forge. The mechanism is SQS `SenderId` role binding (**OD-A2 resolved by the owner, 2026-10-06**; P-A4).
+
+**Owner statements (2026-10-06):** authorization uses the AWS-provided sender identity (role ID) and the trusted `allowedSender` binding; caller-controlled session names are never an authorization input; a CI sender is authorized only for the event types and `deploymentId` values explicitly assigned to it.
 
 #### Scenario: authorized sender
 - GIVEN a request whose sender matches the definition's `allowedSender`
@@ -611,6 +614,12 @@ The reusable workflow SHALL be the only producer of deploy requests in the norma
 - GIVEN a successful run
 - THEN `requestId` is exactly `<run_id>-<run_attempt>` of that run, and `ci.runId` / `ci.runAttempt` carry the same values
 
+#### Scenario: actions pinned by commit SHA (owner approval 2026-10-06; see FR-25)
+- GIVEN the trusted reusable workflow
+- THEN every `uses: owner/repo[/path]@ref` (third-party and GitHub-owned) is pinned by a full 40-hex commit SHA with the human-readable version as a trailing comment, and every `docker://` reference by image digest
+- BUT it must NOT reference any action by a mutable ref (`@main`, `@master`, a branch, or a tag such as `@v4`); local `./` references are the only exemption
+- AND IT MUST be enforced by a static guard that fails on any non-compliant reference
+
 #### Scenario: no deploy logic
 - GIVEN the workflow
 - THEN it never selects a host, script, command or image repository for the deploy
@@ -627,7 +636,7 @@ The reusable workflow SHALL be the only producer of deploy requests in the norma
 
 ### FR-23 — Supersede ordering (NEW; split from FR-11)
 
-The system SHALL guarantee that **an older build that finishes or is re-run later never replaces a newer deployment of the same `lockKey`**. "Older" and "newer" are defined by the ordering mechanism decided in **OD-A1** (design), which SHALL also define behavior across re-runs and across several sources on one `lockKey`.
+The system SHALL guarantee that **an older build that finishes or is re-run later never replaces a newer deployment of the same `lockKey`**. "Older" and "newer" are defined by `ci.runNumber` **inside the single trusted source** of the deployment (**OD-A1 resolved for the PoC by the owner, 2026-10-06**): exactly one `deploymentId` per `lockKey`, exactly one trusted GitHub source per `deploymentId` (repository + workflow + environment + allowed sender); an equal `runNumber` is the same logical run or a re-run, not older. Multi-source ordering is **out of the PoC**; `runNumber` values are never compared across sources. A renamed or reset workflow makes deploys stop (accepted fail-safe limitation); rebinding requires the future audited OD-A8 procedure.
 
 #### Scenario: late older build
 - GIVEN build B2 (newer) already deployed on the `lockKey`
@@ -646,7 +655,7 @@ The system SHALL guarantee that **an older build that finishes or is re-run late
 
 #### Scenario: two sources on one lockKey
 - GIVEN requests from two different sources (repositories or workflows) for deployments sharing a `lockKey`
-- THEN their relative order follows the explicit rule fixed with OD-A1
+- THEN the definitions are invalid and the Executor does not start (single-source invariant, OD-A1); no ordering across sources is attempted
 - BUT the system must NOT fall back to an undocumented rule; where order cannot be established, the documented rule applies and the outcome is audited
 
 #### Scenario: check under the lock
@@ -734,6 +743,10 @@ The infrastructure SHALL restrict who can obtain AWS credentials from GitHub and
 - THEN the organization's plan provides Environment deployment branch rules and environment secrets for each of them (P-G7, OD-A9); without them, the IAM binding and the guard still hold but GitHub-side branch gating and environment-scoped secrets are lost, and the owner decides at OD-A9
 - AND IT MUST be re-checked after any change of repository visibility, because protection rules are ignored after converting to private on some plans
 
+#### Scenario: pinned code behind the pinned workflow
+- GIVEN `job_workflow_ref` pins the reusable workflow by commit SHA
+- THEN the actions it uses are also pinned by commit SHA (FR-22), so trusted code cannot change through a moved tag
+
 #### Scenario: least privilege
 - GIVEN a CI role
 - THEN it has one repository + environment scope, ECR authentication and push to **its** repositories only, and `sqs:SendMessage` on the deploy queue only
@@ -796,7 +809,7 @@ Name the defect class, then the gate. Gates A–D are the proposal's (§18).
 
 ## 9. Open decisions and dependencies
 
-None is resolved in this phase.
+None is resolved by assumption. OD-A1 and OD-A2 were resolved by the owner on 2026-10-06; all others remain open.
 
 | OD | Question (unanswered) | Dependent requirements | What remains undecided |
 |---|---|---|---|
@@ -808,8 +821,8 @@ None is resolved in this phase.
 | OD-Q14 | Does anyone consume `<JENKINS_EXECUTIONS_TABLE>`? | None in the PoC | Future record compatibility |
 | OD-Q15 | Repo size and GitHub authentication | None in the Executor (no clone) | Recorded until the owner closes it |
 | OD-N1 | CI for this platform repo | Gate D | The owner decides |
-| OD-A1 | Supersede ordering mechanism | FR-03 (ordering fields), FR-23 | The key and the multi-source rule |
-| OD-A2 | Request authentication mechanism (`SenderId` binding recommended; signature; queue per repo) | FR-21, FR-25 | The mechanism; FR-21 fixes the behavior |
+| OD-A1 | Supersede ordering mechanism | FR-03, FR-23 | **RESOLVED (owner, 2026-10-06):** `ci.runNumber` inside a single trusted source per `deploymentId`, one `deploymentId` per `lockKey`; multi-source out of the PoC |
+| OD-A2 | Request authentication mechanism | FR-21, FR-25 | **RESOLVED (owner, 2026-10-06):** `SenderId` role binding to `allowedSender`; session names never authorize |
 | OD-A3 | Who performs non-SSH deploys | Out of scope | Later waves |
 | OD-A4 | Store for non-Docker artifacts | Out of scope | Later waves |
 | OD-A5 | Slack notification for CI failures | FR-14 | Whether the reusable workflow posts to Slack |

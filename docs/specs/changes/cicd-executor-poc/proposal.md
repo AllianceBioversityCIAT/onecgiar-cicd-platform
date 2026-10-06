@@ -12,7 +12,7 @@
 | Slug | `cicd-executor-poc` |
 | Type | **Change** (new feature, greenfield) |
 | Approval Mode | `gated` (human gate, ctx §20) |
-| Status | Draft **v3**: rewritten under the approved Architecture Change AC-01. Pending approval |
+| Status | **v3.4**: rewritten under the approved Architecture Change AC-01; plan **approved by the owner on 2026-10-06** |
 | Date | 2026-10-06 |
 | Owner | CI/CD Platform Team |
 | Sources | **AC-01** = `architecture-change-01.md` (APPROVED 2026-10-06; authority for this revision); **ctx** and **FA** = the local context and feasibility documents cited in v2 (sanitized section references only); owner directives 2026-10-05 and 2026-10-06 |
@@ -31,6 +31,7 @@
 | v1 | Written without the FA. Fargate runtime, generic CodeBuild, new Lambda worker |
 | v2 | Validated against the FA. Runtime on the existing microservices server, CodeBuild per app+environment, `<QUALITY_WORKER_FUNCTION>` reused, per-deploy-unit lock + supersede, Jenkins coexistence, three gates |
 | **v3** | **AC-01 (Model B).** CI moves to GitHub Actions; one `DEPLOY_REQUESTED` per build goes through SQS. Removed from the Executor's normal path: Lambda, CodeBuild, source clone/packaging, `/work`, git, the GitHub credential, the step planner/DAG, CI callbacks and correlation, the webhook ingress. Added: the CI → AWS trust boundary (OIDC, CI roles, sender binding), digest-only artifacts, supersede ordering as an open evaluated question (OD-A1), OD-A1…OD-A9. Non-SSH deploys explicitly out of the PoC (OD-A3). Application repos gain a caller workflow (OD-A6). Four gates re-derived |
+| **v3.4** | **owner approval 2026-10-06:** OD-A2 and OD-A1 resolved (DD-25 approved; DD-27 approved for the PoC under the single-source invariant); new rule: actions in the trusted reusable workflow pinned by commit SHA |
 | **v3.3** | Editorial E1–E5 after JD APPROVED (2026-10-06): bound-ref source, OD-A6 wording. No new decision |
 | **v3.2** | **JD round-2 correction:** trust bound to direct IAM keys (`job_workflow_ref` at an immutable SHA, repository and owner IDs, Environment), no custom subject template; guard checks the bound ref for both events; P-A6 verified at source |
 | **v3.1** | **JD round-1 correction:** CS-1 (custom OIDC subject with `job_workflow_ref` + event allowlist; negatives for `pull_request`, `pull_request_target`, `workflow_run`), CS-2 (supersede against every dispatched value), CC-1 (organization plan is a gate), CC-2 (dedupe scoped to `deploymentId`), SU-1 (secrets, not variables), CW-3 (`RECEIVED` removed from §10.8) |
@@ -152,9 +153,9 @@ The requirements phase turns these into FRs (AC-01 §10).
 | ID | Requirement | Expected FR |
 |---|---|---|
 | R-CI | A deploy-ready request is sent only by GitHub Actions after CI succeeds, once per build, with immutable artifact identities. CI failure sends nothing | New FR: CI contract |
-| R-AUTHN | Each request is accepted only from the sender bound to its `deploymentId` (OD-A2; recommended: SQS `SenderId` role binding). Otherwise `REJECTED`, audited, alarmed, never deployed | New FR: request authentication |
+| R-AUTHN | Each request is accepted only from the sender bound to its `deploymentId` (OD-A2 **resolved by the owner**: SQS `SenderId` role binding; session names never authorize). Otherwise `REJECTED`, audited, alarmed, never deployed | New FR: request authentication |
 | R-DIGEST | Artifacts are deployed by digest only. The image repository comes from trusted configuration, never from the request. Tags are rejected | FR-03 / FR-13 |
-| R-ORDER | An older build that finishes or is re-run later never replaces a newer deployment. Behavior across reruns and several repositories is defined (OD-A1) | FR-11 |
+| R-ORDER | An older build that finishes or is re-run later never replaces a newer deployment. Single trusted source per `deploymentId` and per `lockKey`; multi-source ordering out of the PoC (OD-A1 resolved) (OD-A1) | FR-11 |
 | R-TRUST | The CI → AWS boundary uses OIDC with `sub` restricted to repository + GitHub Environment, least-privilege CI roles, and no internal identifiers in public CI logs | New FR or NFR (design decides) |
 
 ### MODIFIED
@@ -165,7 +166,7 @@ The requirements phase turns these into FRs (AC-01 §10).
 | R-ID / FR-03 | `executionId = <deploymentId>-<sequence>` kept; the dedupe key is `deploymentId` + `requestId`, and `requestId` must equal `<ci.runId>-<ci.runAttempt>` (JD round 1, CC-2). Image tags are no longer derived from `executionId` (CI pushes; deploy is by digest) |
 | R-QUEUE / FR-04 | One external message type, `DEPLOY_REQUESTED`, plus internal events. Strict schema with no infrastructure fields |
 | R-IDEM / FR-07 | Kept; dedupe on `deploymentId` + `requestId` (DD-20 leased claim) |
-| R-LOCK / FR-11 | Kept; ordering key per OD-A1 |
+| R-LOCK / FR-11 | Kept; ordering key `ci.runNumber` inside the single source (OD-A1 resolved) |
 | R-ROLLBACK-READY / FR-13 | The previous image is kept **by digest**; exit 50 (target busy) part of the contract |
 | R-NOSECRETS | No secrets in requests, definitions, the Executor image, logs, or **public CI logs** (ZIP and S3 clauses disappear) |
 | R-RECON / FR-15 | Reduced to deploy state, orphan locks and past deadlines |
@@ -226,6 +227,7 @@ The requirements phase turns these into FRs (AC-01 §10).
 | Short-lived AWS credentials only | `permissions: id-token: write`; assumes the CI role via OIDC. No static AWS keys in GitHub |
 | Immutable output | Captures the pushed **digest** of each image. Tags pushed for humans never drive a deploy and must not collide with Jenkins's integer tags in the shared repository (OD-A7) |
 | One request per successful build | Sends exactly one `DEPLOY_REQUESTED` after all CI steps succeed. Any CI failure ends the run with nothing sent |
+| Action pinning | Every action in the trusted reusable workflow is pinned by a full commit SHA (trailing version comment); `docker://` by digest; mutable refs prohibited; `./` exempt; enforced by a static guard (owner rule, 2026-10-06) |
 | Public-safe logs | Role ARN, registry and queue URL come only from GitHub **secrets** (configuration variables render unmasked); the account ID is masked explicitly (P-A7, §13.3) |
 | Event allowlist | The pinned reusable workflow runs only for `push` or `workflow_dispatch`, and only when the ref is the bound ref (both events), read from an administrator-controlled Environment variable, never from caller input (design DD-24); `pull_request`, `pull_request_target` and `workflow_run` stop before any OIDC token is requested (§13.2) |
 | No deploy logic | The workflow never selects a host, script or command |
@@ -248,7 +250,7 @@ The requirements phase turns these into FRs (AC-01 §10).
 |---|---|
 | `additionalProperties: false`. No host, IP, port, user, command, script, image repository, registry, `sudo` or environment variables | A request asks for a deployment; it never says how |
 | Artifacts are digests only; tags rejected | What was tested is what is deployed |
-| Ordering fields are **not fixed here** | They depend on OD-A1 (§10.9) |
+| Ordering field is `ci.runNumber` | Inside the single bound source (OD-A1 resolved by the owner, §10.9) |
 | `ci.*` is audit only; it never drives behavior | Traceability to the GitHub run |
 
 ### 10.4 Deployment Definition and target resolution (trusted)
@@ -292,7 +294,9 @@ request ─validate─> QUEUED ─> WAITING_LOCK ⇄ (lock busy, bounded wait)
 
 Kept: intent-then-act with `dispatchToken` before SSH (DD-04), exit 50 back-edge, canonical `LOCK_TIMEOUT`, `UNKNOWN_TARGET_STATE` (no blind retry). Dropped: step graph, asynchronous redispatch, `RETRY_LATER`/`ORPHAN` routing. The design publishes the exact closed list.
 
-### 10.9 Supersede ordering (OD-A1 — open, evaluated in design)
+### 10.9 Supersede ordering (OD-A1 — RESOLVED by the owner on 2026-10-06 for the PoC; design DD-27)
+
+**Owner decision:** exactly one `deploymentId` per `lockKey`; exactly one trusted GitHub source per `deploymentId` (repository + workflow + environment + allowed sender); `ci.runNumber` orders inside that source; equal = same logical run or re-run, not older; `highestAccepted` protects acceptance and `highestDispatched` protects deployment from X9 on; an older run never deploys after a newer run reached the deployment intent boundary. Multi-source ordering is out of the PoC (revisit DD-27 if ever needed; never compare `runNumber` across sources). Workflow rename/reset is an accepted fail-safe limitation; rebinding requires the future audited OD-A8 procedure. The candidate evaluation below is kept for the record.
 
 **Safety goal:** an older build that finishes or is re-run later must never replace a newer deployment of the same `lockKey`. Behavior across reruns and across several repositories or workflows targeting one deploy unit must be defined.
 
@@ -448,7 +452,7 @@ Removed vs v2: ZIP/S3 secret controls (no ZIPs) and webhook HMAC (no ingress).
 | Workflow modified in a branch to deploy | GitHub Environment **deployment branch rules** (protected branches only); branch protection on the default branch (reviews, no force-push) |
 | Production deploy without approval | GitHub Environment **required reviewers** for production; Executor deploy windows on top. No approval engine in the Executor |
 | CI role over-privileged | One role per repository + environment: ECR auth + push to **its** repositories only; `sqs:SendMessage` on the deploy queue only. No SSH, EC2, Secrets Manager, DB or infra rights |
-| Request for a deployment the repo does not own | `SenderId` role binding to the definition's `allowedSender` (OD-A2, recommended option; P-A4). Mismatch → `REJECTED` + alarm |
+| Request for a deployment the repo does not own | `SenderId` role binding to the definition's `allowedSender` (OD-A2 resolved by the owner; P-A4). Session names are never an authorization input; a CI sender is authorized only for its assigned event types and `deploymentId` values. Mismatch → `REJECTED` + alarm |
 | Malicious request content | Strict schema, no infrastructure fields (§10.3); digest format validated; unknown `deploymentId` rejected |
 | Mutable tag swapped after tests | Digest only; image repository from trusted config (`imageRepositoryRef`), never from the request. Tag immutability is OD-A7 |
 | Replayed or duplicate message | Dedupe on `deploymentId` + `requestId`, with `requestId` validated against `ci.runId`/`ci.runAttempt` (DD-20); idempotent script path |
@@ -566,7 +570,7 @@ Added: `.github/workflows/` (reusable workflow + example caller), `schemas/{depl
 | R12 | **Public CI logs** leak account IDs, role ARNs or hosts | Secrets only (variables are unmasked); explicit account-ID mask; log review in AC12 |
 | R13 | **Repository admins** weaken branch or Environment rules | Admins are in the trust boundary (§13.4); sender binding, supersede and windows still apply; periodic settings review |
 | R14 | OIDC trust policy too broad (wildcard or environment-only `sub`, untrusted triggers) | Exact match on direct IAM keys (`job_workflow_ref` at an immutable SHA, repository and owner IDs, Environment), event allowlist; negative tests (AC15) |
-| R15 | Supersede ordering wrong under reruns or multiple repositories | OD-A1 formal evaluation in design; AC17 |
+| R15 | Supersede ordering wrong under reruns or multiple repositories | OD-A1 resolved: single source per `lockKey`, multi-source out of the PoC; AC17 |
 | R16 | Shared `<ECR_REPOSITORY>` with mutable tags and Jenkins integer tags | Digest-only deploy; non-colliding tag convention; OD-A7 |
 | R17 | Adding the caller workflow to the application repo is not approved | OD-A6 escalated to the owner; no workaround assumed |
 
@@ -592,8 +596,8 @@ Dropped from v2: R4 (worker async support) and R7 (clone disk) — their causes 
 | Q14 / OD-Q14 | Consumers of `<JENKINS_EXECUTIONS_TABLE>` | **OPEN** | Blocks retiring Jenkins |
 | Q15 / OD-Q15 | Repo size and GitHub authentication | **OPEN, moved out of the Executor** | No clone in the Executor; recorded until the owner closes it |
 | OD-N1 | CI for this platform repo | **OPEN** | GitHub Actions is the natural candidate; the owner decides |
-| OD-A1 | Supersede ordering key | **OPEN** | Evaluated in design (§10.9). Blocks design |
-| OD-A2 | Request authentication model (`SenderId` binding recommended; payload signature; queue per repo) | **OPEN** | Blocks design |
+| OD-A1 | Supersede ordering key | **RESOLVED (owner, 2026-10-06)** | `ci.runNumber` inside a single trusted source; multi-source out of the PoC (§10.9, DD-27) |
+| OD-A2 | Request authentication model | **RESOLVED (owner, 2026-10-06)** | `SenderId` role binding to `allowedSender` (DD-25) |
 | OD-A3 | Who performs non-SSH deploys | **OPEN** | Out of the PoC; Gate D waves |
 | OD-A4 | Store for non-Docker artifacts | **OPEN** | Non-Docker waves |
 | OD-A5 | CI failure notification to Slack | **OPEN** | Design (AC9) |
@@ -651,7 +655,7 @@ Model B is viable for the PoC and is simpler than v2. Conditions are separated i
 
 | Gate | Conditions |
 |---|---|
-| **A: before resuming Executor code** (Inc 0–2) | (1) Approve this proposal v3. (2) Revised requirements, design and tasks. (3) Scoped Judgment Day `APPROVED` (AC-01 §16). (4) Owner approves the execution plan, including the fate of the frozen in-flight work. OD-A1 and OD-A2 carry a design recommendation (DD-27, DD-25); owner confirmation is required before the tasks implementing them (N-06, N-07, N-09). Nothing depends on AWS, the host or GitHub settings |
+| **A: before resuming Executor code** (Inc 0–2) | (1) Approve this proposal v3. (2) Revised requirements, design and tasks. (3) Scoped Judgment Day `APPROVED` (AC-01 §16). (4) Owner approves the execution plan, including the fate of the frozen in-flight work. OD-A1 and OD-A2 resolved by the owner (2026-10-06): DD-27 and DD-25 approved. Nothing depends on AWS, the host or GitHub settings |
 | **B: before deploying the Executor and infra in DEV** (Inc 3; infra only) | OD-Q11 (host, R2), OD-Q12 (credentials), OD-Q7 (IaC). DEV access in `<AWS_ACCOUNT_ID>`. Network spike green. Slack token. Authority to create the OIDC provider and CI role. OD-A9 (repo visibility **and organization plan**, design P-G7). OD-N1 for the platform repo CI task |
 | **C: before the end-to-end deploy on `<PRMS_REPORTING_DEV_TARGET>`** (Inc 4–7) | OD-A6 approved; the GitHub Environment configured by a repo admin; the trust-policy IDs and SHA pin observed in a real token (design P-G10, P-G11); plan support (P-G7) re-checked (first real CI run, N-32). AC17 real re-run as E2E confirmation of P-A6. Job names and approval of the §12 procedure (Q1, Q3). OD-Q5 (target role without breaking leftover-key jobs). SSH credential (key preferred) and host key in Secrets Manager. Migration command and order confirmed (Q2). DEV DB snapshot |
 | **D: before retiring Jenkins** (any job) | B2 complete (`jenkins-config-inventory`). OD-A3 and OD-A4 decided and non-SSH waves validated. Non-Docker builds proven in GitHub Actions per wave (B1). H1 (server-less migrations relocated via an exception mechanism). H2 (scripts inventoried and versioned). H3 (instance profiles; `<AWS_CREDENTIAL_REF>` rotation). Jira Builds API. Credentials migrated. OD-Q14. OD-N1. Each wave validated with Jenkins in parallel |
