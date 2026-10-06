@@ -4,25 +4,25 @@
 // file only adds process concerns: the SecretProvider adapter, signal handling
 // and the exit code. Shutdown order on SIGTERM/SIGINT: stop the consumer, wait
 // for in-flight work, flush logs (design §12; NFR-04).
-import { ConfigError } from "../composition/config.js";
+import { createSecretsManagerClient, SecretsManagerSecretProvider } from "../adapters/secrets-manager-provider/index.js";
+import { ConfigError, loadConfig } from "../composition/config.js";
 import type { SecretProvider } from "../ports/secret-provider.js";
 import { bootstrap } from "./bootstrap.js";
 
 /**
- * The `SecretProvider` over Secrets Manager (`adapters/secrets-manager-provider`) is still a skeleton and the
- * `@aws-sdk/client-secrets-manager` dependency is not in the package yet, so the process cannot resolve the
- * Executor's own operational references. Failing here is deliberate: wiring a guess would hide the gap.
+ * The Executor's own operational secrets come from Secrets Manager through the SDK default credential chain
+ * (DD-16). Region and the optional id prefix are validated by `loadConfig`, so an invalid value is a ConfigError
+ * and the process refuses to start.
  */
-function createRuntimeSecretProvider(): SecretProvider {
-  throw new Error(
-    "no SecretProvider adapter is wired: adapters/secrets-manager-provider is not implemented yet (escalated; needs the Secrets Manager SDK dependency and OD-Q12 credentials decision)",
-  );
+function createRuntimeSecretProvider(env: NodeJS.ProcessEnv): SecretProvider {
+  const config = loadConfig(env);
+  return new SecretsManagerSecretProvider({ client: createSecretsManagerClient(config.region), secretIdPrefix: config.secretIdPrefix });
 }
 
 async function run(): Promise<number> {
   let executor;
   try {
-    executor = await bootstrap({ env: process.env, secrets: createRuntimeSecretProvider() });
+    executor = await bootstrap({ env: process.env, secrets: createRuntimeSecretProvider(process.env) });
   } catch (error) {
     const message = error instanceof ConfigError ? error.message : error instanceof Error ? error.message : String(error);
     process.stderr.write(`executor refused to start: ${message}\n`);

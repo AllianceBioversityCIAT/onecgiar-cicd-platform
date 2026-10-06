@@ -610,3 +610,12 @@
 - Owner approved `gate-b-plan.md` revision 2 with clarifications: SAM option (b) — `sam validate --lint` is owner-executed at the start of B1 and stays **NOT EXECUTED** until the owner reports it; validation and deployment are separate checkpoints A–D; GitHub values classified (plan §12): one Environment secret (`CICD_ROLE_ARN`), the rest Environment variables or values derived after OIDC; no static AWS keys.
 - Scope authorized: K-1…K-9 only. No external mutation (AWS, GitHub, targets). B1 requires a separate approval.
 - No SAM CLI or cfn-lint installed; local Node is 20.19.5 (Node 22 remains DEFERRED).
+
+### K-2 — Secrets Manager `SecretProvider` (2026-10-06)
+
+| Item | Record |
+|---|---|
+| Attempt 1 | `adapters/secrets-manager-provider` (`exists` = `DescribeSecret` only; `getSecret` = `GetSecretValue` at point of use, no cache, value unchanged; `<NAME>` → `CICD_SECRET_ID_PREFIX` + `NAME`; sanitized `SecretProviderError` with ref, operation and AWS error name only, no `cause`); optional `CICD_SECRET_ID_PREFIX` validated in `loadConfig`; wired in `main/index.ts` with the SDK default credential chain (DD-16); dependency `@aws-sdk/client-secrets-manager`. 11 unit tests on a fake client; implementer falsifiers (GetSecretValue in `exists`; AWS message in the error) → red |
+| Leader evidence (non-author) | Isolated worktree (HEAD + K-2 files): tsc 0, lint clean, guards 8/8, vitest 949 passed / 74 skipped / 1 todo. Leader falsifiers: `DeletedDate` check removed → red; `SecretString` check removed → red |
+| Review | Reviewer (opus): **PASS**. Advisories (non-blocking, not applied): pure prefix check could move out of the adapter module; an `undefined` DescribeSecret response returns true (unreachable with the real SDK); `loadConfig` runs twice at startup; `getSecret` leak test could also check `<AWS_ACCOUNT_ID>` |
+| Not executed | Any real Secrets Manager call (owner, B1) |

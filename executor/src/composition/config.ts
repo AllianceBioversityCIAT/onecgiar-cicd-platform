@@ -5,6 +5,7 @@
 // never role IDs. AWS credentials are NOT configuration (DD-16: the SDK
 // standard chain; OD-Q12 stays open). Every problem is collected and reported
 // at once so a misconfigured deployment fails fast with ONE clear message.
+import { secretIdPrefixProblem } from "../adapters/secrets-manager-provider/index.js";
 import type { PlatformPrincipalRefs } from "../application/definition-service/index.js";
 
 export class ConfigError extends Error {
@@ -32,6 +33,8 @@ export interface ExecutorConfig {
   readonly runbookUrl: string;
   readonly healthcheckPath: string;
   readonly sshConcurrency?: number;
+  /** Prefix prepended to the logical name to form the Secrets Manager secret id; empty by default. */
+  readonly secretIdPrefix: string;
 }
 
 const LOGICAL_REF = /^<[A-Z][A-Z0-9_]*>$/;
@@ -75,6 +78,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): ExecutorConfig {
     if (!Number.isInteger(sshConcurrency) || sshConcurrency < 1) problems.push("CICD_SSH_CONCURRENCY must be a positive integer");
   }
 
+  const secretIdPrefix = env["CICD_SECRET_ID_PREFIX"]?.trim() ?? "";
+  const prefixProblem = secretIdPrefixProblem(secretIdPrefix);
+  if (prefixProblem !== undefined) problems.push(`CICD_SECRET_ID_PREFIX ${prefixProblem}`);
+
   if (problems.length > 0) throw new ConfigError(problems);
   const dynamoEndpoint = env["CICD_DYNAMODB_ENDPOINT"]?.trim();
   const definitionsRoot = env["CICD_DEFINITIONS_ROOT"]?.trim();
@@ -89,6 +96,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ExecutorConfig {
     logsUrlTemplate,
     runbookUrl,
     healthcheckPath,
+    secretIdPrefix,
     ...(sshConcurrency === undefined ? {} : { sshConcurrency }),
   };
 }

@@ -544,7 +544,7 @@ Gate B is split per `gate-b-plan.md` (approved 2026-10-06). **B0** is the reposi
 | ID | Task | Depends on | Verification and falsifier | Review |
 |---|---|---|---|---|
 | [ ] **K-1** | SAM template (`infra/sam/`), parameter example, `samconfig.example.toml`, static contract test | Gate A | Contract test over the parsed template: DD-24 exact `StringEquals`, queue policy explicit `Deny`, no wildcard resources, no static keys, CI role `sqs:GetQueueUrl` scoped to the deploy queue. Falsifier: `StringLike` trust or a `*` resource fails. `sam validate --lint` is **owner-executed (B1, checkpoint B)**: NOT EXECUTED | full |
-| [ ] **K-2** | Secrets Manager `SecretProvider` adapter (carry-over §6.1) | Gate A | Unit tests on a mocked client: `exists` via `DescribeSecret`, `getSecret` via `GetSecretValue`, not-found → false, errors carry no ARN/account ID | full |
+| [x] **K-2** | Secrets Manager `SecretProvider` adapter (carry-over §6.1) | Gate A | Unit tests on a mocked client: `exists` via `DescribeSecret`, `getSecret` via `GetSecretValue`, not-found → false, errors carry no ARN/account ID | full |
 | [ ] **K-3** | `npm run definitions:check -- --root <dir>` | Gate A | Valid root passes; a broken definition fails with the file and reason | checklist |
 | [ ] **K-4** | Example definitions under `docs/gate-b/examples/definitions/` | K-3 | Pass `definitions:check`; placeholders only (publication guard) | checklist |
 | [ ] **K-5** | Caller workflow example; reusable workflow and contract test follow the GitHub value classification (plan §12; DD-24 amended under owner direction) | K-1 | Exactly one secret (`CICD_ROLE_ARN`); registry, queue URL, account ID derived after OIDC and masked before use; guard 7 strict | full |

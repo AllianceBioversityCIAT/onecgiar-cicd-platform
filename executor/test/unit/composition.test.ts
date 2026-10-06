@@ -53,6 +53,12 @@ describe("configuration (design §3.3, DD-16, DD-23)", () => {
       expect(problems).toContain("{executionId}");
     }
   });
+
+  it("defaults the secret id prefix to empty, accepts a valid one and rejects an invalid one", () => {
+    expect(loadConfig(validEnv()).secretIdPrefix).toBe("");
+    expect(loadConfig(validEnv({ CICD_SECRET_ID_PREFIX: "cicd-poc/dev/" })).secretIdPrefix).toBe("cicd-poc/dev/");
+    expect(() => loadConfig(validEnv({ CICD_SECRET_ID_PREFIX: "bad prefix*" }))).toThrowError(/CICD_SECRET_ID_PREFIX/);
+  });
 });
 
 describe("startup validation over ALL bundled definitions (design §6.2)", () => {
