@@ -301,7 +301,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-10 — Identity, dedupe and execution creation
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · M · **A** |
+| Status / Size / Gate | **[x] done** · M · **A** |
 | Goal | `execution-service`: validation → dedupe claim (DD-20) → sequence → X1, or X2; S1 via the supersede port |
 | Depends on | N-05, N-08 (N-06/N-07 via ports; fakes until confirmed) |
 | Requirements / Design | FR-03, FR-07, FR-23 · DD-20, design §7.3 |

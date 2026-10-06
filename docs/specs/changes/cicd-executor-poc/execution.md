@@ -434,3 +434,13 @@
 | Reviewer attempt 2 (N-06) | **PASS** (`opus`). Leader alignment: `infra/RESOURCES.md` alarm row now names `RejectedRequests{reason=UNAUTHORIZED_SENDER}` (checklist 77/0) |
 | Committed snapshot (N-06) | HEAD + N-06 files: tsc 0, lint, guards PASS, vitest 671 / 37 skipped |
 | Status (N-06) | **Done** |
+
+### N-10 — Identity, dedupe and execution creation · done
+
+| Field | Value |
+|---|---|
+| Attempt 1 | `createExecutionService` → `deployRequested` / `rejected`: catalog lookup and unit-set equality (X2 `UNKNOWN_DEPLOYMENT` / `CONSISTENCY_MISMATCH`, no claim, no sequence) → DD-20 leased claim (BOUND → no-op; live foreign claim → not acked; expired → conditional takeover reusing the stored sequence) → sequence after the claim → X1 → bind → separate `highestAccepted` raise (E2) → S1/X3. Rejection records `REJECT#{dep}#{req}` or `REJECT#MSG#{sqsMessageId}`; `senderRef` stored as audit data. One injective `buildSourceRef` helper (`repository=…;workflow=…;environment=…`, percent-encoded). 27 unit + 7 integration tests (50 reps × 8 contenders → one execution, sequence 1; CC-2 pre-claim). Falsifier (sequence before claim) → "expected 9 to be 1". Evidence re-run (Leader): 27/27; integration exit 0, 9 files / 44 tests — **VERIFIED** |
+| Reviewer attempt 1 | **PASS** (`opus`, full). Redelivery table matches DD-20 incl. R2-I3; 120 s lease = DD-20's "now + 2 min" |
+| Committed snapshot | HEAD + N-10 files: tsc 0, lint, guards PASS, vitest 698 / 44 skipped |
+| Forward pointers | **N-17:** adapter from `TargetStateRepository` (`raiseHighestAccepted` → `{raised}`) to the `TargetOrderingPort` (`{accepted}`) and `readOrdering` from `get()`, with one integration test on the real repository; `DeploymentCatalog` over DefinitionSource; supply `senderRef` and `sqsMessageId` from the router. **N-12 / N-09 consumers:** import `buildSourceRef` — never rebuild the string. **N-19 (optional):** grep guard that no other module builds `repository=` strings. Advisory: consistent reads in `DedupeRepository.get`; tests for concurrent expired-claim takeovers and the `recordSequence` fallback; JSDoc on the lease constant citing DD-20 |
+| Status | **Done** |
