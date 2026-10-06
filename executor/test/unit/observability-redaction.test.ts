@@ -193,12 +193,12 @@ describe("redactValue — FR-17 redaction corpus (design §12)", () => {
     expect(result.secret).not.toContain(FAKE_SECRET_VALUE);
   });
 
-  it("leaves non-secret fields (executionId, stepId) untouched", () => {
-    const result = redactValue({ executionId: "exec-123", stepId: "step-ssh-1", attempt: 2 }) as Record<
+  it("leaves non-secret fields (executionId, jobId) untouched", () => {
+    const result = redactValue({ executionId: "exec-123", jobId: "job-1", attempt: 2 }) as Record<
       string,
       unknown
     >;
-    expect(result).toEqual({ executionId: "exec-123", stepId: "step-ssh-1", attempt: 2 });
+    expect(result).toEqual({ executionId: "exec-123", jobId: "job-1", attempt: 2 });
   });
 
   describe("token/authorization key vocabulary (design §12 'tokens'), with correlation-id exemptions", () => {
@@ -291,14 +291,14 @@ describe("redactValue — FR-17 redaction corpus (design §12)", () => {
 
     it("redacts secrets inside a nested array of objects", () => {
       const result = redactValue([
-        { stepId: "step-1", detail: `password=${FAKE_PASSWORD_VALUE}` },
-        { stepId: "step-2", password: FAKE_SECRET_VALUE },
+        { jobId: "job-1", detail: `password=${FAKE_PASSWORD_VALUE}` },
+        { jobId: "job-2", password: FAKE_SECRET_VALUE },
       ]) as Array<Record<string, unknown>>;
 
       expect(JSON.stringify(result)).not.toContain(FAKE_PASSWORD_VALUE);
       expect(JSON.stringify(result)).not.toContain(FAKE_SECRET_VALUE);
-      expect(result[0]?.stepId).toBe("step-1");
-      expect(result[1]?.stepId).toBe("step-2");
+      expect(result[0]?.jobId).toBe("job-1");
+      expect(result[1]?.jobId).toBe("job-2");
     });
 
     it("leaves a Date instance untouched (not recursed into as a plain object)", () => {
@@ -310,21 +310,21 @@ describe("redactValue — FR-17 redaction corpus (design §12)", () => {
 
   describe("cycle guard (reviewer round 2, bullet 2: a cyclic object must never crash the logger)", () => {
     it("does not throw on a self-referencing object (would otherwise be a RangeError: Maximum call stack size exceeded)", () => {
-      const cyclic: Record<string, unknown> = { stepId: "step-1", password: FAKE_PASSWORD_VALUE };
+      const cyclic: Record<string, unknown> = { jobId: "job-1", password: FAKE_PASSWORD_VALUE };
       cyclic.self = cyclic;
 
       expect(() => redactValue(cyclic)).not.toThrow();
     });
 
     it("replaces the cyclic back-reference with the string '[Circular]' and still redacts the real secret", () => {
-      const cyclic: Record<string, unknown> = { stepId: "step-1", password: FAKE_PASSWORD_VALUE };
+      const cyclic: Record<string, unknown> = { jobId: "job-1", password: FAKE_PASSWORD_VALUE };
       cyclic.self = cyclic;
 
       const result = redactValue(cyclic) as Record<string, unknown>;
 
       expect(result.self).toBe("[Circular]");
       expect(result.password).toBe("[REDACTED]");
-      expect(result.stepId).toBe("step-1");
+      expect(result.jobId).toBe("job-1");
     });
 
     it("does not throw on a cyclic Error (error.cause === error, a realistic shape for an SDK/HTTP error object)", () => {

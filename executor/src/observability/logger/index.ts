@@ -1,46 +1,22 @@
 // @akili-spec changes/cicd-executor-poc design §7 (observability row), §12; requirements FR-17
 //
-// JSON logger with bound context (`executionId`, `stepId`, `eventType`,
+// JSON logger with bound context (`executionId`, `eventType`,
 // `attempt`, design §7's observability row) and secret redaction (design
 // §12, `redactValue` — FR-17 "any log contains no secrets, credentials, or
 // tokens"). Writes through an injectable `LogSink` only — no `console.*`
 // call anywhere in this module, by design (so tests capture lines instead of
 // polluting test output, and production wiring picks whatever sink it
 // wants, e.g. `process.stdout.write`).
-//
-// `createEventRouterLogger` adapts a `Logger` to the `EventRouterLogger`
-// seam declared below (design §6.1: "log with every identifier received"
-// under `ORPHAN_EVENT`).
 import type { Clock } from "../../ports/clock.js";
 import { redactValue } from "./redaction.js";
 
 export { redactString, redactValue } from "./redaction.js";
 
-/**
- * Orphan-event vocabulary, inlined here when the types-only
- * `application/event-router` shim was deleted (N-08). Types only, behavior
- * unchanged; the orphan concept itself is slated for removal by AC-01.
- */
-export type OrphanReason = "EXECUTION_NOT_FOUND" | "STEP_NOT_FOUND" | "STALE_ATTEMPT";
-
-export interface OrphanEventDetails {
-  readonly reason: OrphanReason;
-  readonly executionId: string;
-  readonly stepId: string;
-  readonly externalId?: string;
-  readonly currentExternalRef?: string;
-}
-
-export interface EventRouterLogger {
-  orphanEvent(details: OrphanEventDetails): void;
-}
-
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
-/** Context fields bound once per execution/step and stamped on every subsequent log line (design §7's observability row). */
+/** Context fields bound once per execution and stamped on every subsequent log line (design §7's observability row). */
 export interface LogContext {
   readonly executionId?: string;
-  readonly stepId?: string;
   readonly eventType?: string;
   readonly attempt?: number;
 }
@@ -120,23 +96,6 @@ export function createLogger(deps: CreateLoggerDeps): Logger {
     },
     error(message, fields) {
       log(deps, "error", message, fields);
-    },
-  };
-}
-
-/**
- * Adapts a `Logger` to the `EventRouterLogger` seam declared in this module. One log line per orphan event,
- * at `warn` (an orphan is a notable, non-fatal anomaly, never a crash), with
- * `eventType: "ORPHAN_EVENT"` plus every identifier `OrphanEventDetails`
- * carries (design §6.1: "log with every identifier received").
- */
-export function createEventRouterLogger(logger: Logger): EventRouterLogger {
-  return {
-    orphanEvent(details: OrphanEventDetails): void {
-      const { executionId, stepId, ...rest } = details;
-      logger
-        .withContext({ executionId, stepId, eventType: "ORPHAN_EVENT" })
-        .warn("orphan event: no effects applied", rest);
     },
   };
 }

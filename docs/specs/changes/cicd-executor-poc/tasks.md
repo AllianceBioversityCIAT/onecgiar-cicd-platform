@@ -409,7 +409,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-16 — Notifications (Slack)
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · S · **A** |
+| Status / Size / Gate | **[x] done** · S · **A** |
 | Goal | Deploy-lifecycle notifications per design §6.6 with `EVT#` dedupe |
 | Depends on | N-08 |
 | Requirements / Design | FR-14 · DD-12 |

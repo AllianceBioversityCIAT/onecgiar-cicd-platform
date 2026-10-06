@@ -5,7 +5,6 @@
 // the submodules directly.
 export {
   createLogger,
-  createEventRouterLogger,
   redactString,
   redactValue,
   type Logger,

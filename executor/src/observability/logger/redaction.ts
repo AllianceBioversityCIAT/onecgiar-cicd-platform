@@ -102,7 +102,7 @@ const BARE_SIGNATURE_PARAM_PATTERN = /\bSignature=[^&\s"',}]+/gi;
 const URL_CREDENTIALS_PATTERN = /(:\/\/[^\s:/@]+:)([^@\s]+)(@)/g;
 
 /** A GitHub token of any current prefix (`ghp_` personal, `gho_` OAuth, `ghu_`/`ghs_` app installation/server, `ghr_` refresh) or the newer `github_pat_` fine-grained form. Checked before the generic key/value pattern so its `_`-separated body is never mistaken for a delimiter. */
-const GITHUB_TOKEN_PATTERN = /gh[opusr]_[A-Za-z0-9]{10,}|github_pat_[A-Za-z0-9_]{10,}/g;
+const GITHUB_TOKEN_PATTERN = /gh[opusr]_[A-Za-z0-9]{10,}|github_pat_[A-Za-z0-9_]{10,}|xox[abeoprs]-[A-Za-z0-9-]{10,}/g; // also Slack bot and user tokens
 
 /** An AWS-style access key id: permanent (`AKIA`) or temporary (`ASIA`, NFR-02's temporary-credentials case) + 16 upper-case alphanumerics. */
 const AWS_ACCESS_KEY_ID_PATTERN = /(?:AKIA|ASIA)[0-9A-Z]{16}/g;

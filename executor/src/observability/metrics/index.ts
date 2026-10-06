@@ -7,18 +7,13 @@
 // §7's `observability` row lists no AWS dependency beyond the log line
 // itself).
 //
-// Design §12's exact metric set: `ExecutionsStarted/Succeeded/Failed`,
-// `StepDurationMs` per step type, `LockWaitMs`, `DispatchLatencyMs`
-// (NFR-05's coordination latency), the event-router's `OrphanEvents` and
-// `RetryLater` counters, and the liveness `ExecutorHeartbeat` metric (design
+// Metric set: `ExecutionsStarted/Succeeded/Failed`, `LockWaitMs`,
+// `DispatchLatencyMs` (NFR-05's coordination latency), `RejectedRequests`,
+// `NotificationFailures` (FR-14: provider failure is logged and counted,
+// never state-changing) and the liveness `ExecutorHeartbeat` metric (design
 // §12 "Liveness": "emits a heartbeat metric every minute").
 import type { Clock } from "../../ports/clock.js";
 import type { RejectReason } from "../../domain/errors/index.js";
-
-/** Orphan-event counter seam, inlined here when the `application/event-router` shim was deleted (N-08). Types only. */
-export interface EventRouterMetrics {
-  recordOrphanEvent(): void;
-}
 
 const NAMESPACE = "CicdExecutor";
 
@@ -33,15 +28,14 @@ export interface CreateMetricsDeps {
   readonly namespace?: string;
 }
 
-export interface Metrics extends EventRouterMetrics {
+export interface Metrics {
   recordExecutionStarted(): void;
   recordExecutionSucceeded(): void;
   recordExecutionFailed(): void;
-  recordStepDuration(stepType: string, durationMs: number): void;
   recordLockWaitMs(durationMs: number): void;
   recordDispatchLatencyMs(durationMs: number): void;
-  /** design §12's event-router counter for the `RETRY_LATER` outcome (the CodeBuild early-arrival race, event-router's `routeEvent`). */
-  recordRetryLater(): void;
+  /** FR-14: a notification provider call failed (dimension `provider`); never changes execution state. */
+  recordNotificationFailed(provider: string): void;
   /** design §12 "Liveness": emitted once per heartbeat tick (T-17's heartbeat, every minute). */
   recordHeartbeat(): void;
   /** design §12: EMF `RejectedRequests` = 1 with dimension `reason` (any X2 reason; alarm on `reason=UNAUTHORIZED_SENDER`, DD-25). */
@@ -89,20 +83,14 @@ export function createMetrics(deps: CreateMetricsDeps): Metrics {
     recordExecutionFailed() {
       emit(deps, "ExecutionsFailed", 1, "Count");
     },
-    recordStepDuration(stepType, durationMs) {
-      emit(deps, "StepDurationMs", durationMs, "Milliseconds", { StepType: stepType });
-    },
     recordLockWaitMs(durationMs) {
       emit(deps, "LockWaitMs", durationMs, "Milliseconds");
     },
     recordDispatchLatencyMs(durationMs) {
       emit(deps, "DispatchLatencyMs", durationMs, "Milliseconds");
     },
-    recordOrphanEvent() {
-      emit(deps, "OrphanEvents", 1, "Count");
-    },
-    recordRetryLater() {
-      emit(deps, "RetryLater", 1, "Count");
+    recordNotificationFailed(provider) {
+      emit(deps, "NotificationFailures", 1, "Count", { provider });
     },
     recordHeartbeat() {
       emit(deps, "ExecutorHeartbeat", 1, "Count");

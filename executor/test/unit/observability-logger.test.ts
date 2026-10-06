@@ -1,10 +1,9 @@
 // @akili-spec changes/cicd-executor-poc design §7 (observability row), §12; requirements FR-17
 //
 // Proves the JSON logger: structured lines over an injectable sink (no
-// console noise in tests), bound context (`executionId`, `stepId`,
-// `eventType`, `attempt`, design §7's observability row), redaction applied
-// before serialization, and the `EventRouterLogger` adapter the event-router
-// (T-04) consumes without this module reaching into it.
+// console noise in tests), bound context (`executionId`,
+// `eventType`, `attempt`, design §7's observability row) and redaction
+// applied before serialization.
 //
 // Rework (attempt 3, reviewer round 2, bullet 2): `redactValue`'s cycle
 // guard stops a cyclic object from crashing the logger with a stack
@@ -16,8 +15,6 @@
 import { describe, expect, it } from "vitest";
 import {
   createLogger,
-  createEventRouterLogger,
-  type EventRouterLogger,
   type LogSink,
 } from "../../src/observability/logger/index.js";
 
@@ -47,10 +44,10 @@ describe("createLogger — JSON logger with context and redaction (FR-17, design
     expect(parsed).toMatchObject({ level: "info", message: "execution created", timestamp: "2026-10-05T12:00:00.000Z" });
   });
 
-  it("includes bound context fields (executionId, stepId, eventType, attempt) on every line once bound via withContext", () => {
+  it("includes bound context fields (executionId, eventType, attempt) on every line once bound via withContext", () => {
     const sink = capturingSink();
     const logger = createLogger({ sink, clock: fakeClock("2026-10-05T12:00:00.000Z") });
-    const bound = logger.withContext({ executionId: "exec-1", stepId: "step-ssh-1", eventType: "STEP_SUCCEEDED", attempt: 2 });
+    const bound = logger.withContext({ executionId: "exec-1", eventType: "DEPLOY_SUCCEEDED", attempt: 2 });
 
     bound.info("step dispatched");
     bound.warn("step delayed");
@@ -58,8 +55,7 @@ describe("createLogger — JSON logger with context and redaction (FR-17, design
     for (const line of sink.lines) {
       const parsed = JSON.parse(line);
       expect(parsed.executionId).toBe("exec-1");
-      expect(parsed.stepId).toBe("step-ssh-1");
-      expect(parsed.eventType).toBe("STEP_SUCCEEDED");
+      expect(parsed.eventType).toBe("DEPLOY_SUCCEEDED");
       expect(parsed.attempt).toBe(2);
     }
   });
@@ -125,7 +121,7 @@ describe("createLogger — JSON logger with context and redaction (FR-17, design
       const logger = createLogger({ sink, clock: fakeClock("2026-10-05T12:00:00.000Z") });
 
       logger
-        .withContext({ executionId: "exec-1", stepId: "step-ssh-1" })
+        .withContext({ executionId: "exec-1" })
         .error("ssh step failed", {
           password: FAKE_PASSWORD_VALUE,
           authHeader: `Authorization header: ${FAKE_BEARER_TOKEN}`,
@@ -141,7 +137,6 @@ describe("createLogger — JSON logger with context and redaction (FR-17, design
       }
       const parsed = JSON.parse(line);
       expect(parsed.executionId).toBe("exec-1");
-      expect(parsed.stepId).toBe("step-ssh-1");
       expect(parsed.message).toBe("ssh step failed");
     });
   });
@@ -172,7 +167,7 @@ describe("createLogger — never throws on a value JSON.stringify cannot seriali
   it("does not throw and still produces a line when a logged object is cyclic", () => {
     const sink = capturingSink();
     const logger = createLogger({ sink, clock: fakeClock("2026-10-05T12:00:00.000Z") });
-    const cyclic: Record<string, unknown> = { stepId: "step-1" };
+    const cyclic: Record<string, unknown> = { jobId: "job-1" };
     cyclic.self = cyclic;
 
     expect(() => logger.error("ssh step failed", { detail: cyclic })).not.toThrow();
@@ -192,28 +187,5 @@ describe("createLogger — idempotencyToken survives redaction end-to-end (desig
     const parsed = JSON.parse(sink.lines[0]!);
     expect(parsed.idempotencyToken).toBe("dispatch-fake-123");
     expect(parsed.apiKey).toBe("[REDACTED]");
-  });
-});
-
-describe("createEventRouterLogger — adapts the logger to the event-router's EventRouterLogger seam", () => {
-  it("logs an orphan event with its reason, executionId and stepId, satisfying EventRouterLogger structurally", () => {
-    const sink = capturingSink();
-    const logger = createLogger({ sink, clock: fakeClock("2026-10-05T12:00:00.000Z") });
-    const routerLogger: EventRouterLogger = createEventRouterLogger(logger);
-
-    routerLogger.orphanEvent({
-      reason: "STALE_ATTEMPT",
-      executionId: "exec-9",
-      stepId: "step-codebuild-1",
-      externalId: "build-123",
-      currentExternalRef: "build-999",
-    });
-
-    expect(sink.lines).toHaveLength(1);
-    const parsed = JSON.parse(sink.lines[0]!);
-    expect(parsed.executionId).toBe("exec-9");
-    expect(parsed.stepId).toBe("step-codebuild-1");
-    expect(parsed.eventType).toBe("ORPHAN_EVENT");
-    expect(parsed.reason).toBe("STALE_ATTEMPT");
   });
 });

@@ -463,3 +463,13 @@
 | Committed snapshot | HEAD (after hotfix 5a39c58) + N-18 files: tsc 0, lint, guards PASS, vitest 703 / 44 skipped |
 | Deferred (environment) | Real image inspection incl. the git falsifier fixture (`npm run inspect:image -- --dockerfile test/fixtures/dockerfiles/Dockerfile.falsifier-git`) on a Docker-capable host; a file named exactly `git` in the image must be triaged |
 | Status | **Done** |
+
+### N-16 — Notifications (Slack) · done
+
+| Field | Value |
+|---|---|
+| Attempt 1 | `notification-service` per design §6.6: ACCEPTED root; replies SUPERSEDED, DEPLOY_WINDOW_CLOSED, LOCK_TIMEOUT, DEPLOY_FAILED(code), UNKNOWN_TARGET_STATE (runbook link), SUCCEEDED (root rewritten with outcome/duration); REJECTED to the platform channel (reason + sender ref only); no CI notifications (OD-A5). `EVT#` claim before send (best-effort, at-most-once); `notify` never rejects; failures logged with redaction + `NotificationFailures{provider}`. Slack provider via injectable HTTP client (Node fetch), token from `SecretProvider` at point of use, never logged. Observability cleanup: pre-AC-01 step/orphan/retry-later names removed; Slack token redaction pattern added. Falsifier (EVT# check removed) → two messages. Evidence re-run (Leader): suites green, tsc 0 — **VERIFIED** |
+| Reviewer attempt 1 | **PASS** (`opus`, full) |
+| Committed snapshot | HEAD + N-16 files: tsc 0, lint, guards PASS, vitest 719 / 44 skipped |
+| Forward pointers | **N-17:** wire the service (callers, `slackThreadTs` persistence, `resolveChannel`, real `EventMarkRepository`, always supply `logsUrl` + test; platform channel/token refs for REJECTED; mark key for rejections must reuse the rejection identity `{deploymentId}#{requestId}` or `MSG#{sqsMessageId}`). **Closure spec sync:** add `NotificationFailures{provider}` and the rejection event-mark key shape to design §12/§5.1; reconcile §12 metric names (`ExecutionsAccepted`, `ExecutionsSuperseded`, `DeployDurationMs` vs code). Advisory: dedicated Slack-token entry in the redaction corpus |
+| Status | **Done** |
