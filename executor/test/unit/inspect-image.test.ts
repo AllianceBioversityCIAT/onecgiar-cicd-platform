@@ -66,6 +66,12 @@ const DEFAULT_DOCKERFILE = path.join(EXECUTOR_ROOT, "Dockerfile");
 describe("buildInContainerScript (in-container POSIX sh boundary check)", () => {
   const script = buildInContainerScript();
 
+  it("forbids git in the runtime image (N-18, AC2): listed, checked via command -v and swept on disk", () => {
+    expect(FORBIDDEN_NAMES).toContain("git");
+    expect(script).toMatch(/for name in .*\bgit\b/);
+    expect(script).toContain("-name 'git'");
+  });
+
   it("is POSIX sh, not bash: no bash-only constructs", () => {
     expect(script).not.toMatch(/\[\[/);
     expect(script).not.toMatch(/\blocal\s+\w/);

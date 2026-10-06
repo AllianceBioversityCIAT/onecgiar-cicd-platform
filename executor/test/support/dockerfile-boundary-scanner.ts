@@ -232,6 +232,8 @@ const FORBIDDEN_PACKAGE_PATTERNS: ReadonlyArray<{ label: string; pattern: RegExp
   { label: "docker package", pattern: /\bdocker(\.io|-ce(-cli)?|-cli)?\b/i },
   { label: "maven package", pattern: /\b(maven|mvn)\b/i },
   { label: "gradle package", pattern: /\bgradle\b/i },
+  // The Executor holds no git client (definitions are bundled, DD-19): git must not ship in the runtime image (AC2).
+  { label: "git package", pattern: /\bgit\b/i },
   {
     label: "JDK package",
     pattern: /\b(default-jdk|default-jre|temurin[\w.-]*|openjdk[\w.-]*|java-\d+-openjdk|java-\d+-jdk|\bjdk\b)\b/i,

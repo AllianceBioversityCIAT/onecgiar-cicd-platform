@@ -445,7 +445,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-18 — Dockerfile and image inspection (no git)
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · S · **A** |
+| Status / Size / Gate | **[x] done** (real inspection DEFERRED) · S · **A** |
 | Goal | Remove `git` from the image; copy `deployment-definitions/`; static guard and `inspect:image` forbid `git` |
 | Depends on | N-03 |
 | Requirements / Design | NFR-01, AC2 · design §15.3 |

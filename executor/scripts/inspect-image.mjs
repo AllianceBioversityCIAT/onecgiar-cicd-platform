@@ -123,6 +123,7 @@ export const FORBIDDEN_NAMES = [
   "gradle",
   "docker",
   "dockerd",
+  "git",
   "pip",
   "pip3",
 ];

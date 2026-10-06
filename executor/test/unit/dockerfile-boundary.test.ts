@@ -121,3 +121,39 @@ describe("Dockerfile falsifier fixture (Maven installed in the final stage)", ()
     expect(violations.some((v) => v.rule === "forbidden-package:maven package")).toBe(true);
   });
 });
+
+// N-18 (proposal AC2: no build toolchains, no git): the runtime image holds
+// no git client. The real Dockerfile must not mention git as a package, and
+// every way of installing it must go red.
+describe("Dockerfile runtime image has no git (N-18, AC2)", () => {
+  const dockerfileText = readFileSync(dockerfilePath, "utf8");
+  const gitFalsifierText = readFileSync(
+    path.resolve(here, "..", "fixtures", "dockerfiles", "Dockerfile.falsifier-git"),
+    "utf8",
+  );
+  const withRuntimeRun = (run: string): string =>
+    [
+      "FROM node:22-slim AS runtime",
+      run,
+      "RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /opt/yarn-*",
+      "USER executor",
+    ].join("\n");
+  const gitRule = "forbidden-package:git package";
+
+  it("the real Dockerfile does not install git", () => {
+    expect(scanFinalStage(dockerfileText).some((v) => v.rule === gitRule)).toBe(false);
+  });
+
+  it("goes red on the multi-line RUN git falsifier fixture", () => {
+    expect(scanFinalStage(gitFalsifierText).some((v) => v.rule === gitRule)).toBe(true);
+  });
+
+  it("goes red on a single-line apt-get install -y git", () => {
+    expect(scanFinalStage(withRuntimeRun("RUN apt-get install -y git")).some((v) => v.rule === gitRule)).toBe(true);
+  });
+
+  it("goes red on a git install split across continuation lines", () => {
+    const run = ["RUN apt-get update \\", "    && apt-get install -y --no-install-recommends \\", "       ca-certificates \\", "       git"].join("\n");
+    expect(scanFinalStage(withRuntimeRun(run)).some((v) => v.rule === gitRule)).toBe(true);
+  });
+});

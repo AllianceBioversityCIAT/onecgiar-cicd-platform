@@ -444,3 +444,22 @@
 | Committed snapshot | HEAD + N-10 files: tsc 0, lint, guards PASS, vitest 698 / 44 skipped |
 | Forward pointers | **N-17:** adapter from `TargetStateRepository` (`raiseHighestAccepted` → `{raised}`) to the `TargetOrderingPort` (`{accepted}`) and `readOrdering` from `get()`, with one integration test on the real repository; `DeploymentCatalog` over DefinitionSource; supply `senderRef` and `sqsMessageId` from the router. **N-12 / N-09 consumers:** import `buildSourceRef` — never rebuild the string. **N-19 (optional):** grep guard that no other module builds `repository=` strings. Advisory: consistent reads in `DedupeRepository.get`; tests for concurrent expired-claim takeovers and the `recordSequence` fallback; JSDoc on the lease constant citing DD-20 |
 | Status | **Done** |
+
+### Incident — staged rename leaked into commit 2f0031a (2026-10-06)
+
+| Field | Value |
+|---|---|
+| What happened | N-19's in-progress `git mv` (guard 3 rename) was already staged in the index when the Leader staged and committed N-10 by explicit paths; `git commit` took the whole index, so 2f0031a contained the rename without its importer updates. `npm run validate` and `boundary-guards.test.ts` were broken at HEAD (pushed) |
+| Detection | The clean-worktree check for N-18 (HEAD + N-18 files) failed on a module-not-found in `boundary-guards.test.ts` |
+| Fix | Hotfix 5a39c58: import path updated in `run-all.mjs` and `boundary-guards.test.ts` (HEAD versions, path only); worktree check tsc 0, guards PASS, vitest 698 / 44 skipped. A staged deletion from N-12 (`ports/step-handler.ts`) was also unstaged before it could leak |
+| Process change | Before every commit: the index must be empty before staging (`git diff --cached` empty), and the staged list must equal the task's list. Implementers must not stage (`git mv`/`git rm` → plain file operations) |
+
+### N-18 — Dockerfile and image inspection without git · done
+
+| Field | Value |
+|---|---|
+| Attempt 1 | `git` removed from the runtime stage (only `ca-certificates`); guard 1 rule `forbidden-package:git` (comment lines stripped); `inspect-image.mjs` `FORBIDDEN_NAMES` includes `git` (command -v, find -name, node_modules). Tests: real Dockerfile clean; three git fixtures red. Red run before the change → `final stage installs git package`. Evidence re-run (Leader): tests green, tsc 0; Leader falsifier (git re-added) → guard 1 red, restored → PASS. `npm run inspect:image` → **DEFERRED** (no Docker daemon; environment-dependent, mandatory before deployment) — **VERIFIED** |
+| Reviewer attempt 1 | **PASS** (`opus`) |
+| Committed snapshot | HEAD (after hotfix 5a39c58) + N-18 files: tsc 0, lint, guards PASS, vitest 703 / 44 skipped |
+| Deferred (environment) | Real image inspection incl. the git falsifier fixture (`npm run inspect:image -- --dockerfile test/fixtures/dockerfiles/Dockerfile.falsifier-git`) on a Docker-capable host; a file named exactly `git` in the image must be triaged |
+| Status | **Done** |

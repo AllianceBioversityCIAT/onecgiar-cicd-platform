@@ -5,7 +5,7 @@
 # maven/gradle/java, python build chains), the docker CLI/daemon, or a
 # mounted docker.sock. Multi-stage is used solely to compile and install the
 # Executor's OWN TypeScript and production dependencies; it never compiles
-# or installs application code.
+# or installs application code. git is also forbidden in the final stage.
 #
 # The `builder` and `deps` stages are allowed to use npm (they produce
 # build/install artifacts, they are not the shipped image). The `runtime`
@@ -86,10 +86,11 @@ FROM node:22-slim AS runtime
 
 ARG DEFINITION_REF=""
 
-# git: needed by git-cli-client (design §4.2). No other OS toolchain.
-# No docker.io/docker-ce-cli, no maven/openjdk/gradle, no python build chains.
+# Only ca-certificates (TLS to AWS endpoints). No git (the Executor holds no
+# git client: definitions are bundled, DD-19; AC2), no docker.io/docker-ce-cli,
+# no maven/openjdk/gradle, no python build chains.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --system executor \
