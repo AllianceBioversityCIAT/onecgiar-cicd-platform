@@ -1,0 +1,36 @@
+# @akili-spec changes/cicd-executor-poc requirements FR-02; design 7.7, DD-21, DD-23
+# EXAMPLE Target Registry (DEV) for the Gate B integration run. Copy into the local,
+# gitignored definitions root and fill in (see ../../README.md). Never commit the filled copy.
+#
+# Only logical references are versioned (DD-23). The Executor resolves them via Secrets
+# Manager (secret id = CICD_SECRET_ID_PREFIX + ref name).
+
+# Replace the key with your target id; it must equal targetRef in the deployment definition.
+example-target-dev:
+  # Resolves to the non-sensitive connection identity JSON (host, port, user). Never a credential.
+  connectionRef: <EXAMPLE_DEV_CONNECTION_REF>
+  # Resolves to the target's OpenSSH host PUBLIC key line(s), obtained out of band.
+  hostKeyRef: <EXAMPLE_DEV_HOST_KEY_REF>
+  # SSH private key, key only: a temporary password is not supported (spec gap G-1).
+  # Existence-checked at startup; read only by the SSH handler at deploy time.
+  credentialRef: <EXAMPLE_DEV_SSH_CREDENTIAL_REF>
+  # Replace the middle placeholder and the last segment. One deployment per lockKey (DD-27).
+  lockKey: deployment#<EXAMPLE_DEV_TARGET>#example-app-dev-unit
+  # Deploy window policy: "required" needs externalDeployersRef (secret holds a JSON array of
+  # strings naming the external deployers the window must cover). If nothing else deploys to
+  # the host, replace these two lines with:
+  #   externalDeployers: none
+  #   deployWindowPolicy: not-required
+  externalDeployersRef: <EXAMPLE_DEV_EXTERNAL_DEPLOYERS_REF>
+  deployWindowPolicy: required
+  # Container names and image refs must match the deployment definition artifacts.
+  containers:
+    - name: <EXAMPLE_SERVER_CONTAINER>
+      imageRepositoryRef: <EXAMPLE_SERVER_IMAGE_REPOSITORY_REF>
+      # Resolves to the host:container port mapping (read by value).
+      portRef: <EXAMPLE_SERVER_PORT_REF>
+      # The application's runtime secret: passed through, never read by the Executor (OD-Q5 open).
+      envSecretRef: <EXAMPLE_SERVER_RUNTIME_SECRET_REF>
+    - name: <EXAMPLE_CLIENT_CONTAINER>
+      imageRepositoryRef: <EXAMPLE_CLIENT_IMAGE_REPOSITORY_REF>
+      portRef: <EXAMPLE_CLIENT_PORT_REF>

@@ -1,0 +1,67 @@
+# @akili-spec changes/cicd-executor-poc requirements FR-01; design 6.2, DD-19, DD-23, DD-27
+# EXAMPLE Deployment Definition for the Gate B integration run (generic, parameterized).
+# The owner copies this tree into a LOCAL, gitignored definitions root (see ../../README.md)
+# and fills it in. Never commit the filled-in copy.
+#
+# Only logical identifiers and references live here (DD-23). Every *Ref value is a
+# <PLACEHOLDER> that the Executor resolves through the Secrets Manager SecretProvider at
+# startup (secret id = CICD_SECRET_ID_PREFIX + the ref name). The README lists what to
+# store under each ref. The definition is flat: no steps, no expressions.
+
+schemaVersion: 1
+
+# Replace with your own semantic id. It must match ^[a-z0-9][a-z0-9-]{1,62}$ (so it cannot
+# be a <PLACEHOLDER>). It must be unique, and one deployment per target lockKey (DD-27).
+deploymentId: example-app-dev
+environment: dev
+
+# Replace with your own target id. It must equal the key used in targets/dev.yaml.
+targetRef: example-target-dev
+
+# Source binding (DD-27): what the caller workflow must present. Replace each ref name if you
+# like; the secret behind each ref holds the real repository, workflow and GitHub Environment.
+source:
+  repositoryRef: <EXAMPLE_REPO_REF>
+  workflowRef: <EXAMPLE_WORKFLOW_REF>
+  environmentRef: <EXAMPLE_GITHUB_ENVIRONMENT_REF>
+
+# Resolves to the CI role ID (stack output CiRoleId), not the role ARN (DD-25).
+allowedSenderRef: <EXAMPLE_CI_ROLE_REF>
+
+# The only approved deploy script.
+deployScript: deploy-container.sh
+
+# One or two artifact units. Replace the container placeholders with your own logical
+# container names (<UPPER_SNAKE> or a lowercase semantic id). The secret behind
+# imageRepositoryRef holds the image repository URI.
+artifacts:
+  - unit: server
+    container: <EXAMPLE_SERVER_CONTAINER>
+    imageRepositoryRef: <EXAMPLE_SERVER_IMAGE_REPOSITORY_REF>
+  - unit: client
+    container: <EXAMPLE_CLIENT_CONTAINER>
+    imageRepositoryRef: <EXAMPLE_CLIENT_IMAGE_REPOSITORY_REF>
+
+# Runtime secrets are the application's own. They are passed through UNRESOLVED to the target
+# (--runtime-secret <container>=<ref>), which resolves them with its own permissions. The
+# Executor never reads them (NFR-01). How the target gets credentials to pull them is OD-Q5,
+# which is still open: do not assume an answer. Remove this block if the example container
+# needs none.
+runtimeSecretRefs:
+  <EXAMPLE_SERVER_CONTAINER>: <EXAMPLE_SERVER_RUNTIME_SECRET_REF>
+
+# One health check per deployed container. A health URL ref (secret holds the URL) or a
+# command name are both allowed by the schema; this example uses URL refs. Replace them.
+health:
+  <EXAMPLE_SERVER_CONTAINER>:
+    url: <EXAMPLE_SERVER_HEALTH_URL_REF>
+  <EXAMPLE_CLIENT_CONTAINER>:
+    url: <EXAMPLE_CLIENT_HEALTH_URL_REF>
+
+timeoutMinutes: 20
+
+# Slack: channelRef is read by value, tokenRef is only existence-checked at startup.
+notifications:
+  slack:
+    channelRef: <EXAMPLE_SLACK_CHANNEL_REF>
+    tokenRef: <EXAMPLE_SLACK_TOKEN_REF>
