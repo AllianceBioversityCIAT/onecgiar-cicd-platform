@@ -342,4 +342,16 @@
 | Attempt 1 | `--artifact <container>=<repo>@sha256:<64-hex>`; `validate_artifact_ref` in `parse_args` before effects (tags, bare repo, short/non-hex digest, `..`, leading `-`/`/` → exit 2); `--previous` validated the same; pull/run/previous by digest; pruning by digest; already-running-same-digest → exit 0 without migration/swap; shims fail loudly on non-digest pulls; 3 new cases; README updated. Suite 17/0, 1 assertion skipped (0600). Falsifier (validation disabled) → tag cases red |
 | Evidence re-run (Leader) | `bash -n` OK; suite 17/0; Leader falsifier disabling the `--previous` validation → "--previous with a tag: expected exit 2, got 0", docker invoked, 1 failed; restored — **VERIFIED** |
 | Deferred (environment) | `docker ps` image reporting for digest-started containers and `docker images --digests` pruning semantics → Gate C (T-33) |
-| Reviewer attempt 1 | In progress |
+| Reviewer attempt 1 | **FAIL** (`opus`): the previous image comes from `docker ps` unchanged, so a container started by tag (normal first deploy where Jenkins deploys by tag) is recorded, restored and pruning-compared by tag — violates DD-26 and FR-13 ("identified by digest", "never run by tag"). Probe: exit 30 restored `…app:123` |
+| Leader ruling | Resolve the running image to `<repo>@sha256:<digest>` via image ID + matching RepoDigests; fallback without a matching RepoDigest = restore by image ID (content-addressed), reported as unresolved, never a tag. Also exclude ALREADY_CURRENT containers from restore |
+| Attempt 2 | In progress |
+
+### N-07 — Supersede policy · done
+
+| Field | Value |
+|---|---|
+| Attempt 1 | Pure `domain/supersede-policy`: `compareOrdering` (OLDER/EQUAL/NEWER/DIFFERENT_SOURCE; equal never older; no cross-source order), `evaluateS1` (lastDeployed, highestDispatched, highestAccepted), `evaluateS2` (max of lastDeployed and highestDispatched only), `decideRaiseMax` (absent or `stored <= new`); invalid `runNumber` throws. `evaluateSupersede` deleted from lock-policy; guard 8 entry → DELETED. 22 tests mixing arrival and run order. Falsifier `<` → `<=` → 5 failed. Evidence re-run (Leader): 49/49; Leader falsifier (different-source check removed) → 4 failed — **VERIFIED** |
+| Reviewer attempt 1 | **PASS** (`opus`, full) |
+| Committed snapshot | HEAD + N-07 only (guard file staged with the N-07 hunk alone, because N-05 shares it): typecheck 0, lint clean, guards PASS, vitest 493/493 |
+| Forward pointers | **Callers (N-10/N-12):** map `REJECTED_SOURCE_MISMATCH` to an audited outcome; FR-23 notification and "listed as unresolved" clauses; build `sourceRef` identically everywhere (repository + workflow + environment, DD-27 item 1). **N-03:** two-sources startup validation. Advisory: `SUPERSEDED.by` names the first newer attribute, not the max |
+| Status | **Done** |

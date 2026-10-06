@@ -1,5 +1,5 @@
 // @akili-spec changes/cicd-executor-poc design DD-09, §7.6; requirements FR-11, FR-16 F17-F18
-// Lease, fencing, supersede and lock-wait-schedule decision logic for the
+// Lease, fencing and lock-wait-schedule decision logic for the
 // distributed lock (DD-09). Pure, no I/O: no Date.now(), no randomness — the
 // caller supplies `now` and every persisted field. Persistence / conditional
 // DynamoDB writes are T-08; this module only decides what SHOULD happen and
@@ -87,18 +87,6 @@ export function nextLockRetry(params: NextLockRetryParams): LockRetryDecision {
   // up a value that was already at the cap would otherwise push it over.
   const delaySeconds = Math.min(Math.ceil(rawDelaySeconds), LOCK_WAIT_MAX_DELAY_SECONDS);
   return { action: "RETRY", delaySeconds };
-}
-
-// ---------------------------------------------------------------------------
-// FR-11 — Supersede
-// ---------------------------------------------------------------------------
-
-/**
- * FR-11 "Scenario: supersede" — with the lock held, a sequence older than
- * the one already deployed to the target is skipped rather than deployed.
- */
-export function evaluateSupersede(lastDeployedSequence: number, sequence: number): boolean {
-  return lastDeployedSequence > sequence;
 }
 
 // ---------------------------------------------------------------------------

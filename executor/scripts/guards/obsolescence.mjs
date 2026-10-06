@@ -43,7 +43,7 @@ export const OBSOLESCENCE_ENTRIES = [
   { path: "executor/src/domain/events/index.ts", symbol: "normalizeCodeBuildStateChangeEvent", status: "PENDING", owner: "N-05" },
   { path: "executor/test/unit/event-normalizers.test.ts", status: "PENDING", owner: "N-05" },
   { path: "executor/test/fixtures/aws", status: "PENDING", owner: "N-05" },
-  { path: "executor/src/domain/lock-policy/index.ts", symbol: "evaluateSupersede", status: "PENDING", owner: "N-07" },
+  { path: "executor/src/domain/lock-policy/index.ts", symbol: "evaluateSupersede", status: "DELETED" },
   { path: "executor/src/adapters/dynamodb-state-store/step-repository.ts", status: "PENDING", owner: "N-08" },
   { path: "executor/src/adapters/dynamodb-state-store/step-attempt-lookup.ts", status: "PENDING", owner: "N-08" },
   { path: "executor/src/adapters/dynamodb-state-store/instance-lease-repository.ts", status: "PENDING", owner: "N-08" },

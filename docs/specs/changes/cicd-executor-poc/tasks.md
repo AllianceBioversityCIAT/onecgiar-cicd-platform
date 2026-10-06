@@ -247,7 +247,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-07 — Supersede policy (DD-27, approved)
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · S · **A** (OD-A1 resolved by the owner, 2026-10-06) |
+| Status / Size / Gate | **[x] done** · S · **A** |
 | Goal | Pure `SupersedePolicy`: bound source + in-source `runNumber`; S1 and S2 decisions |
 | Depends on | N-01 |
 | Requirements / Design | FR-23 · DD-27, design §7.3 |

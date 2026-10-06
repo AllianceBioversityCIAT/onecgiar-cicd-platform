@@ -2,7 +2,7 @@
 //
 // Proves the pure lock-policy decision logic: the exact lock-wait schedule
 // of §7.6 (clipped to the remaining budget, never more than 900 s per
-// message), the safety cap, the supersede comparison, and the
+// message), the safety cap, and the
 // acquire/renew/release ownership rules of DD-09.
 //
 // Expected values are transcribed independently from design §7.6's table and
@@ -14,7 +14,6 @@ import {
   canReleaseLock,
   canRenewLock,
   evaluateLockAcquisition,
-  evaluateSupersede,
   LOCK_RENEWAL_INTERVAL_SECONDS,
   nextLockRetry,
   type PersistedLockItem,
@@ -236,22 +235,6 @@ describe("nextLockRetry — accumulated wait is real elapsed time (now - lockWai
       now: 950_000,
     });
     expect(decision).toEqual({ action: "RETRY", delaySeconds: 850 });
-  });
-});
-
-describe("evaluateSupersede — FR-11 scenario: supersede", () => {
-  it("supersedes when the target already has a strictly newer deployed sequence", () => {
-    // FR-11 literal scenario values: target already deployed sequence 186,
-    // this execution carries sequence 184.
-    expect(evaluateSupersede(186, 184)).toBe(true);
-  });
-
-  it("does not supersede when this execution's sequence is the newer one", () => {
-    expect(evaluateSupersede(184, 186)).toBe(false);
-  });
-
-  it("does not supersede on equal sequences", () => {
-    expect(evaluateSupersede(184, 184)).toBe(false);
   });
 });
 
