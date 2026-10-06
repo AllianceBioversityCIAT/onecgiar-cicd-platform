@@ -16,7 +16,7 @@ Gate B is split into two phases with different actors.
 
 | Phase | Actor | What happens |
 |---|---|---|
-| **B0 — Integration kit** | Claude (triad, reviewed, committed) | Writes source code, SAM templates, example configuration, the example caller workflow, owner scripts and documentation. Runs only local, non-mutating validation: tests, static template checks, `npm run check:local`, and `sam validate` only if the SAM CLI is available (§8) |
+| **B0 — Integration kit** | Claude (triad, reviewed, committed) | Writes source code, SAM templates, example configuration, the example caller workflow, owner scripts and documentation. Runs only local, non-mutating validation: tests, static template checks, `npm run check:local`, and no `sam validate` (owner-executed, §11) |
 | **B1–B5 — Integration run** | **Owner, manually** | Runs every external command from the kit: SAM deploy, secrets, GitHub, the local Executor under Node 22, SSH validation, the deployment, teardown. Claude only reads the evidence the owner shares back and checks it against the expected results |
 
 **Hard boundary for Claude in Gate B:**
@@ -52,7 +52,7 @@ Implementation tasks, each through Implementer → Leader evidence re-run → Re
 
 | Task | Deliverable | Local validation |
 |---|---|---|
-| **K-1 SAM template** | `infra/sam/template.yaml` + parameter examples + `samconfig.example.toml` | Contract test parsing the template (CloudFormation intrinsic tags supported): exact `StringEquals` trust (no `StringLike`/wildcards), explicit queue-policy `Deny`, Executor role without forbidden actions (ECR/S3/Lambda/CodeBuild/app secrets), tags `cicd-poc` on every taggable resource, DeletionPolicy explicit, no literal account IDs. `sam validate --lint` **only if available** (§8) |
+| **K-1 SAM template** | `infra/sam/template.yaml` + parameter examples + `samconfig.example.toml` | Contract test parsing the template (CloudFormation intrinsic tags supported): exact `StringEquals` trust (no `StringLike`/wildcards), explicit queue-policy `Deny`, Executor role without forbidden actions (ECR/S3/Lambda/CodeBuild/app secrets), tags `cicd-poc` on every taggable resource, DeletionPolicy explicit, no literal account IDs. `sam validate --lint` is owner-executed (§11) |
 | **K-2 Secrets Manager `SecretProvider`** | Real adapter (`adapters/secrets-manager-provider`): `exists` = `DescribeSecret`, `getSecret` = `GetSecretValue` at point of use; logical ref → secret id by a documented, configurable convention (`CICD_SECRET_ID_PREFIX` + ref name); ARNs and values sanitized from errors | Unit tests with a mocked SDK client; publication guard; no network |
 | **K-3 Offline definitions check** | `npm run definitions:check -- --root <dir>`: runs `validateForCi` on an owner's local definitions root (no AWS, no secrets) | Unit tests; falsifier with a broken example |
 | **K-4 Example definitions** | `docs/gate-b/examples/definitions/` — a parameterized Deployment Definition and Target Registry entry with placeholders, to be copied by the owner into a **local, gitignored** definitions root | Passes `definitions:check` once placeholders are filled with sample logical refs |
@@ -67,7 +67,7 @@ Implementation tasks, each through Implementer → Leader evidence re-run → Re
 | Milestone | Owner does | Expected evidence (owner shares back; Claude checks) |
 |---|---|---|
 | **B1** AWS foundation | Reviews the template; runs the documented `sam deploy`; creates the Secrets Manager entries; configures the local profile that assumes the Executor role; starts the Executor under Node 22 | Stack outputs; startup log "definitions validated"; heartbeat metric; a scheduler-originated `RECONCILE_TICK` consumed; a negative: the Executor role cannot read an application secret |
-| **B2** GitHub OIDC → SQS → local Executor | Creates the GitHub Environment, `CICD_BOUND_REF`, five Environment secrets; adds the caller workflow to a chosen repo and branch; triggers `workflow_dispatch` | Workflow run log (public-safe), SQS receipt in the Executor log with `senderRef`, execution QUEUED, then `FAILED (DEPLOY_WINDOW_CLOSED)` with the window closed (no SSH). Premises pinned: P-A4 SenderId form, P-G11, P-G14, G-3 (repo-level decoy variable), G-4, P-A3. Negatives: `pull_request`, `pull_request_target`, `workflow_run` cannot assume the role |
+| **B2** GitHub OIDC → SQS → local Executor | Creates the GitHub Environment, the variables and the single Environment secret of §12; adds the caller workflow to a chosen repo and branch; triggers `workflow_dispatch` | Workflow run log (public-safe), SQS receipt in the Executor log with `senderRef`, execution QUEUED, then `FAILED (DEPLOY_WINDOW_CLOSED)` with the window closed (no SSH). Premises pinned: P-A4 SenderId form, P-G11, P-G14, G-3 (repo-level decoy variable), G-4, P-A3. Negatives: `pull_request`, `pull_request_target`, `workflow_run` cannot assume the role |
 | **B3** State, dedupe, locks | Re-runs the same workflow run; runs an older build after a newer one; lets the scheduler tick; sends a poison message (documented command) | One execution for the re-run; `SUPERSEDED` for the older; reconciler activity; DLQ after 5 receives + alarm |
 | **B4** SSH (non-destructive) | Runs `ssh-preflight`, then `target-probe.sh` on the target, then `executor-ssh-probe` | Host-key match (and a deliberate mismatch rejected), `flock` contention = busy, fresh 0700 directory, checksum, parsed `CICD_RESULT` |
 | **B5** One controlled deployment (optional; needs OD-Q5) | Fills the real deployment definition for a unit of their choice, opens a window if required, triggers the workflow | `SUCCEEDED`, Slack thread, `lastDeployed` fenced; optional forced health failure → previous image restored |
@@ -127,7 +127,7 @@ All tagged `Project=cicd-poc`; names derived from a `Stage` parameter (default `
 | `README.md` | The 11-step owner sequence, prerequisites, milestone map, what Claude did vs what the owner does, evidence checklist |
 | `01-aws-sam.md` | Template review guide; `sam validate --lint`; `sam deploy` with the example config (`--guided` alternative); `aws cloudformation describe-stacks` / `describe-stack-resources` inspection; drift detection; outputs to note |
 | `02-secrets.md` | Secret naming convention (`CICD_SECRET_ID_PREFIX` + ref); exact `aws secretsmanager create-secret` / `put-secret-value` commands with placeholder values; connection identity JSON shape `{host, port?, user}`; host key format; Slack token; how to verify existence with `describe-secret` |
-| `03-github.md` | Where the caller workflow goes (`.github/workflows/<name>.yml` in the owner-chosen repo); values to change; GitHub Environment creation; deployment branch rules; admin-only `CICD_BOUND_REF`; five Environment secrets and their sources (stack outputs); required branch protection; the platform repository/reusable workflow visibility requirement and the pinned SHA; `workflow_dispatch` trigger; how to verify OIDC (workflow log step) and SQS submission (`aws sqs get-queue-attributes` approximate count, Executor log) |
+| `03-github.md` | Where the caller workflow goes (`.github/workflows/<name>.yml` in the owner-chosen repo); values to change; GitHub Environment creation; deployment branch rules; admin-only `CICD_BOUND_REF`; the Environment variables and the single Environment secret of §12, and their sources (stack outputs); required branch protection; the platform repository/reusable workflow visibility requirement and the pinned SHA; `workflow_dispatch` trigger; how to verify OIDC (workflow log step) and SQS submission (`aws sqs get-queue-attributes` approximate count, Executor log) |
 | `04-definitions-and-target.md` | Parameter table the owner fills (§7); copying the examples into the local definitions root; `npm run definitions:check`; mapping each logical ref to its secret |
 | `05-run-executor-node22.md` | Portable Node 22 (download, checksum verification, unzip into `executor/.local/node22/`, no PATH change); `npm ci` + `npm run build`; `executor.env`; AWS profile with `role_arn` + `source_profile` (no static keys); start command; expected startup output; safe stop (Ctrl+C / SIGTERM → ordered shutdown); verifying consumption (log lines, queue attributes, heartbeat metric); troubleshooting (credentials, region, missing secrets, definitions refused, Node version, clock skew, proxy) |
 | `06-target-validation.md` | Owner-run SSH preflight, `target-probe.sh`, `executor-ssh-probe`; expected outputs; what must be true before B5 |
@@ -170,14 +170,14 @@ All tagged `Project=cicd-poc`; names derived from a `Stage` parameter (default `
 ## 9. Every step that requires manual owner execution
 
 1. Review `infra/sam/template.yaml` and the parameter file.
-2. Run `sam validate --lint` (if not run in B0) and `sam deploy` with the example configuration.
+2. Run `sam validate --lint` (checkpoint B), review its result (C), and only then `sam deploy` with the example configuration (D) — §11.
 3. Inspect stack resources and record the outputs.
 4. Create the Secrets Manager entries (connection identity, host key, SSH key, Slack token, identifier refs) with the documented commands.
 5. Configure the local AWS profile that assumes the Executor role.
 6. Download and verify the portable Node 22; `npm ci`, `npm run build`.
 7. Fill `executor.env` and the local definitions root; run `npm run definitions:check`.
 8. Start the Executor locally; verify startup, heartbeat and queue consumption.
-9. In the chosen GitHub repository: create the Environment, deployment branch rules, admin-only `CICD_BOUND_REF`, the five Environment secrets; add the caller workflow to the chosen branch.
+9. In the chosen GitHub repository: create the Environment, deployment branch rules, admin-only `CICD_BOUND_REF`, the Environment variables and the single secret (§12); add the caller workflow to the chosen branch.
 10. Trigger the workflow with `workflow_dispatch`; observe OIDC, SQS submission and the Executor log.
 11. Run the documented negative checks (untrusted triggers, wrong sender, poison message).
 12. Enable the reconcile schedule when ready.
@@ -191,7 +191,7 @@ All tagged `Project=cicd-poc`; names derived from a `Stage` parameter (default `
 
 ## 10. Evidence to declare Gate B complete
 
-- **B0:** kit committed; all local gates green; SAM template contract tests green; `sam validate` either passed (owner or Claude with an installed CLI) or recorded as pending for the owner.
+- **B0:** kit committed; all local gates green; SAM template contract tests green; `sam validate --lint` recorded as NOT EXECUTED (owner-executed at B1, checkpoint B).
 - **B1–B5:** owner-run outputs (sanitized) recorded per milestone against the expected evidence in §3; premises pinned or refuted; negatives observed. Milestones the owner chooses not to run are recorded as **not executed**, never as passed.
 
 Gate C keeps permanent hosting and operational readiness (container image build and inspection, the Executor on the designated server under OD-Q11/OD-Q12, env-key parity, PRMS Reporting DEV end to end with Jenkins coexistence).

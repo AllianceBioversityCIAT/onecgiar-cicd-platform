@@ -557,11 +557,11 @@ Gate B is split per `gate-b-plan.md` (approved 2026-10-06). **B0** is the reposi
 
 | Milestone | Content | Anchors |
 |---|---|---|
-| B1 | SAM checkpoints A–D, stack outputs recorded | N-24, N-29 |
-| B2 | Executor on the owner's workstation (Node 22), secret entries created by the owner | N-25, K-2 |
-| B3 | Read-only target probe and SSH preflight | N-23, K-7 |
-| B4 | GitHub Environment, variables, single secret, caller workflow (closed window first) | N-32 prep, K-5 |
-| B5 | Real AWS integration negatives (DLQ, wrong role, `DelaySeconds`) | N-26, N-27 |
+| B1 | AWS foundation: SAM checkpoints A–D, owner-created secrets, local Executor under Node 22 | N-24, N-25 (workstation host), N-29 |
+| B2 | GitHub OIDC → SQS → local Executor (closed window, no SSH); untrusted-trigger negatives | N-26, N-29, N-32 prep |
+| B3 | State, dedupe, supersede, reconciler, poison message → DLQ | N-26, N-27 |
+| B4 | Non-destructive SSH: preflight, read-only target probe, Executor SSH probe | N-23 |
+| B5 | One controlled deployment (optional; needs OD-Q5) | — |
 
 ### 6.0.2 Original Gate B rows (anchors for B1–B5)
 
