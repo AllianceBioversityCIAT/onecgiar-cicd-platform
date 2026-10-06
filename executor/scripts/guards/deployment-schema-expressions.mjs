@@ -6,7 +6,7 @@
 // `when:` or a step graph could be smuggled in, since every object of the
 // flat Deployment Definition is `additionalProperties: false`).
 //
-// (The file keeps its historical name; since AC-01 it guards the Deployment
+// (Renamed in N-19; since AC-01 it guards the Deployment
 // Definition schema, the successor of the pipeline schema.)
 //
 // This is an OPERATIONAL guard for `npm run validate` (CI / pre-image-build
@@ -90,7 +90,7 @@ const NEGATIVE_CORPUS = [
  * @param {string} [overrides.yamlPath] absolute path to a valid deployment definition YAML (must contain `migration` and `health`)
  * @param {string} [overrides.schemaValidationTsPath] absolute path to definition-service's schema-validation.ts (reused, unmodified, for its Ajv factory)
  */
-export async function runPipelineSchemaExpressionGuard(repoRoot, overrides = {}) {
+export async function runDeploymentSchemaExpressionGuard(repoRoot, overrides = {}) {
   const schemaPath = overrides.schemaPath ?? path.join(repoRoot, "schemas", "deployment.schema.json");
   const yamlPath =
     overrides.yamlPath ?? path.join(repoRoot, "deployment-definitions", "prms", "reporting-dev.yaml");
@@ -110,7 +110,7 @@ export async function runPipelineSchemaExpressionGuard(repoRoot, overrides = {})
 
   if (!validate(structuredClone(baseDefinition))) {
     violations.push({
-      guard: "pipeline-schema-expressions",
+      guard: "deployment-schema-expressions",
       file: relSchemaPath,
       message: `the real, valid deployment definition at ${path
         .relative(repoRoot, yamlPath)
@@ -124,7 +124,7 @@ export async function runPipelineSchemaExpressionGuard(repoRoot, overrides = {})
     corpusCase.mutate(fixture);
     if (validate(fixture)) {
       violations.push({
-        guard: "pipeline-schema-expressions",
+        guard: "deployment-schema-expressions",
         file: relSchemaPath,
         message: `expected rejection for "${corpusCase.name}" but the schema accepted it — expressions/conditions must never validate (FR-01, NFR-01)`,
       });

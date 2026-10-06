@@ -1,5 +1,5 @@
 // @akili-spec changes/cicd-executor-poc requirements FR-01, NFR-01; design DD-19
-// Hand-written ambient declarations for pipeline-schema-expressions.mjs —
+// Hand-written ambient declarations for deployment-schema-expressions.mjs —
 // see dockerfile-boundary.d.mts for the pattern this mirrors.
 export interface Violation {
   readonly guard: string;
@@ -8,13 +8,13 @@ export interface Violation {
   readonly message: string;
 }
 
-export interface PipelineSchemaExpressionGuardOverrides {
+export interface DeploymentSchemaExpressionGuardOverrides {
   readonly schemaPath?: string;
   readonly yamlPath?: string;
   readonly schemaValidationTsPath?: string;
 }
 
-export declare function runPipelineSchemaExpressionGuard(
+export declare function runDeploymentSchemaExpressionGuard(
   repoRoot: string,
-  overrides?: PipelineSchemaExpressionGuardOverrides,
+  overrides?: DeploymentSchemaExpressionGuardOverrides,
 ): Promise<readonly Violation[]>;

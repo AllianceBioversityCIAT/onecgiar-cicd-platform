@@ -463,7 +463,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-19 — Guards retarget (T-21 guards 3 and 6) and guard 7 "action-pinning"
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · S · **A** |
+| Status / Size / Gate | **[x] done** · S · **A** |
 | Goal | Guard 3 → `deployment.schema.json` expressions corpus; guard 6 → mock deployment definition (NFR-08); publication guard also scans `.github/workflows/`; **new guard 7 "action-pinning"** (owner rule, 2026-10-06) |
 | Depends on | N-03 |
 | Requirements / Design | NFR-01, NFR-02, NFR-08, FR-22, FR-25 · DD-23, DD-29 |

@@ -473,3 +473,15 @@
 | Committed snapshot | HEAD + N-16 files: tsc 0, lint, guards PASS, vitest 719 / 44 skipped |
 | Forward pointers | **N-17:** wire the service (callers, `slackThreadTs` persistence, `resolveChannel`, real `EventMarkRepository`, always supply `logsUrl` + test; platform channel/token refs for REJECTED; mark key for rejections must reuse the rejection identity `{deploymentId}#{requestId}` or `MSG#{sqsMessageId}`). **Closure spec sync:** add `NotificationFailures{provider}` and the rejection event-mark key shape to design §12/§5.1; reconcile §12 metric names (`ExecutionsAccepted`, `ExecutionsSuperseded`, `DeployDurationMs` vs code). Advisory: dedicated Slack-token entry in the redaction corpus |
 | Status | **Done** |
+
+### N-19 — Guards retarget and guard 7 "action-pinning" · done
+
+| Field | Value |
+|---|---|
+| Attempt 1 | Guard 3 renamed to `deployment-schema-expressions`; guard 4 also walks `.github/workflows/`; new guard 7 `action-pinning` (YAML-parsed `uses:` at step and job level; full 40-hex SHA, `docker://…@sha256:<64-hex>`, `./` local; masked values; absent workflow → PASS with note); obsolescence scan roots fixed (`executor/scripts` added, stale roots removed, `vi.doMock`/`vi.importMock`). Evidence re-run (Leader): 56/56, validate PASS; Leader probe in a temp dir: `@v4` flagged, pinned SHA accepted — **VERIFIED** |
+| Reviewer attempt 1 | **FAIL** (`opus`): the local exemption `/^\.\.?\//` also accepted `../evil` — DD-29 allows only `./` |
+| Attempt 2 | `LOCAL_REF = /^\.\//`; case-insensitive `uses` keys; `*.reusable.yaml` scanned too; strict mode (`--require-workflow` / `CICD_REQUIRE_REUSABLE_WORKFLOW=1`) fails when no reusable workflow exists; unused import removed. The implementer's `../` falsifier was blocked by the permission classifier (it would weaken a repo file); the Reviewer ran it on a scratch copy: loosened regex accepts `../evil`, so the new test would go red. Evidence re-run (Leader): 60/60, lint 0 warnings, validate PASS, strict mode fails as designed — **VERIFIED** |
+| Reviewer attempt 2 | **PASS** (`opus`) |
+| Committed snapshot | HEAD + N-19 files (guard 8 file staged with the N-19 hunks only; the N-12 `step-handler` line stays PENDING until N-12 lands): tsc 0, lint, guards PASS, vitest 748 / 44 skipped |
+| Forward pointers | **N-22 and CI (OD-N1):** run `validate` with `--require-workflow`. **N-21:** avoid local actions and local job-level calls in the trusted workflow (nested workflows not named `*.reusable.*` are not scanned), or forbid them in its contract test. **Closure spec sync:** record the owner's wording that the trailing version comment is "where useful" in DD-29 |
+| Status | **Done** |

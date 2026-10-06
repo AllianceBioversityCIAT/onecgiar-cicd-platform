@@ -135,7 +135,7 @@ const RULES = [
 ];
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { mask } from "./lib/report.mjs";
 import { gitignoreHasExactEntry } from "./lib/gitignore.mjs";
@@ -150,7 +150,17 @@ function gitScannableFiles(repoRoot) {
   const tracked = gitLines(repoRoot, ["ls-files"]);
   const staged = gitLines(repoRoot, ["diff", "--cached", "--name-only"]);
   const untrackedNotIgnored = gitLines(repoRoot, ["ls-files", "--others", "--exclude-standard"]);
-  return [...new Set([...tracked, ...staged, ...untrackedNotIgnored])];
+  // `.github/workflows/` (the trusted reusable workflow, DD-29) is always walked
+  // from disk too, so it is scanned even before it is added to git. May not exist.
+  return [...new Set([...tracked, ...staged, ...untrackedNotIgnored, ...workflowFiles(repoRoot)])];
+}
+
+function workflowFiles(repoRoot) {
+  const dir = path.join(repoRoot, ".github", "workflows");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => /\.ya?ml$/.test(name))
+    .map((name) => `.github/workflows/${name}`);
 }
 
 /** Loads the OPTIONAL gitignored local denylist (one literal per line), if present. Never committed. */

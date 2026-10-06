@@ -77,6 +77,23 @@ describe("obsolescence guard (N-01)", () => {
     expect(violations.map((v) => v.file).sort()).toEqual(["executor/src/ports/index.ts", "executor/test/unit/x.test.ts"]);
   });
 
+  it.each(["vi.doMock", "vi.importMock", "vi.mock"])("fails when %s targets a DELETED path", async (call) => {
+    // Specifier assembled at runtime so this file never carries a literal one of its own.
+    const specifier = ["../../src/ports/git-", "client.js"].join("");
+    const root = makeTree({ "executor/test/unit/y.test.ts": `${call}("${specifier}");\n` });
+    const violations = await runObsolescenceGuard(root, DELETED_ENTRIES);
+    expect(violations.map((v) => v.file)).toEqual(["executor/test/unit/y.test.ts"]);
+  });
+
+  it("scans executor/scripts for importers and no longer scans the stale scripts/ingress roots", async () => {
+    const importer = ["import x from ", `"${["../../src/ports/git-", "client.js"].join("")}";\n`].join("");
+    const scanned = makeTree({ "executor/scripts/guards/x.mjs": importer });
+    const hits = await runObsolescenceGuard(scanned, DELETED_ENTRIES);
+    expect(hits.map((v) => v.file)).toEqual(["executor/scripts/guards/x.mjs"]);
+    const stale = makeTree({ "scripts/x.mjs": importer, "ingress/x.mjs": importer });
+    expect(await runObsolescenceGuard(stale, DELETED_ENTRIES)).toEqual([]);
+  });
+
   it("fails when a DELETED symbol-level entry still appears in its file", async () => {
     const root = makeTree({ "executor/src/domain/lock-policy/index.ts": "export function evaluateSupersede() {}\n" });
     const entries: ObsolescenceEntry[] = [

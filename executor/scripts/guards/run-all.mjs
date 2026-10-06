@@ -11,10 +11,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runDockerfileBoundaryGuard } from "./dockerfile-boundary.mjs";
 import { runProjectIdentifiersGuard } from "./project-identifiers.mjs";
-import { runPipelineSchemaExpressionGuard } from "./deployment-schema-expressions.mjs";
+import { runDeploymentSchemaExpressionGuard } from "./deployment-schema-expressions.mjs";
 import { runPublicationPolicyGuard } from "./publication-policy.mjs";
 import { runLocalAnalysisFilesGuard } from "./local-analysis-files.mjs";
 import { runExtensibilityFixtureGuard } from "./extensibility-fixture.mjs";
+import { runActionPinningGuard } from "./action-pinning.mjs";
 import { runObsolescenceGuard, listPendingObsolescence } from "./obsolescence.mjs";
 import { formatViolation } from "./lib/report.mjs";
 
@@ -25,10 +26,11 @@ const repoRoot = path.resolve(here, "..", "..", "..");
 const GUARDS = [
   { name: "1. dockerfile-boundary (NFR-01)", run: () => runDockerfileBoundaryGuard(repoRoot) },
   { name: "2. project-identifiers (NFR-01)", run: () => runProjectIdentifiersGuard(repoRoot) },
-  { name: "3. pipeline-schema-expressions (FR-01, NFR-01)", run: () => runPipelineSchemaExpressionGuard(repoRoot) },
+  { name: "3. deployment-schema-expressions (FR-01, NFR-01)", run: () => runDeploymentSchemaExpressionGuard(repoRoot) },
   { name: "4. publication-policy (NFR-02, DD-23)", run: () => runPublicationPolicyGuard(repoRoot) },
   { name: "5. local-analysis-files (design §4.1)", run: () => runLocalAnalysisFilesGuard(repoRoot) },
   { name: "6. extensibility-fixture (NFR-08)", run: () => runExtensibilityFixtureGuard(repoRoot) },
+  { name: "7. action-pinning (FR-22, DD-29)", run: () => runActionPinningGuard(repoRoot, { requireWorkflow: process.argv.includes("--require-workflow") || undefined }) },
   { name: "8. obsolescence (NFR-01, design §15)", run: () => runObsolescenceGuard(repoRoot) },
 ];
 

@@ -2,7 +2,7 @@
 //
 // Guard 8 (N-01): every design §15 DELETE path is tracked here as either
 //   - DELETED: the path must not exist and nothing under executor/src,
-//     executor/test, ingress or scripts may import it (a guard that only
+//     executor/test or executor/scripts may import it (a guard that only
 //     checked existence would let a re-added import slip through), or
 //   - PENDING: the path still has importers; it is listed with the task that
 //     owns its removal. PENDING entries are printed but never fail the guard
@@ -13,7 +13,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 /** Roots (relative to the repo root) scanned for importers of DELETED paths. */
-const SCAN_ROOTS = ["executor/src", "executor/test", "ingress", "scripts"];
+const SCAN_ROOTS = ["executor/src", "executor/test", "executor/scripts"];
 const SOURCE_EXTENSIONS = /\.(?:ts|mts|cts|tsx|js|mjs|cjs)$/;
 const SKIPPED_DIRS = new Set(["node_modules", "dist", ".git"]);
 
@@ -74,7 +74,7 @@ function* walk(dir) {
   }
 }
 
-const SPECIFIER = /(?:\bfrom|\bimport|\brequire|\bmock|\bimportActual)\s*\(?\s*["']([^"']+)["']/g;
+const SPECIFIER = /(?:\bfrom|\bimport|\brequire|\bmock|\bdoMock|\bimportMock|\bimportActual)\s*\(?\s*["']([^"']+)["']/g;
 
 /** True when `resolved` (repo-relative, extensionless) lies at or under the entry path. */
 function isUnderEntry(resolved, entryPath) {
