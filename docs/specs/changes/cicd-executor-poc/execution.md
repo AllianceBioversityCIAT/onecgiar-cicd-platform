@@ -276,3 +276,13 @@
 | Reviewer attempt 2 | **PASS** (`opus`, full): denylist now covers every project cited in the proposal (probes flagged; prose not flagged); build-time run deferred to T-31 with OD-N1 open; allowlist literals `AKIAIOSFODNN7EXAMPLE` and `s3.us-west-2.amazonaws.com` accepted as public AWS documentation values (exact match); FAKE-marker exemption verified; guards do not ship in the runtime image |
 | Advisory (non-gating) | quoted-only matching misses compound forms (`'risk-dev'`, `startsWith('risk-')`); path-style S3 bucket names are not checked; results observed on Node v20.19.5 locally, not yet on Node 22 |
 | Status | **Done** (build-time run deferred to T-31) |
+
+## PAUSE: Gate A — architecture change AC-01 under evaluation (2026-10-06)
+
+| Field | Value |
+|---|---|
+| Trigger | Owner request: evaluate GitHub Actions as the CI owner and the Executor as CD-only coordinator (START SIMPLE) |
+| State at pause | 12/23 Gate A tasks done and pushed (T-00–T-07, T-17, T-20, T-21, T-22) |
+| In-flight, frozen (uncommitted, untouched) | T-08 DynamoDB store (implementer report never delivered); T-14 deploy script attempt 3 (implementer reported done; Leader evidence re-run not performed — interrupted) |
+| Analysis | `architecture-change-01.md` (status PROPOSED) |
+| Resume condition | Owner approval of AC-01, coherent revision of proposal/requirements/design/tasks, scoped Judgment Day APPROVED |
