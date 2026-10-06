@@ -48,9 +48,9 @@ Parameters:
     Description: Commit SHA of the platform reusable workflow pinned in the CI role trust (DD-24).
   GitHubOidcSub:
     Type: String
-    AllowedPattern: "^[A-Za-z0-9._:/-]{1,256}$"
-    ConstraintDescription: Exact sub value, no wildcard characters.
-    Description: Default environment-form sub claim value as observed by the owner (P-G10).
+    AllowedPattern: "^[A-Za-z0-9._:/@-]{1,256}$"
+    ConstraintDescription: Exact sub value (classic repo:OWNER/REPO:environment:NAME or immutable repo:OWNER@OWNER-ID/REPO@REPO-ID:environment:NAME), no wildcard characters.
+    Description: Environment-form sub claim value as observed by the owner (P-G10). Either the classic form or the immutable form that uses @ (repositories created, renamed or transferred after 2026-07-15).
   ExistingGitHubOidcProviderArn:
     Type: String
     Default: ""
@@ -66,7 +66,6 @@ Parameters:
     Default: "false"
     AllowedValues: ["true", "false"]
     Description: Create an immutable-tag probe ECR repository and use it instead of CiEcrRepositoryArn.
-  # The trusted principals must live in this stack's own account (documented, not enforced).
   # Both trusted principals must belong to this stack's own account (documented, not enforced).
   ExecutorTrustedPrincipalArn:
     Type: String
@@ -400,8 +399,11 @@ Resources:
             Condition:
               StringEquals:
                 aws:SourceAccount: !Ref AWS::AccountId
-                # Built from names (not GetAtt) so the role does not depend on the schedule.
-                aws:SourceArn: !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/default/cicd-reconcile-${Stage}"
+                # EventBridge Scheduler "Confused deputy prevention": aws:SourceArn must be the schedule
+                # GROUP ARN, never a specific schedule or a name prefix. The schedule sets GroupName: default explicitly,
+                # so it lives in the "default" group. Built from names (no GetAtt) so the role does not
+                # depend on the schedule.
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule-group/default"
       Policies:
         - PolicyName: scheduler-send
           PolicyDocument:
@@ -426,6 +428,7 @@ Resources:
     Type: AWS::Scheduler::Schedule
     Properties:
       Name: !Sub cicd-reconcile-${Stage}
+      GroupName: default
       Description: Sends RECONCILE_TICK to the deploy queue every 5 minutes.
       ScheduleExpression: rate(5 minutes)
       FlexibleTimeWindow:

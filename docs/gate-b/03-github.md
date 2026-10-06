@@ -134,7 +134,7 @@ Expected: a JSON object. Compare with the stack:
 
 | Claim | Must equal |
 |---|---|
-| `sub` | Stack parameter `GitHubOidcSub` (P-G10; expected default form `repo:<GITHUB_ORG>/<APP_REPO>:environment:<GITHUB_ENVIRONMENT>`) |
+| `sub` | Stack parameter `GitHubOidcSub` (P-G10; expected default form `repo:<GITHUB_ORG>/<APP_REPO>:environment:<GITHUB_ENVIRONMENT>`; repositories created, renamed or transferred after 2026-07-15 use the immutable form `repo:<GITHUB_ORG>@<OWNER_ID>/<APP_REPO>@<REPO_ID>:environment:<GITHUB_ENVIRONMENT>`) |
 | `job_workflow_ref` | `<GITHUB_ORG>/<PLATFORM_REPO>/.github/workflows/deploy-request.reusable.yml@<ref form>` where `<ref form>` is what the probe shows for the SHA-pinned call (P-G11). The stack builds the value with the 40-hex SHA. If the probe shows a `refs/...` form instead, **stop** and share it: the template must change, do not guess |
 | `repository_id`, `repository_owner_id`, `environment`, `aud` | The matching stack parameters; `aud` is `sts.amazonaws.com` |
 

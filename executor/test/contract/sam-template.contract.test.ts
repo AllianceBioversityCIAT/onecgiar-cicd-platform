@@ -92,6 +92,15 @@ describe("parameters", () => {
     }
   });
 
+  it("GitHubOidcSub accepts the classic and the immutable subject formats and rejects wildcards and spaces (P-G10)", () => {
+    const pattern = new RegExp(template.Parameters.GitHubOidcSub!.AllowedPattern!);
+    expect(pattern.test("repo:example-org/example-repo:environment:dev")).toBe(true);
+    expect(pattern.test("repo:example-org@123/example-repo@456:environment:dev")).toBe(true);
+    for (const bad of ["repo:org/*:environment:dev", "repo:org/r?:environment:dev", "repo:org/r :environment:dev", ""]) {
+      expect(pattern.test(bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it("SecretIdPrefix must end with a slash", () => {
     const pattern = new RegExp(template.Parameters.SecretIdPrefix!.AllowedPattern!);
     expect(pattern.test("cicd-poc/dev/")).toBe(true);
@@ -291,17 +300,16 @@ describe("IAM least privilege", () => {
     }
   });
 
-  it("SchedulerRole trust is the Scheduler service scoped to this account and schedule", () => {
+  it("SchedulerRole trust is the Scheduler service scoped to this account and the default schedule group", () => {
     const [trust] = roleTrustStatements(role("SchedulerRole"));
     expect(trust!.Principal).toEqual({ Service: "scheduler.amazonaws.com" });
-    expect(trust!.Condition).toEqual({
-      StringEquals: {
-        "aws:SourceAccount": { Ref: "AWS::AccountId" },
-        "aws:SourceArn": {
-          "Fn::Sub": "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/default/cicd-reconcile-${Stage}",
-        },
-      },
-    });
+    const equals = (trust!.Condition as Record<string, Record<string, Json>>).StringEquals!;
+    expect(equals["aws:SourceAccount"]).toEqual({ Ref: "AWS::AccountId" });
+    // AWS requires the schedule GROUP ARN here, never a schedule ARN or a name prefix.
+    const sourceArn = (equals["aws:SourceArn"] as { "Fn::Sub": string })["Fn::Sub"];
+    expect(sourceArn.endsWith(":schedule-group/default")).toBe(true);
+    expect(sourceArn).not.toContain(":schedule/");
+    expect(template.Resources.ReconcileSchedule!.Properties.GroupName).toBe("default");
   });
 });
 

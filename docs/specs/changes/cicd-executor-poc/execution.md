@@ -723,3 +723,14 @@ The owner accepted B0 subject to G-8, G-9 and G-10. Each correction went through
 | Runtime | Node 20.19.5 (Node 22 still DEFERRED to B1) |
 
 **NOT EXECUTED:** unchanged from the K-9 list (all SAM, AWS, GitHub, SSH/SFTP and target operations; Node 22; real `flock`; real SQS `SenderId`; `inspect:image`). Open spec gaps: G-1…G-6 only. B1 is not started.
+
+## Gate B / B1 — pre-validation template fixes (2026-10-06)
+
+B1-A review of the B0 template against primary sources found two defects that `sam validate --lint` would not catch:
+
+| Defect | Effect | Fix |
+|---|---|---|
+| `GitHubOidcSub` pattern rejected `@` | A repository created, renamed or transferred after 2026-07-15 uses the immutable subject `repo:OWNER@OWNER-ID/REPO@REPO-ID:environment:NAME` (GitHub OIDC reference, P-G10); the stack would refuse the real value | Pattern allows `@` (wildcards and spaces still rejected) |
+| `SchedulerRole` trust `aws:SourceArn` was the schedule ARN | AWS requires the schedule **group** ARN ("Confused deputy prevention in EventBridge Scheduler"); the Scheduler could not assume the role once enabled, so ticks would fail silently | `schedule-group/default`; `ReconcileSchedule.GroupName: default` explicit |
+
+Leader evidence: isolated worktree tsc 0, lint clean, guards 8/8, vitest 1111 passed / 74 skipped / 1 todo; implementer falsifiers (schedule ARN back; `@` removed) → red; Leader falsifier (`aws:SourceAccount` widened) → red. Review: **PASS** (each claim checked against public AWS/GitHub docs; advisories: SSO permission-set role recreation breaks a role-ARN trust — runbook note, owner decision; P-G11 `job_workflow_ref` form for an immutable-format platform repository stays deferred to B2). No AWS call was made.
