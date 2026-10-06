@@ -286,3 +286,23 @@
 | In-flight, frozen (uncommitted, untouched) | T-08 DynamoDB store (implementer report never delivered); T-14 deploy script attempt 3 (implementer reported done; Leader evidence re-run not performed — interrupted) |
 | Analysis | `architecture-change-01.md` (status PROPOSED) |
 | Resume condition | Owner approval of AC-01, coherent revision of proposal/requirements/design/tasks, scoped Judgment Day APPROVED |
+
+## RESUME: Gate A under Model B (2026-10-06)
+
+| Field | Value |
+|---|---|
+| Authority | Owner approval 2026-10-06 after the scoped Judgment Day (APPROVED); specs proposal/requirements v3.4, design/tasks v4.4 (commit 6d2fecd) |
+| Scope | Gate A only: N-01…N-22 (tasks v4.4). Gate B and C not started |
+| Mapping | Old T-tasks map to N-tasks per tasks §3; T-00, T-06 (partly → N-07), T-17, T-21 kept as done |
+| Frozen work | T-08 files land in N-08; T-14 attempt-3 evidence is re-verified by the Leader inside N-15 |
+| Environment | No local Docker; shim/static validations only; Node observed locally v20.19.5 (project targets 22) |
+
+### N-01 — Obsolescence cleanup and guard · done
+
+| Field | Value |
+|---|---|
+| Attempt 1 | Deleted `ingress/github-webhook/**`, adapters `git-cli-client`, `s3-artifact-store`, `zip-packager`, `handlers/{lambda,codebuild,notify}`, ports `artifact-store`, `git-client`, `application/step-dispatcher`; new guard 8 `obsolescence` (10 DELETED, 16 PENDING with owners N-03/N-04/N-05/N-07/N-08/N-12; import scan covers `from`, `import()`, `require`, `vi.mock`); 9 negative tests. Red run before deleting: 10 paths + 2 barrel imports. Falsifier: import of `git-cli-client` → red. Pre-review Leader correction: renumbered to guard 8 (guard 7 reserved for action-pinning). Evidence re-run (Leader): typecheck/lint clean, validate PASS, vitest 1025 passed / 17 skipped; Leader falsifier (import of `zip-packager` in the planner) → red, reverted — **VERIFIED** |
+| Residual references reported | Dockerfile git comment (N-18); `docs/runbook.md`, `docs/resources.md`, `infra/RESOURCES.md` CodeBuild/Lambda/ingress rows (N-20); stale "step-dispatcher" comments (rework tasks) |
+| Reviewer attempt 1 | **PASS** (`opus`, full): every §15 DELETE row deleted or PENDING with the right owner; imports (incl. dynamic, `require`, `vi.mock`) checked; nothing KEEP/REWORK deleted; residual references acceptable with their owners |
+| Forward pointers | **Every owner task** (N-03, N-04, N-05, N-07, N-08, N-12) flips its PENDING entries to DELETED when it removes the path or symbol. **N-22:** add a strict mode that fails while any PENDING entry remains (advisory 1). **N-19:** add `executor/scripts` to the scan roots and drop the stale `scripts`/`ingress` roots; cover `vi.doMock`/`vi.importMock`. Next task touching `ports/queue-publisher.ts` fixes its stale comment |
+| Status | **Done** |

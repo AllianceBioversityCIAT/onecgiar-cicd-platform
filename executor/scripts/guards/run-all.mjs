@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // @akili-spec changes/cicd-executor-poc requirements NFR-01, NFR-02, NFR-08, NFR-10; design §4.1, DD-23
 //
-// T-21: runs all six boundary/publication-policy guards and exits non-zero
+// T-21: runs all boundary/publication-policy guards and exits non-zero
 // if any reports a violation. This is what `npm run validate` wires up
 // (package.json). Each guard is independent and reports its own
 // violations; this script only orchestrates and prints a clear English
@@ -15,6 +15,7 @@ import { runPipelineSchemaExpressionGuard } from "./pipeline-schema-expressions.
 import { runPublicationPolicyGuard } from "./publication-policy.mjs";
 import { runLocalAnalysisFilesGuard } from "./local-analysis-files.mjs";
 import { runExtensibilityFixtureGuard } from "./extensibility-fixture.mjs";
+import { runObsolescenceGuard, listPendingObsolescence } from "./obsolescence.mjs";
 import { formatViolation } from "./lib/report.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -28,6 +29,7 @@ const GUARDS = [
   { name: "4. publication-policy (NFR-02, DD-23)", run: () => runPublicationPolicyGuard(repoRoot) },
   { name: "5. local-analysis-files (design §4.1)", run: () => runLocalAnalysisFilesGuard(repoRoot) },
   { name: "6. extensibility-fixture (NFR-08)", run: () => runExtensibilityFixtureGuard(repoRoot) },
+  { name: "8. obsolescence (NFR-01, design §15)", run: () => runObsolescenceGuard(repoRoot) },
 ];
 
 async function main() {
@@ -50,6 +52,14 @@ async function main() {
       for (const violation of violations) {
         console.error(`      ${formatViolation(violation)}`);
       }
+    }
+  }
+
+  const pending = listPendingObsolescence(repoRoot).filter((p) => p.present);
+  if (pending.length > 0) {
+    console.log(`\nobsolescence: ${pending.length} PENDING entr${pending.length === 1 ? "y" : "ies"} (not failing; N-22 requires none):`);
+    for (const p of pending) {
+      console.log(`      ${p.owner}  ${p.path}${p.symbol ? ` :: ${p.symbol}` : ""}`);
     }
   }
 

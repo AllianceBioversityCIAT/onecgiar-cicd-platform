@@ -9,14 +9,12 @@ export type {
   StateItemKey,
   WriteCondition,
 } from "./state-store.js";
-export type { ArtifactStore, ArtifactLocation } from "./artifact-store.js";
 export type { QueuePublisher, QueueMessage } from "./queue-publisher.js";
 export type {
   DefinitionSource,
   DefinitionContent,
 } from "./definition-source.js";
 export type { SecretProvider } from "./secret-provider.js";
-export type { GitClient } from "./git-client.js";
 export type {
   StepHandler,
   StepContext,

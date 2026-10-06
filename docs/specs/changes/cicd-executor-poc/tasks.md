@@ -139,7 +139,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-01 — Obsolescence cleanup and guard
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · M · **A** |
+| Status / Size / Gate | **[x] done** · M · **A** |
 | Goal | Delete the design §15 DELETE rows that have no surviving importer, and add a guard that fails if any DELETE path exists or is imported |
 | Depends on | Gate A entry (JD `APPROVED`, plan approved) |
 | Requirements / Design | NFR-01 · design §15 (all DELETE rows), AC-01 §17 |
