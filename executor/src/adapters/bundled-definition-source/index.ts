@@ -1,6 +1,6 @@
 // @akili-spec changes/cicd-executor-poc design §4.2, §7, DD-19
 // DefinitionSource implementation reading files bundled into the image
-// (PoC simplification, DD-19): `pipeline-definitions/`, `schemas/` and
+// (PoC simplification, DD-19): `deployment-definitions/`, `schemas/` and
 // `deploy-scripts/` at the platform repo root. Nothing outside this file
 // knows these are files on disk — the core only sees the DefinitionSource
 // port (ports/definition-source.ts).
@@ -42,13 +42,13 @@ export interface BundledDefinitionSourceOptions {
 
 /**
  * Walks up from `startDir` looking for the platform repo root: the first
- * ancestor that contains both `pipeline-definitions/` and `schemas/`. This
+ * ancestor that contains both `deployment-definitions/` and `schemas/`. This
  * makes no assumption about exact nesting depth, so it works unchanged
  * whether running from `executor/src` in dev or from wherever the built
  * image lays these directories out.
  *
  * This is a DEV FALLBACK only. The real image sets `CICD_DEFINITIONS_ROOT`
- * explicitly (Dockerfile runtime stage) to where `pipeline-definitions/`,
+ * explicitly (Dockerfile runtime stage) to where `deployment-definitions/`,
  * `schemas/` and `deploy-scripts/` are actually copied (DD-19) — see the
  * constructor below, which only falls back to this walk-up when that env
  * var is absent.
@@ -56,7 +56,7 @@ export interface BundledDefinitionSourceOptions {
 export function findRepoRoot(startDir: string): string {
   let dir = startDir;
   for (let i = 0; i < 16; i++) {
-    if (existsSync(path.join(dir, "pipeline-definitions")) && existsSync(path.join(dir, "schemas"))) {
+    if (existsSync(path.join(dir, "deployment-definitions")) && existsSync(path.join(dir, "schemas"))) {
       return dir;
     }
     const parent = path.dirname(dir);
@@ -64,7 +64,7 @@ export function findRepoRoot(startDir: string): string {
     dir = parent;
   }
   throw new DefinitionSourceError(
-    `could not locate the platform repo root (a directory containing both "pipeline-definitions/" and "schemas/") walking up from ${startDir}`,
+    `could not locate the platform repo root (a directory containing both "deployment-definitions/" and "schemas/") walking up from ${startDir}`,
   );
 }
 
@@ -106,15 +106,16 @@ async function listYamlFilesRecursively(dir: string): Promise<string[]> {
 }
 
 /**
- * Finds the file declaring `pipelineId` by scanning `pipeline-definitions/`
- * and reading each YAML file's own `pipelineId` field — NOT by assuming any
+ * Finds the file declaring `deploymentId` by scanning `deployment-definitions/`
+ * and reading each YAML file's own `deploymentId` field — NOT by assuming any
  * per-project directory convention (NFR-01: no per-project logic in the
- * Executor). A file that fails to parse, or has no matching `pipelineId`,
- * is silently skipped (e.g. `pipeline-definitions/targets/dev.yaml`, which
- * has no `pipelineId` field at all).
+ * Executor). A file that fails to parse, or has no matching `deploymentId`,
+ * is silently skipped (e.g. `deployment-definitions/targets/dev.yaml`, which
+ * has no `deploymentId` field at all).
  */
-async function findPipelineDefinitionPath(pipelineDefinitionsDir: string, pipelineId: string): Promise<string> {
-  const files = await listYamlFilesRecursively(pipelineDefinitionsDir);
+async function findDeploymentDefinitionPath(deploymentDefinitionsDir: string, deploymentId: string): Promise<string> {
+  const files = await listYamlFilesRecursively(deploymentDefinitionsDir);
+  const matches: string[] = [];
   for (const filePath of files) {
     let parsed: unknown;
     try {
@@ -125,13 +126,20 @@ async function findPipelineDefinitionPath(pipelineDefinitionsDir: string, pipeli
     if (
       parsed &&
       typeof parsed === "object" &&
-      (parsed as Record<string, unknown>).pipelineId === pipelineId
+      (parsed as Record<string, unknown>).deploymentId === deploymentId
     ) {
-      return filePath;
+      matches.push(filePath);
     }
   }
+  if (matches.length > 1) {
+    // Single-source invariant (DD-27): a deploymentId is bound to exactly one definition.
+    throw new DefinitionSourceError(
+      `more than one definition declares deploymentId "${deploymentId}" under ${deploymentDefinitionsDir} (DD-27: one definition per deploymentId)`,
+    );
+  }
+  if (matches.length === 1) return matches[0]!;
   throw new DefinitionSourceError(
-    `no pipeline definition found for pipelineId "${pipelineId}" under ${pipelineDefinitionsDir}`,
+    `no deployment definition found for deploymentId "${deploymentId}" under ${deploymentDefinitionsDir}`,
   );
 }
 
@@ -148,15 +156,15 @@ export class BundledDefinitionSource implements DefinitionSource {
     this.definitionRef = resolveDefinitionRef(env, requireInjectedRef);
   }
 
-  async getPipelineDefinition(pipelineId: string): Promise<DefinitionContent> {
-    const dir = path.join(this.repoRoot, "pipeline-definitions");
-    const filePath = await findPipelineDefinitionPath(dir, pipelineId);
+  async getDeploymentDefinition(deploymentId: string): Promise<DefinitionContent> {
+    const dir = path.join(this.repoRoot, "deployment-definitions");
+    const filePath = await findDeploymentDefinitionPath(dir, deploymentId);
     return { content: await readFile(filePath, "utf8"), definitionRef: this.definitionRef };
   }
 
   async getTargetRegistry(): Promise<DefinitionContent> {
     // NFR-09: the PoC is DEV-only — a single registry file, no per-environment selection logic.
-    const filePath = path.join(this.repoRoot, "pipeline-definitions", "targets", "dev.yaml");
+    const filePath = path.join(this.repoRoot, "deployment-definitions", "targets", "dev.yaml");
     if (!existsSync(filePath)) {
       throw new DefinitionSourceError(`target registry not found at ${filePath}`);
     }

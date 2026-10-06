@@ -7,7 +7,7 @@
 import type { DefinitionContent, DefinitionSource } from "../../src/ports/definition-source.js";
 
 export interface InMemoryDefinitionSourceFixtures {
-  readonly pipelines?: Readonly<Record<string, string>>;
+  readonly deployments?: Readonly<Record<string, string>>;
   readonly targetRegistry?: string;
   readonly schemas?: Readonly<Record<string, string>>;
   readonly deployScripts?: Readonly<Record<string, string>>;
@@ -24,8 +24,8 @@ export class InMemoryDefinitionSource implements DefinitionSource {
     return { content, definitionRef: this.fixtures.definitionRef ?? "in-memory-fake-ref" };
   }
 
-  async getPipelineDefinition(pipelineId: string): Promise<DefinitionContent> {
-    return this.wrap(this.fixtures.pipelines?.[pipelineId], `pipeline:${pipelineId}`);
+  async getDeploymentDefinition(deploymentId: string): Promise<DefinitionContent> {
+    return this.wrap(this.fixtures.deployments?.[deploymentId], `deployment:${deploymentId}`);
   }
 
   async getTargetRegistry(): Promise<DefinitionContent> {

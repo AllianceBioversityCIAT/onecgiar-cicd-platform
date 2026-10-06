@@ -29,19 +29,19 @@ describe("Dockerfile final-stage boundary (NFR-01)", () => {
   });
 });
 
-// T-03 (design DD-19 "pipeline-definitions/, schemas/ and deploy-scripts/ are
+// T-03 (design DD-19 "deployment-definitions/, schemas/ and deploy-scripts/ are
 // copied into the image at build time"): the runtime (final, shipped) stage must
 // actually COPY all three directories, from the repo root (they are
 // siblings of executor/, so the build context must be the repo root — see
 // scripts/inspect-image.mjs's resolveBuildContext and the Dockerfile's own
 // "BUILD CONTEXT" header comment). A Dockerfile whose build context were
 // `executor/` instead could never resolve these COPY sources at all.
-describe("Dockerfile runtime stage packages pipeline-definitions/, schemas/ and deploy-scripts/ (DD-19)", () => {
+describe("Dockerfile runtime stage packages deployment-definitions/, schemas/ and deploy-scripts/ (DD-19)", () => {
   const dockerfileText = readFileSync(dockerfilePath, "utf8");
   const runtimeStageText = finalStage(dockerfileText).text;
 
   it.each([
-    ["pipeline-definitions", "/pipeline-definitions"],
+    ["deployment-definitions", "/deployment-definitions"],
     ["schemas", "/schemas"],
     ["deploy-scripts", "/deploy-scripts"],
   ])("copies %s into the image", (source, dest) => {
@@ -51,7 +51,7 @@ describe("Dockerfile runtime stage packages pipeline-definitions/, schemas/ and 
 });
 
 // T-03 attempt 2 (advisory): the runtime stage must set CICD_DEFINITIONS_ROOT
-// explicitly to where pipeline-definitions/, schemas/ and deploy-scripts/
+// explicitly to where deployment-definitions/, schemas/ and deploy-scripts/
 // are copied, rather than relying solely on BundledDefinitionSource's
 // dev-only walk-up fallback.
 describe("Dockerfile runtime stage sets CICD_DEFINITIONS_ROOT (T-03 attempt 2 advisory)", () => {

@@ -151,22 +151,22 @@ describe("Guard 2 — project-identifiers (NFR-01)", () => {
   });
 });
 
-describe("Guard 3 — pipeline-schema-expressions (FR-01, NFR-01)", () => {
-  it("reports zero violations against the real schema and the real PRMS Reporting DEV definition", async () => {
+describe("Guard 3 — deployment schema expressions (FR-01, NFR-01)", () => {
+  it("reports zero violations against the real deployment schema and the real PRMS Reporting DEV definition", async () => {
     const violations = await runPipelineSchemaExpressionGuard(repoRoot);
     expect(violations).toEqual([]);
   });
 
-  it("goes red when the schema's interpolation whitelist is loosened", async () => {
+  it("goes red when the schema's command and reference patterns are loosened", async () => {
     const dir = makeTempDir("guard3-fixture-");
-    const realSchemaText = readFileSync(path.join(repoRoot, "schemas", "pipeline.schema.json"), "utf8");
+    const realSchemaText = readFileSync(path.join(repoRoot, "schemas", "deployment.schema.json"), "utf8");
     const schema = JSON.parse(realSchemaText) as {
-      $defs: { interpolableString: { pattern: string }; argString: { pattern: string } };
+      $defs: { commandName: { pattern: string }; logicalRef: { pattern: string } };
     };
-    // Loosen BOTH whitelists to "accept anything" — the exact regression this guard exists to catch.
-    schema.$defs.interpolableString.pattern = "^.*$";
-    schema.$defs.argString.pattern = "^.*$";
-    const loosenedSchemaPath = path.join(dir, "pipeline.schema.json");
+    // Loosen BOTH value patterns to "accept anything" — the exact regression this guard exists to catch.
+    schema.$defs.commandName.pattern = "^.*$";
+    schema.$defs.logicalRef.pattern = "^.*$";
+    const loosenedSchemaPath = path.join(dir, "deployment.schema.json");
     writeFileSync(loosenedSchemaPath, JSON.stringify(schema), "utf8");
 
     const violations = await runPipelineSchemaExpressionGuard(repoRoot, { schemaPath: loosenedSchemaPath });
@@ -273,13 +273,13 @@ describe("Guard 6 — extensibility-fixture (NFR-08)", () => {
       "test",
       "fixtures",
       "nfr08-second-definition",
-      "pipeline.yaml",
+      "deployment.yaml",
     );
     const brokenText = readFileSync(realFixturePath, "utf8").replace("environment: dev", "environment: prod");
-    const brokenPath = path.join(dir, "pipeline.yaml");
+    const brokenPath = path.join(dir, "deployment.yaml");
     writeFileSync(brokenPath, brokenText, "utf8");
 
-    const violations = await runExtensibilityFixtureGuard(repoRoot, { pipelineYamlPath: brokenPath });
+    const violations = await runExtensibilityFixtureGuard(repoRoot, { deploymentYamlPath: brokenPath });
     expect(violations.length).toBeGreaterThan(0);
   });
 });

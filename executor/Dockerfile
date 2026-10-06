@@ -34,8 +34,8 @@
 # PLATFORM REPO ROOT as context — `docker build -f executor/Dockerfile .`
 # from the repo root, exactly what scripts/inspect-image.mjs does by default
 # (resolveBuildContext) — NOT `executor/`. That is what lets this stage COPY
-# `pipeline-definitions/`, `schemas/` and `deploy-scripts/` (siblings of
-# `executor/`, outside it) straight into the image: DD-19 "pipeline-
+# `deployment-definitions/`, `schemas/` and `deploy-scripts/` (siblings of
+# `executor/`, outside it) straight into the image: DD-19 "deployment-
 # definitions/, schemas/ and deploy-scripts/ are copied into the image at
 # build time". All COPY sources below are therefore repo-root-relative
 # (`executor/...` for the Executor's own code). The repo-root `.dockerignore`
@@ -43,7 +43,7 @@
 # executor-root-context falsifier fixtures) keeps local-only files out of
 # this build. `BundledDefinitionSource` finds these directories at runtime by
 # walking up from its own module location until it finds both
-# `pipeline-definitions/` and `schemas/` — they are copied to the image's
+# `deployment-definitions/` and `schemas/` — they are copied to the image's
 # filesystem root below so that walk-up succeeds unchanged from dev.
 #
 # DEFINITION_REF (DD-19: "definitionRef = the platform repo's commit,
@@ -57,7 +57,7 @@
 # definitionRef.
 #
 # CICD_DEFINITIONS_ROOT: set below to the image filesystem root, where
-# pipeline-definitions/, schemas/ and deploy-scripts/ are copied (DD-19).
+# deployment-definitions/, schemas/ and deploy-scripts/ are copied (DD-19).
 # BundledDefinitionSource reads this explicitly rather than relying on its
 # walk-up search, which remains only as a dev-local fallback when the env
 # var is absent.
@@ -101,13 +101,13 @@ COPY --chown=executor:executor executor/package.json ./package.json
 COPY --from=deps --chown=executor:executor /build/node_modules ./node_modules
 COPY --from=builder --chown=executor:executor /build/dist ./dist
 
-# DD-19 (PoC simplification): pipeline-definitions/, schemas/ and
+# DD-19 (PoC simplification): deployment-definitions/, schemas/ and
 # deploy-scripts/ are packaged into the image at build time, at the image
 # filesystem ROOT — a sibling of /app. BundledDefinitionSource is told this
 # explicitly via CICD_DEFINITIONS_ROOT=/ below (its dev-only walk-up, which
-# looks for an ancestor directory containing both pipeline-definitions/ and
+# looks for an ancestor directory containing both deployment-definitions/ and
 # schemas/, is not relied upon here).
-COPY --chown=executor:executor pipeline-definitions /pipeline-definitions
+COPY --chown=executor:executor deployment-definitions /deployment-definitions
 COPY --chown=executor:executor schemas /schemas
 COPY --chown=executor:executor deploy-scripts /deploy-scripts
 

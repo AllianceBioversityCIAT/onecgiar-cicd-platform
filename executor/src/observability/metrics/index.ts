@@ -13,7 +13,11 @@
 // `RetryLater` counters, and the liveness `ExecutorHeartbeat` metric (design
 // §12 "Liveness": "emits a heartbeat metric every minute").
 import type { Clock } from "../../ports/clock.js";
-import type { EventRouterMetrics } from "../../application/event-router/index.js";
+
+/** Orphan-event counter seam, inlined here when the `application/event-router` shim was deleted (N-08). Types only. */
+export interface EventRouterMetrics {
+  recordOrphanEvent(): void;
+}
 
 const NAMESPACE = "CicdExecutor";
 

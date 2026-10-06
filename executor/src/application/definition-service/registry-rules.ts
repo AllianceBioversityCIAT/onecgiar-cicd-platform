@@ -254,3 +254,60 @@ export function extractResolvedRegistryShape(
   }
   return shape;
 }
+
+export interface DeploymentBinding {
+  readonly deploymentId: string;
+  readonly targetRef: string;
+}
+
+/**
+ * Single-source invariant (design §6.3 added rule, DD-27 implementation
+ * detail 1; owner approval 2026-10-06): a `lockKey` may be referenced by
+ * EXACTLY ONE `deploymentId`, and each `deploymentId` is bound to exactly one
+ * definition (hence one source and one `allowedSender`). Violations are
+ * rejected at validation, in CI and at startup. `runNumber` is only ever
+ * compared inside one source, so two deployments sharing a lock would make
+ * the order input meaningless.
+ *
+ * A lockKey is reached through the definition's `targetRef`; two definitions
+ * on DIFFERENT targets that declare the same lockKey string collide too.
+ * Only logical values are compared and only ids/lockKeys (logical, DD-23) are
+ * named in the issue text.
+ */
+export function checkOneDeploymentPerLockKey(
+  deployments: readonly DeploymentBinding[],
+  registryEntries: Readonly<Record<string, Record<string, unknown>>>,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+
+  const idCounts = new Map<string, number>();
+  for (const { deploymentId } of deployments) idCounts.set(deploymentId, (idCounts.get(deploymentId) ?? 0) + 1);
+  for (const [deploymentId, count] of idCounts) {
+    if (count > 1) {
+      issues.push({
+        rule: "deployment-duplicate",
+        field: `deployment(${deploymentId})/deploymentId`,
+        message: `deploymentId "${deploymentId}" is declared by ${count} definitions; a deploymentId is bound to exactly one definition and one source (DD-27)`,
+      });
+    }
+  }
+
+  const idsByLockKey = new Map<string, Set<string>>();
+  for (const { deploymentId, targetRef } of deployments) {
+    const lockKey = registryEntries[targetRef]?.lockKey;
+    if (typeof lockKey !== "string") continue; // missing target/lockKey is reported by other rules.
+    const ids = idsByLockKey.get(lockKey) ?? new Set<string>();
+    ids.add(deploymentId);
+    idsByLockKey.set(lockKey, ids);
+  }
+  for (const [lockKey, ids] of idsByLockKey) {
+    if (ids.size > 1) {
+      issues.push({
+        rule: "lock-key-multiple-deployments",
+        field: `targetRegistry/lockKey`,
+        message: `lockKey "${lockKey}" is referenced by more than one deploymentId (${[...ids].sort().join(", ")}); exactly one deploymentId per lockKey is allowed (design §6.3, DD-27)`,
+      });
+    }
+  }
+  return issues;
+}

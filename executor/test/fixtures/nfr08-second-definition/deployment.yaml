@@ -1,0 +1,42 @@
+# @akili-spec changes/cicd-executor-poc requirements NFR-08; design §6.2, DD-19, DD-23, DD-27
+# NFR-08 fixture: a SECOND, entirely fictitious Deployment Definition following
+# the exact same pattern as deployment-definitions/prms/reporting-dev.yaml, with
+# a fake project/deployment/target id ("atlas-sync", never cited anywhere in the
+# spec as a real project) and only logical `<...>` placeholders. It proves
+# "adding a deployment of the same pattern requires only a definition and a
+# registry entry, with no code changes to the Executor" (requirements.md
+# NFR-08). Lives under executor/test/fixtures — NOT under
+# deployment-definitions/, since it is test data, not a real deployment.
+
+schemaVersion: 1
+deploymentId: atlas-sync-dev
+environment: dev
+targetRef: atlas-sync-dev
+
+source:
+  repositoryRef: <ATLAS_SYNC_REPO_REF>
+  workflowRef: <ATLAS_SYNC_DEPLOY_WORKFLOW_REF>
+  environmentRef: <ATLAS_SYNC_GITHUB_ENVIRONMENT_REF>
+
+allowedSenderRef: <ATLAS_SYNC_CI_ROLE_REF>
+
+deployScript: deploy-container.sh
+
+artifacts:
+  - unit: worker
+    container: <WORKER_CONTAINER>
+    imageRepositoryRef: <ATLAS_SYNC_WORKER_IMAGE_REPOSITORY_REF>
+
+runtimeSecretRefs:
+  <WORKER_CONTAINER>: <ATLAS_SYNC_WORKER_RUNTIME_SECRET_REF>
+
+health:
+  <WORKER_CONTAINER>:
+    command: check-health
+
+timeoutMinutes: 20
+
+notifications:
+  slack:
+    channelRef: <ATLAS_SYNC_SLACK_CHANNEL_REF>
+    tokenRef: <SLACK_TOKEN_REF>

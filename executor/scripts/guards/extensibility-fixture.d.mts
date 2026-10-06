@@ -9,7 +9,7 @@ export interface Violation {
 }
 
 export interface ExtensibilityFixtureGuardOverrides {
-  readonly pipelineYamlPath?: string;
+  readonly deploymentYamlPath?: string;
   readonly targetRegistryYamlPath?: string;
 }
 

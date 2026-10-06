@@ -1,7 +1,7 @@
 # @akili-spec changes/cicd-executor-poc design §4.1, DD-19, DD-23
 # Repo-root .dockerignore: used when the Executor image is built with the
 # REPO ROOT as build context (`docker build -f executor/Dockerfile .`), so
-# that pipeline-definitions/, schemas/ and deploy-scripts/ are addressable
+# that deployment-definitions/, schemas/ and deploy-scripts/ are addressable
 # by the build (design DD-19: "copied into the image at build time"), while
 # local-only analysis files and anything not needed inside the image never
 # reach the build context in the first place.

@@ -1,12 +1,12 @@
-// @akili-spec changes/cicd-executor-poc design DD-23, §6.4, §7.7 (amended 2026-10-05); requirements NFR-01, NFR-02; owner ruling (execution.md 2026-10-05)
+// @akili-spec changes/cicd-executor-poc design DD-23, DD-25, DD-27, §6.2, §6.3, §7.7 (amended 2026-10-05); requirements NFR-01, NFR-02; owner ruling (execution.md 2026-10-05)
 // Logical-reference discovery (via an explicit ALLOWLIST of fields — never a
 // generic "every <UPPER_SNAKE> string" walk) and resolution. The registry and
-// pipeline definitions carry ONLY logical references (DD-23's `<XXX>`
+// deployment definitions carry ONLY logical references (DD-23's `<XXX>`
 // placeholders) — never inline secrets. At startup, every reference the
 // EXECUTOR ITSELF needs must resolve via SecretProvider; an unresolved
 // reference aborts the Executor.
 //
-// NFR-01 boundary: `containers[].envSecretRef` is deliberately EXCLUDED from
+// NFR-01 boundary: `containers[].envSecretRef` and the deployment `runtimeSecretRefs` values are deliberately EXCLUDED from
 // every allowlist below. Design §6.4 is explicit about it: `--runtime-secret
 // <container>=<secretRef>` travels to deploy-container.sh as an opaque
 // reference, and "the target resolves it with its own permissions (OD-Q5)" —
@@ -19,7 +19,7 @@
 //
 // Owner ruling (execution.md 2026-10-05, "existence without reading"): CREDENTIAL
 // references are a THIRD category, disjoint from both of the above —
-// `repository.credentialRef`, `notifications.slack.tokenRef` and the Target
+// `notifications.slack.tokenRef` and the Target
 // Registry's `credentialRef` (SSH key/password) are never passed to
 // `getSecret` here; definition-service is PROHIBITED from reading secret
 // values (design §7 definition-service row). They are only EXISTENCE-checked
@@ -89,74 +89,93 @@ export function collectRegistryExistenceOnlyRefs(
 }
 
 /**
- * Pipeline Definition reference fields the Executor itself resolves BY VALUE
- * at startup: `repository.url/branch` (git access), the Slack `channel`
- * (notifications), each `source.packages[].path`, and each `lambda` step's
- * `with.function`. These are all non-sensitive identifiers the Executor's
- * own handlers consume directly — never an application secret, and never a
- * credential (see `collectPipelineExistenceOnlyRefs` for those).
+ * Deployment Definition reference fields the Executor itself resolves BY
+ * VALUE at startup. All are non-sensitive IDENTIFIER references (DD-23, DD-25
+ * approved 2026-10-06): the bound source (`source.repositoryRef`,
+ * `source.workflowRef`, `source.environmentRef`, DD-27), `allowedSenderRef`
+ * (resolves to the CI role ID, DD-25), each artifact's `container` and
+ * `imageRepositoryRef`, each `health[*].url`, and the Slack `channelRef`.
+ * `migration.container` and the `health` / `runtimeSecretRefs` KEYS may be
+ * logical container names too, and are resolved as identifiers.
+ * `runtimeSecretRefs` VALUES are NEVER collected: they travel to the target as
+ * opaque references and the target resolves them with its own permissions
+ * (NFR-01, design §6.2, OD-Q5).
  */
-export function collectPipelineAllowlistedRefs(
-  pipeline: Record<string, unknown>,
+export function collectDeploymentAllowlistedRefs(
+  deployment: Record<string, unknown>,
   acc: Set<string> = new Set(),
 ): Set<string> {
-  const repository = pipeline.repository as Record<string, unknown> | undefined;
-  if (repository) {
-    addIfLogicalRef(repository.url, acc);
-    addIfLogicalRef(repository.branch, acc);
+  const source = deployment.source as Record<string, unknown> | undefined;
+  if (source) {
+    addIfLogicalRef(source.repositoryRef, acc);
+    addIfLogicalRef(source.workflowRef, acc);
+    addIfLogicalRef(source.environmentRef, acc);
   }
+  addIfLogicalRef(deployment.allowedSenderRef, acc);
 
-  const notifications = pipeline.notifications as Record<string, unknown> | undefined;
-  const slack = notifications?.slack as Record<string, unknown> | undefined;
-  if (slack) {
-    addIfLogicalRef(slack.channel, acc);
-  }
-
-  const source = pipeline.source as Record<string, unknown> | undefined;
-  const packages = Array.isArray(source?.packages) ? (source!.packages as unknown[]) : [];
-  for (const pkg of packages) {
-    if (pkg && typeof pkg === "object") addIfLogicalRef((pkg as Record<string, unknown>).path, acc);
-  }
-
-  const steps = [
-    ...(Array.isArray(pipeline.steps) ? (pipeline.steps as unknown[]) : []),
-    ...(Array.isArray(pipeline.finally) ? (pipeline.finally as unknown[]) : []),
-  ];
-  for (const raw of steps) {
+  const artifacts = Array.isArray(deployment.artifacts) ? (deployment.artifacts as unknown[]) : [];
+  for (const raw of artifacts) {
     if (!raw || typeof raw !== "object") continue;
-    const step = raw as Record<string, unknown>;
-    if (step.type === "lambda") {
-      const withBlock = step.with as Record<string, unknown> | undefined;
-      addIfLogicalRef(withBlock?.function, acc);
+    const artifact = raw as Record<string, unknown>;
+    addIfLogicalRef(artifact.container, acc);
+    addIfLogicalRef(artifact.imageRepositoryRef, acc);
+  }
+
+  const migration = deployment.migration as Record<string, unknown> | undefined;
+  if (migration) addIfLogicalRef(migration.container, acc);
+
+  const health = deployment.health as Record<string, unknown> | undefined;
+  if (health && typeof health === "object") {
+    for (const [container, check] of Object.entries(health)) {
+      addIfLogicalRef(container, acc);
+      if (check && typeof check === "object") addIfLogicalRef((check as Record<string, unknown>).url, acc);
     }
   }
+
+  const runtimeSecretRefs = deployment.runtimeSecretRefs as Record<string, unknown> | undefined;
+  if (runtimeSecretRefs && typeof runtimeSecretRefs === "object") {
+    for (const container of Object.keys(runtimeSecretRefs)) addIfLogicalRef(container, acc); // keys only, never the values.
+  }
+
+  const notifications = deployment.notifications as Record<string, unknown> | undefined;
+  const slack = notifications?.slack as Record<string, unknown> | undefined;
+  if (slack) addIfLogicalRef(slack.channelRef, acc);
 
   return acc;
 }
 
 /**
- * Pipeline Definition CREDENTIAL references: `repository.credentialRef` (git
- * access token) and `notifications.slack.tokenRef` (Slack bot token). Owner
- * ruling (execution.md 2026-10-05): definition-service only checks that
- * these EXIST, never reads their value — `repository.url`/`branch` and
- * `slack.channel` are resolved by value instead, see
- * `collectPipelineAllowlistedRefs`.
+ * Deployment Definition CREDENTIAL references: `notifications.slack.tokenRef`
+ * (Slack bot token). Existence-only (design DD-23 amendment, owner ruling
+ * execution.md 2026-10-05): definition-service never reads the value. There is
+ * no git credential in Model B (NFR-01).
  */
-export function collectPipelineExistenceOnlyRefs(
-  pipeline: Record<string, unknown>,
+export function collectDeploymentExistenceOnlyRefs(
+  deployment: Record<string, unknown>,
   acc: Set<string> = new Set(),
 ): Set<string> {
-  const repository = pipeline.repository as Record<string, unknown> | undefined;
-  if (repository) {
-    addIfLogicalRef(repository.credentialRef, acc);
-  }
-
-  const notifications = pipeline.notifications as Record<string, unknown> | undefined;
+  const notifications = deployment.notifications as Record<string, unknown> | undefined;
   const slack = notifications?.slack as Record<string, unknown> | undefined;
-  if (slack) {
-    addIfLogicalRef(slack.tokenRef, acc);
-  }
+  if (slack) addIfLogicalRef(slack.tokenRef, acc);
+  return acc;
+}
 
+/**
+ * Platform-config principal references (design DD-25): the Executor's own
+ * role, the scheduler and the operator. Non-sensitive identifier references
+ * that resolve to role IDs. Where the platform config is stored is NOT
+ * specified by the design, so the caller supplies these refs.
+ */
+export interface PlatformPrincipalRefs {
+  readonly executorPrincipalRef: string;
+  readonly schedulerPrincipalRef: string;
+  readonly operatorPrincipalRef: string;
+}
+
+export function collectPrincipalRefs(refs: PlatformPrincipalRefs, acc: Set<string> = new Set()): Set<string> {
+  addIfLogicalRef(refs.executorPrincipalRef, acc);
+  addIfLogicalRef(refs.schedulerPrincipalRef, acc);
+  addIfLogicalRef(refs.operatorPrincipalRef, acc);
   return acc;
 }
 

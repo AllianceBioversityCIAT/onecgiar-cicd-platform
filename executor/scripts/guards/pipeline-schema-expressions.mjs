@@ -1,15 +1,18 @@
-// @akili-spec changes/cicd-executor-poc requirements FR-01, NFR-01; design DD-19
+// @akili-spec changes/cicd-executor-poc requirements FR-01, NFR-01; design §6.2, DD-19
 //
-// Guard 3: schemas/pipeline.schema.json rejects expressions, GitHub-Actions-
-// style `${{ ... }}`, unwhitelisted `${...}` interpolation, shell
-// command-substitution, and any unknown field (the only way a "condition"
-// construct like `if:`/`when:` could be smuggled in, since the schema's
-// step objects are `additionalProperties: false`).
+// Guard 3: schemas/deployment.schema.json rejects expressions, GitHub-Actions-
+// style `${{ ... }}`, `${...}` interpolation, shell command-substitution, and
+// any unknown field (the only way a "condition" construct such as `if:` /
+// `when:` or a step graph could be smuggled in, since every object of the
+// flat Deployment Definition is `additionalProperties: false`).
+//
+// (The file keeps its historical name; since AC-01 it guards the Deployment
+// Definition schema, the successor of the pipeline schema.)
 //
 // This is an OPERATIONAL guard for `npm run validate` (CI / pre-image-build
 // gate) — it must work standalone, without a prior `npm run build` and
 // without vitest. The AUTHORITATIVE, exhaustive proof of this property is
-// executor/test/contract/pipeline-schema.contract.test.ts (run under `npm
+// executor/test/contract/deployment-schema.contract.test.ts (run under `npm
 // test`), which this guard deliberately does not re-litigate rule-by-rule;
 // it reuses the SAME schema file and the SAME Ajv factory
 // (createAjv/schema-validation.ts, loaded unmodified via loadTsModule) and
@@ -22,60 +25,75 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { loadTsModule } from "./lib/load-ts-module.mjs";
 
-function findStep(definition, type) {
-  const step = (definition.steps ?? []).find((s) => s.type === type);
-  if (!step) throw new Error(`guard fixture error: no "${type}" step in the base definition`);
-  return step;
-}
-
 const NEGATIVE_CORPUS = [
   {
-    name: "GitHub-Actions-style expression construct (${{ ... }})",
+    name: "GitHub-Actions-style expression construct (${{ ... }}) in a migration command",
     mutate: (def) => {
-      findStep(def, "ssh").with.args = ["${{ 1 + 1 }}"];
+      def.migration.runCommand = "${{ 1 + 1 }}";
     },
   },
   {
-    name: "interpolation outside the whitelist (${env.*})",
+    name: "interpolation (${env.*}) in a migration command",
     mutate: (def) => {
-      findStep(def, "ssh").with.args = ["--secret=${env.AWS_SECRET_ACCESS_KEY}"];
+      def.migration.checkCommand = "check ${env.AWS_SECRET_ACCESS_KEY}";
     },
   },
   {
-    name: "shell command-substitution ($(...))",
+    name: "shell command-substitution ($(...)) in a health command",
     mutate: (def) => {
-      findStep(def, "ssh").with.args = ["--x=$(rm -rf /)"];
+      const container = Object.keys(def.health)[0];
+      def.health[container] = { command: "$(rm -rf /)" };
     },
   },
   {
-    name: "backtick command-substitution",
+    name: "backtick command-substitution in a migration command",
     mutate: (def) => {
-      findStep(def, "ssh").with.args = ["--x=`id`"];
+      def.migration.runCommand = "`id`";
     },
   },
   {
-    name: "shell metacharacter (;) in an ssh arg",
+    name: "shell metacharacter (;) in a migration command",
     mutate: (def) => {
-      findStep(def, "ssh").with.args = ["--unit=x; rm -rf /"];
+      def.migration.runCommand = "migrate; rm -rf /";
     },
   },
   {
-    name: 'a condition field ("if") on a step — closed-vocabulary rejection',
+    name: "an interpolated raw value where a logical reference is required",
     mutate: (def) => {
-      findStep(def, "ssh").if = "${{ success() }}";
+      def.allowedSenderRef = "${env.ROLE}";
+    },
+  },
+  {
+    name: 'a condition field ("when") — closed-vocabulary rejection',
+    mutate: (def) => {
+      def.when = "${{ success() }}";
+    },
+  },
+  {
+    name: 'a condition field ("if") — closed-vocabulary rejection',
+    mutate: (def) => {
+      def.if = "always";
+    },
+  },
+  {
+    name: "a step graph (steps / needs) — no step graph in Model B",
+    mutate: (def) => {
+      def.steps = [{ id: "a", needs: [] }];
     },
   },
 ];
 
 /**
- * @param {string} schemaPath absolute path to a pipeline schema JSON file
- * @param {string} yamlPath absolute path to a valid pipeline definition YAML (must contain an "ssh" step)
- * @param {string} schemaValidationTsPath absolute path to definition-service's schema-validation.ts (reused, unmodified, for its Ajv factory)
+ * @param {string} repoRoot
+ * @param {object} [overrides]
+ * @param {string} [overrides.schemaPath] absolute path to a deployment schema JSON file
+ * @param {string} [overrides.yamlPath] absolute path to a valid deployment definition YAML (must contain `migration` and `health`)
+ * @param {string} [overrides.schemaValidationTsPath] absolute path to definition-service's schema-validation.ts (reused, unmodified, for its Ajv factory)
  */
 export async function runPipelineSchemaExpressionGuard(repoRoot, overrides = {}) {
-  const schemaPath = overrides.schemaPath ?? path.join(repoRoot, "schemas", "pipeline.schema.json");
+  const schemaPath = overrides.schemaPath ?? path.join(repoRoot, "schemas", "deployment.schema.json");
   const yamlPath =
-    overrides.yamlPath ?? path.join(repoRoot, "pipeline-definitions", "prms", "reporting-dev.yaml");
+    overrides.yamlPath ?? path.join(repoRoot, "deployment-definitions", "prms", "reporting-dev.yaml");
   const schemaValidationTsPath =
     overrides.schemaValidationTsPath ??
     path.join(repoRoot, "executor", "src", "application", "definition-service", "schema-validation.ts");
@@ -94,7 +112,7 @@ export async function runPipelineSchemaExpressionGuard(repoRoot, overrides = {})
     violations.push({
       guard: "pipeline-schema-expressions",
       file: relSchemaPath,
-      message: `the real, valid pipeline definition at ${path
+      message: `the real, valid deployment definition at ${path
         .relative(repoRoot, yamlPath)
         .split(path.sep)
         .join("/")} was unexpectedly rejected: ${JSON.stringify(validate.errors)}`,

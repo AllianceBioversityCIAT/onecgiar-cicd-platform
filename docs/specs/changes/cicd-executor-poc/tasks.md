@@ -175,7 +175,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-03 — DefinitionService rework
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · M · **A** |
+| Status / Size / Gate | **[x] done** · M · **A** |
 | Goal | Validate flat Deployment Definitions and the registry; resolve the new references; delete the pipeline schema and step-graph rules |
 | Depends on | N-02 |
 | Requirements / Design | FR-01, FR-02, NFR-08 · design §6.2, §6.3, §7 (`definition-service`), DD-19, DD-23 |
@@ -265,7 +265,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-08 — DynamoDB store reduction (lands T-08)
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · M · **A** |
+| Status / Size / Gate | **[x] done** · M · **A** |
 | Goal | Land the uncommitted T-08 store, reduced per design §15.2 |
 | Depends on | N-04 |
 | Requirements / Design | FR-05, FR-07, FR-11 · design §5.1, DD-03, DD-09 |

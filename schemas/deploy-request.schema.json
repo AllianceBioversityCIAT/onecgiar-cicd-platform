@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecgiar-cicd-platform/schemas/deploy-request.schema.json",
+  "title": "Deploy request (DEPLOY_REQUESTED)",
+  "$comment": "@akili-spec changes/cicd-executor-poc design 6.1; requirements FR-03. Fields read verbatim from design 6.1. Digest-only artifacts; no infrastructure fields (additionalProperties false at every level). Cross-field rules JSON Schema cannot express are NOT encoded here: requestId == `${ci.runId}-${ci.runAttempt}` (REQUEST_ID_MISMATCH) and unit-set equality with the definition belong to application-level validation. The 8 KB body limit is enforced at ingress, not by this schema. The ci.* fields are audit-only and never authorize anything (DD-25).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["specVersion", "eventType", "requestId", "deploymentId", "commitSha", "artifacts", "ci"],
+  "properties": {
+    "specVersion": { "const": 1 },
+    "eventType": { "const": "DEPLOY_REQUESTED" },
+    "requestId": { "type": "string", "pattern": "^[0-9]{1,20}-[0-9]{1,4}$" },
+    "deploymentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
+    "commitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "artifacts": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 8,
+      "propertyNames": { "pattern": "^[a-z0-9][a-z0-9-]{0,31}$" },
+      "additionalProperties": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+    },
+    "ci": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "workflowRef", "runId", "runAttempt", "runNumber"],
+      "properties": {
+        "repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+        "workflowRef": { "type": "string", "maxLength": 256 },
+        "runId": { "type": "string", "pattern": "^[0-9]{1,20}$" },
+        "runAttempt": { "type": "integer", "minimum": 1 },
+        "runNumber": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

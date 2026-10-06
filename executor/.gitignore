@@ -1,3 +1,6 @@
 node_modules/
 dist/
 coverage/
+# DynamoDB Local jar + working files for T-08's integration tests (owner
+# constraint: no Docker) — downloaded on demand, never committed.
+.local/

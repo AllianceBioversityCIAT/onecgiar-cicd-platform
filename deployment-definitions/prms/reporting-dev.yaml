@@ -1,0 +1,49 @@
+# @akili-spec changes/cicd-executor-poc requirements FR-01; design 6.2, DD-19, DD-23, DD-27
+# Deployment Definition: PRMS Reporting DEV (flat: no steps, no expressions).
+# Only logical identifiers and references are versioned here (DD-23). Every
+# *Ref value is a logical <PLACEHOLDER> resolved outside Git at startup.
+# deploymentId, targetRef and artifact units are semantic identifiers.
+
+schemaVersion: 1
+deploymentId: prms-reporting-dev
+environment: dev
+targetRef: prms-reporting-dev
+
+source:
+  repositoryRef: <PRMS_REPORTING_REPO_REF>
+  workflowRef: <PRMS_REPORTING_DEPLOY_WORKFLOW_REF>
+  environmentRef: <PRMS_REPORTING_GITHUB_ENVIRONMENT_REF>
+
+allowedSenderRef: <PRMS_REPORTING_CI_ROLE_REF>
+
+deployScript: deploy-container.sh
+
+artifacts:
+  - unit: server
+    container: <SERVER_CONTAINER>
+    imageRepositoryRef: <PRMS_REPORTING_SERVER_IMAGE_REPOSITORY_REF>
+  - unit: client
+    container: <CLIENT_CONTAINER>
+    imageRepositoryRef: <PRMS_REPORTING_CLIENT_IMAGE_REPOSITORY_REF>
+
+runtimeSecretRefs:
+  <SERVER_CONTAINER>: <PRMS_REPORTING_SERVER_RUNTIME_SECRET_REF>
+
+migration:
+  container: <SERVER_CONTAINER>
+  mode: ephemeral
+  checkCommand: migration:check:ci
+  runCommand: migration:run
+
+health:
+  <SERVER_CONTAINER>:
+    url: <PRMS_REPORTING_SERVER_HEALTH_URL_REF>
+  <CLIENT_CONTAINER>:
+    url: <PRMS_REPORTING_CLIENT_HEALTH_URL_REF>
+
+timeoutMinutes: 20
+
+notifications:
+  slack:
+    channelRef: <PRMS_REPORTING_SLACK_CHANNEL_REF>
+    tokenRef: <SLACK_TOKEN_REF>

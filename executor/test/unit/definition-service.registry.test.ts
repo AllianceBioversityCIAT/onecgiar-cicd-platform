@@ -15,9 +15,9 @@ import { readFileSync } from "node:fs";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { describe, expect, it, beforeAll } from "vitest";
 import {
-  pipelineSchemaPath,
+  deploymentSchemaPath,
   targetsSchemaPath,
-  prmsReportingDevYamlPath,
+  prmsReportingDevDeploymentYamlPath,
   targetsDevYamlPath,
 } from "../contract/support/schema-paths.js";
 import { InMemoryDefinitionSource } from "../support/in-memory-definition-source.js";
@@ -28,25 +28,25 @@ function clone<T>(value: T): T {
 }
 
 describe("definition-service.validateForCi — Target Registry semantic rules (FR-02)", () => {
-  let pipelineSchemaContent: string;
+  let deploymentSchemaContent: string;
   let targetsSchemaContent: string;
-  let pipelineDefinitionContent: string;
+  let deploymentDefinitionContent: string;
   let baseEntry: Record<string, unknown>;
 
   beforeAll(() => {
-    pipelineSchemaContent = readFileSync(pipelineSchemaPath, "utf8");
+    deploymentSchemaContent = readFileSync(deploymentSchemaPath, "utf8");
     targetsSchemaContent = readFileSync(targetsSchemaPath, "utf8");
-    pipelineDefinitionContent = readFileSync(prmsReportingDevYamlPath, "utf8");
+    deploymentDefinitionContent = readFileSync(prmsReportingDevDeploymentYamlPath, "utf8");
     const registry = parseYaml(readFileSync(targetsDevYamlPath, "utf8")) as Record<string, Record<string, unknown>>;
     baseEntry = registry["prms-reporting-dev"]!;
   });
 
   function sourceWithRegistry(registry: Record<string, unknown>): InMemoryDefinitionSource {
     return new InMemoryDefinitionSource({
-      pipelines: { "prms-reporting-dev": pipelineDefinitionContent },
+      deployments: { "prms-reporting-dev": deploymentDefinitionContent },
       targetRegistry: stringifyYaml(registry),
       schemas: {
-        "pipeline.schema.json": pipelineSchemaContent,
+        "deployment.schema.json": deploymentSchemaContent,
         "targets.schema.json": targetsSchemaContent,
       },
       definitionRef: "test-fixture-ref",

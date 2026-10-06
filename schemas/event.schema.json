@@ -1,102 +1,82 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://onecgiar-cicd-platform/schemas/event.schema.json",
-  "title": "Event envelope",
-  "$comment": "@akili-spec changes/cicd-executor-poc design 6.1 (event envelope). Field table read verbatim: specVersion/eventId/eventType/timestamp/source always required; executionId/pipelineId/environment required except for PIPELINE_REQUESTED, RECONCILE_TICK and DEPLOY_WINDOW_*; stepId/status/attempt required on step-result events; requestId required on PIPELINE_REQUESTED (dedupe key). DEPLOY_WINDOW_OPEN_REQUESTED/CLOSE_REQUESTED carry lockKey instead of pipelineId/environment (6.1); opening a window additionally requires openedBy and a non-empty externalJobsDisabled[] that must cover every externalDeployers entry (design 7.7, DD-21) — that coverage check itself is semantic (resolved list, not in the envelope), only presence/non-emptiness is schema-checkable here. RECONCILE_TICK carries no execution/pipeline/lockKey context (generic scheduler tick, design 7 DD-13).",
+  "title": "Internal event envelope",
+  "$comment": "@akili-spec changes/cicd-executor-poc design 6.4; requirements FR-04. Reduced to the internal event types of design 6.4 (DEPLOY_REQUESTED has its own schema: deploy-request.schema.json). Envelope: specVersion, eventId (UUID), eventType, timestamp, source in {executor, scheduler, operator}. N-05: each eventType accepts ONLY its own fields. Exactly one oneOf branch matches (its eventType const), and unevaluatedProperties false rejects any property not evaluated by the envelope or by the matching branch. The sender class per type (DD-25: LOCK_RETRY_REQUESTED from executor, RECONCILE_TICK from scheduler, operator events from operator) is pinned through the branch's `source` const. Authenticating the real sender is FR-21 and is not a schema concern. Coverage of the target's externalDeployers by externalJobsDisabled and the bounds of closesAt are semantic checks outside the schema.",
   "type": "object",
+  "unevaluatedProperties": false,
   "required": ["specVersion", "eventId", "eventType", "timestamp", "source"],
-  "additionalProperties": false,
   "properties": {
     "specVersion": { "const": 1 },
     "eventId": { "type": "string", "format": "uuid" },
     "eventType": {
       "enum": [
-        "PIPELINE_REQUESTED",
-        "QUALITY_COMPLETED",
-        "QUALITY_FAILED",
-        "QUALITY_TIMED_OUT",
-        "BUILD_COMPLETED",
-        "BUILD_FAILED",
-        "BUILD_TIMED_OUT",
-        "DEPLOYMENT_COMPLETED",
-        "DEPLOYMENT_FAILED",
-        "PIPELINE_COMPLETED",
-        "PIPELINE_FAILED",
-        "STEP_RETRY_REQUESTED",
         "LOCK_RETRY_REQUESTED",
         "RECONCILE_TICK",
         "DEPLOY_WINDOW_OPEN_REQUESTED",
-        "DEPLOY_WINDOW_CLOSE_REQUESTED"
+        "DEPLOY_WINDOW_CLOSE_REQUESTED",
+        "TARGET_RESOLUTION_RECORDED"
       ]
     },
-    "executionId": { "type": "string", "minLength": 1 },
-    "pipelineId": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
-    "environment": { "enum": ["dev"] },
-    "lockKey": { "type": "string", "minLength": 1 },
-    "stepId": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
-    "status": { "type": "string", "minLength": 1 },
-    "attempt": { "type": "integer", "minimum": 1 },
     "timestamp": { "type": "string", "format": "date-time" },
-    "source": { "enum": ["executor", "lambda", "codebuild", "ingress", "scheduler", "operator"] },
-    "payload": { "type": "object" },
-    "requestId": { "type": "string", "minLength": 1 },
-    "openedBy": { "type": "string", "minLength": 1 },
-    "externalJobsDisabled": {
-      "type": "array",
-      "minItems": 1,
-      "items": { "type": "string", "minLength": 1 }
-    }
+    "source": { "enum": ["executor", "scheduler", "operator"] }
   },
-  "allOf": [
+  "oneOf": [
     {
-      "if": {
-        "properties": {
-          "eventType": {
-            "not": {
-              "enum": ["PIPELINE_REQUESTED", "RECONCILE_TICK", "DEPLOY_WINDOW_OPEN_REQUESTED", "DEPLOY_WINDOW_CLOSE_REQUESTED"]
-            }
-          }
+      "properties": {
+        "eventType": { "const": "LOCK_RETRY_REQUESTED" },
+        "source": { "const": "executor" },
+        "executionId": { "type": "string", "minLength": 1 },
+        "attempt": { "type": "integer", "minimum": 1 }
+      },
+      "required": ["executionId", "attempt"]
+    },
+    {
+      "properties": {
+        "eventType": { "const": "RECONCILE_TICK" },
+        "source": { "const": "scheduler" }
+      }
+    },
+    {
+      "properties": {
+        "eventType": { "const": "DEPLOY_WINDOW_OPEN_REQUESTED" },
+        "source": { "const": "operator" },
+        "lockKey": { "type": "string", "minLength": 1 },
+        "openedBy": { "type": "string", "minLength": 1 },
+        "externalJobsDisabled": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
         },
-        "required": ["eventType"]
+        "closesAt": { "type": "string", "format": "date-time" },
+        "note": { "type": "string", "maxLength": 1024 }
       },
-      "then": { "required": ["executionId", "pipelineId", "environment"] }
+      "required": ["lockKey", "openedBy", "externalJobsDisabled", "closesAt"]
     },
     {
-      "if": {
-        "properties": {
-          "eventType": {
-            "enum": [
-              "QUALITY_COMPLETED", "QUALITY_FAILED", "QUALITY_TIMED_OUT",
-              "BUILD_COMPLETED", "BUILD_FAILED", "BUILD_TIMED_OUT",
-              "DEPLOYMENT_COMPLETED", "DEPLOYMENT_FAILED",
-              "STEP_RETRY_REQUESTED", "LOCK_RETRY_REQUESTED"
-            ]
-          }
+      "properties": {
+        "eventType": { "const": "DEPLOY_WINDOW_CLOSE_REQUESTED" },
+        "source": { "const": "operator" },
+        "lockKey": { "type": "string", "minLength": 1 },
+        "closedBy": { "type": "string", "minLength": 1 },
+        "note": { "type": "string", "maxLength": 1024 }
+      },
+      "required": ["lockKey", "closedBy"]
+    },
+    {
+      "properties": {
+        "eventType": { "const": "TARGET_RESOLUTION_RECORDED" },
+        "source": { "const": "operator" },
+        "lockKey": { "type": "string", "minLength": 1 },
+        "executionId": { "type": "string", "minLength": 1 },
+        "resolvedBy": { "type": "string", "minLength": 1 },
+        "observedDigests": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
         },
-        "required": ["eventType"]
+        "note": { "type": "string", "maxLength": 1024 }
       },
-      "then": { "required": ["stepId", "status", "attempt"] }
-    },
-    {
-      "if": {
-        "properties": { "eventType": { "const": "PIPELINE_REQUESTED" } },
-        "required": ["eventType"]
-      },
-      "then": { "required": ["pipelineId", "environment", "requestId"] }
-    },
-    {
-      "if": {
-        "properties": { "eventType": { "const": "DEPLOY_WINDOW_OPEN_REQUESTED" } },
-        "required": ["eventType"]
-      },
-      "then": { "required": ["lockKey", "openedBy", "externalJobsDisabled"] }
-    },
-    {
-      "if": {
-        "properties": { "eventType": { "const": "DEPLOY_WINDOW_CLOSE_REQUESTED" } },
-        "required": ["eventType"]
-      },
-      "then": { "required": ["lockKey"] }
+      "required": ["lockKey", "executionId", "resolvedBy", "observedDigests"]
     }
   ]
 }

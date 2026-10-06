@@ -1,0 +1,139 @@
+// @akili-spec changes/cicd-executor-poc design §5.1
+// Persisted item shapes for the single table, one interface per row of
+// design §5.1's item table. These are storage records (plain data, epoch-ms
+// timestamps, no behavior) — never confused with the pure domain snapshots
+// in `domain/state-machine` or `domain/lock-policy`, which a repository
+// translates to/from.
+import type { ExecutionStatus } from "../../domain/state-machine/index.js";
+import type { DomainErrorCode, RejectReason } from "../../domain/errors/index.js";
+
+/** Execution item (`EXEC#{executionId}` / `META`), design §5.1. */
+export interface ExecutionItem {
+  readonly executionId: string;
+  readonly deploymentId: string;
+  readonly definitionRef: string;
+  readonly requestId: string;
+  readonly commitSha: string;
+  /** Immutable artifact identity: unit name to image digest (DD-26). */
+  readonly artifacts: Readonly<Record<string, string>>;
+  /** Supersede ordering key (DD-27). */
+  readonly order: { readonly sourceRef: string; readonly runNumber: number; readonly runAttempt: number };
+  readonly ci: {
+    readonly repository: string;
+    readonly runId: string;
+    readonly workflowRef: string;
+    readonly runUrl?: string;
+  };
+  readonly senderRef: string;
+  readonly lockKey: string;
+  readonly sequence: number;
+  readonly status: ExecutionStatus;
+  /** Optimistic-concurrency counter (DD-03); every write increments it. */
+  readonly version: number;
+  /** Current attempt's token, written by X9 (DD-28 phase 1). */
+  readonly dispatchToken?: string;
+  /** 0 until the first X9. */
+  readonly attempt: number;
+  /** DD-28 phase 2, per attempt; cleared at X9 and X14. */
+  readonly execStartedAt?: number;
+  readonly fencingToken?: number;
+  readonly lockWaitStartedAt?: number;
+  readonly lockWaitAttempts?: number;
+  readonly nextAttemptAt?: number;
+  readonly contentionCount: number;
+  readonly lockLostDuringRun?: boolean;
+  readonly targetWriteRejected?: boolean;
+  readonly windowClosedDuringRun?: boolean;
+  readonly scriptChecksum?: string;
+  readonly result?: { readonly code: number; readonly cicdResult?: string; readonly logTail?: string };
+  readonly error?: { readonly code: DomainErrorCode; readonly message?: string };
+  readonly slackThreadTs?: string;
+  readonly deadlineAt?: number;
+  /** Present (= "EXECUTION") only while `status` is non-terminal: GSI2's sparse key. */
+  readonly activeStatus?: "EXECUTION";
+  readonly startedAt: number;
+  readonly finishedAt?: number;
+  /** Epoch seconds (DynamoDB TTL); 180 days after creation. */
+  readonly expiresAt: number;
+}
+
+/** Rejection record (`REJECT#...` / `META`), design §5.1: an X2 rejection leaves no Execution item. */
+export interface RejectionItem {
+  readonly reason: RejectReason;
+  readonly senderRef: string;
+  readonly deploymentId?: string;
+  readonly receivedAt: number;
+  /** Epoch seconds (DynamoDB TTL); 30 days after `receivedAt`. */
+  readonly expiresAt: number;
+}
+
+export type DedupeState = "CLAIMED" | "BOUND";
+
+/** Dedupe item (`DEDUPE#{deploymentId}#{requestId}` / `DEDUPE`), design DD-20. */
+export interface DedupeItem {
+  readonly deploymentId: string;
+  readonly requestId: string;
+  readonly state: DedupeState;
+  readonly claimToken: string;
+  readonly claimLeaseExpiresAt: number;
+  readonly sequence?: number;
+  readonly executionId?: string;
+  readonly expiresAt: number;
+}
+
+export type DeployWindowState = "OPEN" | "CLOSED";
+
+/** Deploy window item (`WINDOW#{lockKey}` / `WINDOW`), design §7.7/DD-21. */
+export interface DeployWindowItem {
+  readonly lockKey: string;
+  readonly state: DeployWindowState;
+  readonly openedBy?: string;
+  readonly openedAt?: number;
+  readonly closesAt?: number;
+  readonly externalJobsDisabled?: readonly string[];
+  readonly note?: string;
+  readonly closedBy?: string;
+  readonly closedReason?: "MANUAL" | "EXPIRED";
+  readonly closedAt?: number;
+  readonly version: number;
+  /** Present (= "WINDOW") only while `state === "OPEN"` — GSI2's sparse key. */
+  readonly activeStatus?: "WINDOW";
+  /** Mirrors `closesAt` while OPEN (design §5.1); absent once CLOSED. */
+  readonly deadlineAt?: number;
+}
+
+/** Sequence item (`DEPLOYMENT#{deploymentId}` / `SEQ`). */
+export interface SequenceItem {
+  readonly deploymentId: string;
+  readonly value: number;
+}
+
+/** Target state item (`TARGET#{lockKey}` / `STATE`), design §5.1/DD-09. */
+export interface TargetStateItem {
+  readonly lockKey: string;
+  readonly currentImages?: Record<string, string>;
+  readonly previousImages?: Record<string, string>;
+  readonly lastDeployedSequence: number;
+  readonly lastExecutionId?: string;
+  readonly updatedAt: number;
+  /** The fencing token of the lock-owner write that produced this state (DD-09). */
+  readonly fencingToken: number;
+}
+
+/** Lock item (`LOCK#{lockKey}` / `LOCK`), design DD-09. */
+export interface LockItem {
+  readonly lockKey: string;
+  readonly owner: string;
+  readonly fencingToken: number;
+  readonly leaseExpiresAt: number;
+  readonly acquiredAt: number;
+  /** TTL cleanup only (forward pointer T-08.a): never the mechanism that frees the lock. */
+  readonly expiresAt: number;
+}
+
+/** Event mark item (`EXEC#{executionId}` / `EVT#{eventKey}`) — presence-only, design §5.1. */
+export interface EventMarkItem {
+  readonly executionId: string;
+  readonly eventKey: string;
+  readonly expiresAt: number;
+}

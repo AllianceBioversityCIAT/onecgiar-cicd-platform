@@ -86,7 +86,7 @@
 // Build context (T-03, design DD-19): with no override, this builds the
 // REAL Dockerfile with the platform REPO ROOT as context (`docker build -f
 // executor/Dockerfile .` from the repo root) — not executor/ — because its
-// runtime stage COPYs pipeline-definitions/, schemas/ and deploy-scripts/
+// runtime stage COPYs deployment-definitions/, schemas/ and deploy-scripts/
 // from the repo root, as siblings of executor/. See resolveBuildContext().
 // A `--dockerfile` override (e.g. the T-01 falsifier fixtures) keeps the
 // OLD executor-root-context behavior, since those fixtures predate this
@@ -452,7 +452,7 @@ export function describeDockerUnavailable({ error, status, stderr }) {
 
 /**
  * Decides the `docker build` context directory and the `-f`/`--file` value
- * to pass alongside it (design DD-19: pipeline-definitions/, schemas/ and
+ * to pass alongside it (design DD-19: deployment-definitions/, schemas/ and
  * deploy-scripts/ are packaged into the image at build time, and they live
  * at the platform REPO ROOT, as siblings of executor/ — so the real,
  * shipped Dockerfile must be built with the repo root as context, not

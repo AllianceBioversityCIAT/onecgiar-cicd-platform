@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecgiar-cicd-platform/schemas/deployment.schema.json",
+  "title": "Deployment Definition",
+  "$comment": "@akili-spec changes/cicd-executor-poc design 6.2; requirements FR-01; DD-19, DD-23. Flat definition: no steps, needs, when, interpolation, expressions or reserved step types (additionalProperties false at every level; value patterns exclude '$', '{' and whitespace). Every *Ref field is a logical <PLACEHOLDER> reference resolved outside Git (DD-23), never a raw value. Cross-document rules are NOT encoded here: artifact unit set equality with the request, resolution of references, migration requiring the target's migrationCompatibility attestation, and lockKey uniqueness per deploymentId belong to semantic validation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "deploymentId", "environment", "targetRef", "source", "allowedSenderRef",
+    "deployScript", "artifacts", "runtimeSecretRefs", "health", "timeoutMinutes", "notifications"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "deploymentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
+    "environment": { "const": "dev" },
+    "targetRef": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repositoryRef", "workflowRef", "environmentRef"],
+      "properties": {
+        "repositoryRef": { "$ref": "#/$defs/logicalRef" },
+        "workflowRef": { "$ref": "#/$defs/logicalRef" },
+        "environmentRef": { "$ref": "#/$defs/logicalRef" }
+      }
+    },
+    "allowedSenderRef": { "$ref": "#/$defs/logicalRef" },
+    "deployScript": { "enum": ["deploy-container.sh"] },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["unit", "container", "imageRepositoryRef"],
+        "properties": {
+          "unit": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,31}$" },
+          "container": { "$ref": "#/$defs/containerName" },
+          "imageRepositoryRef": { "$ref": "#/$defs/logicalRef" }
+        }
+      }
+    },
+    "runtimeSecretRefs": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/containerName" },
+      "additionalProperties": { "$ref": "#/$defs/logicalRef" }
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["container", "mode", "checkCommand", "runCommand"],
+      "properties": {
+        "container": { "$ref": "#/$defs/containerName" },
+        "mode": { "enum": ["ephemeral", "temp-container"] },
+        "checkCommand": { "$ref": "#/$defs/commandName" },
+        "runCommand": { "$ref": "#/$defs/commandName" }
+      }
+    },
+    "health": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/containerName" },
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["command"],
+            "properties": { "command": { "$ref": "#/$defs/commandName" } }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["url"],
+            "properties": { "url": { "$ref": "#/$defs/logicalRef" } }
+          }
+        ]
+      }
+    },
+    "timeoutMinutes": { "type": "integer", "minimum": 1, "maximum": 60 },
+    "notifications": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slack"],
+      "properties": {
+        "slack": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channelRef", "tokenRef"],
+          "properties": {
+            "channelRef": { "$ref": "#/$defs/logicalRef" },
+            "tokenRef": { "$ref": "#/$defs/logicalRef" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "logicalRef": { "type": "string", "pattern": "^<[A-Z][A-Z0-9_]{0,95}>$" },
+    "containerName": { "type": "string", "pattern": "^(<[A-Z][A-Z0-9_]{0,95}>|[a-z0-9][a-z0-9-]{0,62})$" },
+    "commandName": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9:_.-]{0,127}$" }
+  }
+}

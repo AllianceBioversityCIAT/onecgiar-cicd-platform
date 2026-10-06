@@ -14,8 +14,12 @@
 // never let that escape to the caller either; proven below end-to-end
 // (through `createLogger`, not just `JSON.stringify` in isolation).
 import { describe, expect, it } from "vitest";
-import { createLogger, createEventRouterLogger, type LogSink } from "../../src/observability/logger/index.js";
-import type { EventRouterLogger } from "../../src/application/event-router/index.js";
+import {
+  createLogger,
+  createEventRouterLogger,
+  type EventRouterLogger,
+  type LogSink,
+} from "../../src/observability/logger/index.js";
 
 function fakeClock(iso: string) {
   return { now: () => new Date(iso) };

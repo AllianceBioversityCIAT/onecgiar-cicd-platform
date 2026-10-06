@@ -1,10 +1,10 @@
-// @akili-spec changes/cicd-executor-poc requirements FR-01; design §7 (definition-service row)
-// Semantic validation rules for Pipeline Definitions that JSON Schema cannot
-// express: DAG shape (nonexistent `needs`, cycles) and the "reserved type,
-// not enabled" friendly message. Schema-level rules (closed step-type
-// vocabulary, environment enum, interpolation whitelist, explicit codebuild
-// project) already live in schemas/pipeline.schema.json (T-02) and are NOT
-// reimplemented here — this module only covers what Ajv cannot check.
+// @akili-spec changes/cicd-executor-poc requirements FR-01; design §6.2, §7 (definition-service row)
+// Semantic validation rules for flat Deployment Definitions that JSON Schema
+// cannot express. Schema-level rules (closed shape, no expressions or
+// interpolation, value patterns, enum of bundled scripts) already live in
+// schemas/deployment.schema.json (N-02) and are NOT reimplemented here. There
+// is no step graph in Model B: no `needs`, cycles, reserved step types or
+// interpolation rules (design §6.2, AC-01).
 
 export interface ValidationIssue {
   readonly rule: string;
@@ -12,127 +12,90 @@ export interface ValidationIssue {
   readonly message: string;
 }
 
-/**
- * Closed list of step types that exist in the vocabulary but are rejected in
- * the PoC (requirements FR-01). The schema already rejects these (the `type`
- * enum only admits lambda/codebuild/ssh/notify), but that rejection reads as
- * a generic "not one of the enum values" message. This pre-check runs on the
- * RAW parsed YAML, before schema validation, so a reserved type gets the
- * specific message the requirement names: "reserved type, not enabled"
- * (FR-01 scenario 'reserved type').
- */
-export const RESERVED_STEP_TYPES = [
-  "lambda-deploy",
-  "s3-sync",
-  "cloudfront-invalidate",
-  "cloudformation",
-  "http-check",
-] as const;
+type Raw = Record<string, unknown>;
 
-interface RawStep {
-  readonly id?: unknown;
-  readonly type?: unknown;
-  readonly needs?: unknown;
+function asRecord(value: unknown): Raw | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Raw) : undefined;
 }
 
-function collectRawSteps(doc: Record<string, unknown>): RawStep[] {
-  const steps = Array.isArray(doc.steps) ? (doc.steps as RawStep[]) : [];
-  const finallySteps = Array.isArray(doc.finally) ? (doc.finally as RawStep[]) : [];
-  return [...steps, ...finallySteps];
+/** The document's own `deploymentId` must equal the id it was loaded under. */
+export function checkDeploymentIdMatchesRequested(doc: Raw, requestedId: string): ValidationIssue[] {
+  if (doc.deploymentId === requestedId) return [];
+  return [
+    {
+      rule: "deployment-id-mismatch",
+      field: `deployment(${requestedId})/deploymentId`,
+      message: `the loaded document declares a different deploymentId than the one requested ("${requestedId}")`,
+    },
+  ];
 }
 
-export function checkReservedStepTypes(doc: Record<string, unknown>): ValidationIssue[] {
+/** Within one definition, each artifact `unit` and each artifact `container` may appear once. */
+export function checkArtifactsUnique(doc: Raw): ValidationIssue[] {
+  const artifacts = Array.isArray(doc.artifacts) ? doc.artifacts : [];
   const issues: ValidationIssue[] = [];
-  const reserved: readonly string[] = RESERVED_STEP_TYPES;
-  for (const step of collectRawSteps(doc)) {
-    if (typeof step.type === "string" && reserved.includes(step.type)) {
-      const id = typeof step.id === "string" ? step.id : "?";
-      issues.push({
-        rule: "reserved-step-type",
-        field: `steps[id=${id}].type`,
-        message: `reserved type, not enabled: "${step.type}"`,
-      });
-    }
-  }
-  return issues;
-}
-
-function stepIds(steps: readonly RawStep[]): Set<string> {
-  const ids = new Set<string>();
-  for (const step of steps) {
-    if (typeof step.id === "string") ids.add(step.id);
-  }
-  return ids;
-}
-
-/** FR-01 'invalid definition': "a nonexistent dependency". */
-export function checkNeedsExistence(doc: Record<string, unknown>): ValidationIssue[] {
-  const steps = collectRawSteps(doc);
-  const ids = stepIds(steps);
-  const issues: ValidationIssue[] = [];
-  for (const step of steps) {
-    if (typeof step.id !== "string" || !Array.isArray(step.needs)) continue;
-    for (const need of step.needs) {
-      if (typeof need === "string" && !ids.has(need)) {
+  for (const key of ["unit", "container"] as const) {
+    const seen = new Set<string>();
+    artifacts.forEach((raw, index) => {
+      const value = asRecord(raw)?.[key];
+      if (typeof value !== "string") return;
+      if (seen.has(value)) {
         issues.push({
-          rule: "needs-nonexistent",
-          field: `steps[id=${step.id}].needs`,
-          message: `"needs" references an unknown step id: "${need}"`,
+          rule: `artifact-${key}-duplicate`,
+          field: `artifacts[${index}].${key}`,
+          message: `artifact ${key} appears more than once in this definition`,
         });
       }
-    }
+      seen.add(value);
+    });
   }
   return issues;
 }
 
-/** FR-01 'invalid definition': "a cycle in needs". Reports the first cycle found. */
-export function checkNeedsCycle(doc: Record<string, unknown>): ValidationIssue[] {
-  const steps = collectRawSteps(doc);
-  const ids = stepIds(steps);
-  const needsById = new Map<string, string[]>();
-  for (const step of steps) {
-    if (typeof step.id !== "string") continue;
-    const needs = Array.isArray(step.needs)
-      ? step.needs.filter((n): n is string => typeof n === "string" && ids.has(n))
-      : [];
-    needsById.set(step.id, needs);
-  }
+/** `targetRef` must name an entry of the Target Registry (FR-01, design §6.2). */
+export function checkTargetRefExists(
+  doc: Raw,
+  registryEntries: Readonly<Record<string, Raw>>,
+): ValidationIssue[] {
+  const targetRef = doc.targetRef;
+  if (typeof targetRef !== "string" || Object.prototype.hasOwnProperty.call(registryEntries, targetRef)) return [];
+  return [
+    {
+      rule: "target-ref-unknown",
+      field: "targetRef",
+      message: `targetRef "${targetRef}" is not an entry of the Target Registry`,
+    },
+  ];
+}
 
-  const state = new Map<string, "visiting" | "done">();
-  const path: string[] = [];
-
-  function visit(id: string): string[] | undefined {
-    state.set(id, "visiting");
-    path.push(id);
-    for (const dep of needsById.get(id) ?? []) {
-      const depState = state.get(dep);
-      if (depState === "visiting") {
-        const start = path.indexOf(dep);
-        return [...path.slice(start), dep];
-      }
-      if (depState !== "done") {
-        const found = visit(dep);
-        if (found) return found;
-      }
-    }
-    path.pop();
-    state.set(id, "done");
-    return undefined;
-  }
-
-  for (const id of ids) {
-    if (!state.has(id)) {
-      const cycle = visit(id);
-      if (cycle) {
-        return [
-          {
-            rule: "needs-cycle",
-            field: "steps[].needs",
-            message: `cycle detected in "needs": ${cycle.join(" -> ")}`,
-          },
-        ];
-      }
-    }
-  }
-  return [];
+/**
+ * Design §6.2: `migration` "requires the target's `migrationCompatibility`
+ * attestation". A definition that declares `migration` is valid only when its
+ * target entry carries a `migration` block attested `backward-compatible`
+ * with a non-empty `attestedBy` (design §6.3, DD-11). The platform never
+ * presents the property as guaranteed — it only requires the attestation.
+ */
+export function checkMigrationAttestation(
+  doc: Raw,
+  registryEntries: Readonly<Record<string, Raw>>,
+): ValidationIssue[] {
+  if (doc.migration === undefined) return [];
+  const targetRef = doc.targetRef;
+  if (typeof targetRef !== "string") return [];
+  const entry = registryEntries[targetRef];
+  if (!entry) return []; // reported by checkTargetRefExists
+  const migration = asRecord(entry.migration);
+  const attested =
+    migration !== undefined &&
+    migration.migrationCompatibility === "backward-compatible" &&
+    typeof migration.attestedBy === "string" &&
+    migration.attestedBy.length > 0;
+  if (attested) return [];
+  return [
+    {
+      rule: "migration-attestation-missing",
+      field: "migration",
+      message: `the definition declares a migration but target "${targetRef}" has no migrationCompatibility attestation (design §6.2, §6.3)`,
+    },
+  ];
 }

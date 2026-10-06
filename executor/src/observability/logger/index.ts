@@ -8,16 +8,32 @@
 // polluting test output, and production wiring picks whatever sink it
 // wants, e.g. `process.stdout.write`).
 //
-// `createEventRouterLogger` adapts a `Logger` to the event-router's
-// `EventRouterLogger` seam (design §6.1: "log with every identifier
-// received" under `ORPHAN_EVENT`) without this module importing anything
-// from the event-router — the adapter direction is observability -> router
-// contract, never the reverse.
+// `createEventRouterLogger` adapts a `Logger` to the `EventRouterLogger`
+// seam declared below (design §6.1: "log with every identifier received"
+// under `ORPHAN_EVENT`).
 import type { Clock } from "../../ports/clock.js";
-import type { EventRouterLogger, OrphanEventDetails } from "../../application/event-router/index.js";
 import { redactValue } from "./redaction.js";
 
 export { redactString, redactValue } from "./redaction.js";
+
+/**
+ * Orphan-event vocabulary, inlined here when the types-only
+ * `application/event-router` shim was deleted (N-08). Types only, behavior
+ * unchanged; the orphan concept itself is slated for removal by AC-01.
+ */
+export type OrphanReason = "EXECUTION_NOT_FOUND" | "STEP_NOT_FOUND" | "STALE_ATTEMPT";
+
+export interface OrphanEventDetails {
+  readonly reason: OrphanReason;
+  readonly executionId: string;
+  readonly stepId: string;
+  readonly externalId?: string;
+  readonly currentExternalRef?: string;
+}
+
+export interface EventRouterLogger {
+  orphanEvent(details: OrphanEventDetails): void;
+}
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -109,8 +125,7 @@ export function createLogger(deps: CreateLoggerDeps): Logger {
 }
 
 /**
- * Adapts a `Logger` to the event-router's `EventRouterLogger` seam
- * (`src/application/event-router/index.ts`). One log line per orphan event,
+ * Adapts a `Logger` to the `EventRouterLogger` seam declared in this module. One log line per orphan event,
  * at `warn` (an orphan is a notable, non-fatal anomaly, never a crash), with
  * `eventType: "ORPHAN_EVENT"` plus every identifier `OrphanEventDetails`
  * carries (design §6.1: "log with every identifier received").

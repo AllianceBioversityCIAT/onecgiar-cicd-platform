@@ -1,6 +1,6 @@
 // @akili-spec changes/cicd-executor-poc design DD-19; requirements FR-01
 // Unit tests for the BundledDefinitionSource adapter: reads the real,
-// versioned pipeline-definitions/, schemas/ and deploy-scripts/ (T-14)
+// versioned deployment-definitions/, schemas/ and deploy-scripts/ (T-14)
 // directories, resolves definitionRef from
 // CICD_DEFINITION_REF (refusing to start in production when it is missing —
 // T-03 attempt 2, design DD-19 / FR-01), and resolves the repo root from
@@ -19,15 +19,15 @@ import {
 import { repoRoot } from "../contract/support/schema-paths.js";
 
 describe("BundledDefinitionSource", () => {
-  it("reads the real, versioned PRMS Reporting DEV pipeline definition by pipelineId", async () => {
+  it("reads the real, versioned PRMS Reporting DEV deployment definition by deploymentId", async () => {
     const source = new BundledDefinitionSource({ repoRoot });
-    const { content } = await source.getPipelineDefinition("prms-reporting-dev");
-    expect(content).toContain("pipelineId: prms-reporting-dev");
+    const { content } = await source.getDeploymentDefinition("prms-reporting-dev");
+    expect(content).toContain("deploymentId: prms-reporting-dev");
   });
 
-  it("throws a clear error for an unknown pipelineId", async () => {
+  it("throws a clear error for an unknown deploymentId", async () => {
     const source = new BundledDefinitionSource({ repoRoot });
-    await expect(source.getPipelineDefinition("does-not-exist")).rejects.toThrow(DefinitionSourceError);
+    await expect(source.getDeploymentDefinition("does-not-exist")).rejects.toThrow(DefinitionSourceError);
   });
 
   it("reads the real, versioned target registry", async () => {
@@ -38,8 +38,8 @@ describe("BundledDefinitionSource", () => {
 
   it("reads a schema by name", async () => {
     const source = new BundledDefinitionSource({ repoRoot });
-    const { content } = await source.getSchema("pipeline.schema.json");
-    expect(JSON.parse(content).title).toBe("Pipeline Definition");
+    const { content } = await source.getSchema("deployment.schema.json");
+    expect(JSON.parse(content).title).toBe("Deployment Definition");
   });
 
   it("throws a clear error for an unknown schema name", async () => {
@@ -61,11 +61,11 @@ describe("BundledDefinitionSource", () => {
 
   it("every call returns the same definitionRef", async () => {
     const source = new BundledDefinitionSource({ repoRoot });
-    const [pipeline, registry] = await Promise.all([
-      source.getPipelineDefinition("prms-reporting-dev"),
+    const [deployment, registry] = await Promise.all([
+      source.getDeploymentDefinition("prms-reporting-dev"),
       source.getTargetRegistry(),
     ]);
-    expect(pipeline.definitionRef).toBe(registry.definitionRef);
+    expect(deployment.definitionRef).toBe(registry.definitionRef);
   });
 
   describe("definitionRef resolution", () => {
@@ -111,16 +111,27 @@ describe("BundledDefinitionSource", () => {
     });
   });
 
-  it("findRepoRoot throws a clear error when no ancestor has both pipeline-definitions/ and schemas/", () => {
+  it("findRepoRoot throws a clear error when no ancestor has both deployment-definitions/ and schemas/", () => {
     expect(() => findRepoRoot(os.tmpdir())).toThrow(/could not locate the platform repo root/);
+  });
+
+  it("rejects two definition files declaring the same deploymentId (single-source invariant, DD-27)", async () => {
+    const fakeRoot = mkdtempSync(path.join(os.tmpdir(), "cicd-duplicate-deployment-"));
+    mkdirSync(path.join(fakeRoot, "deployment-definitions", "a"), { recursive: true });
+    mkdirSync(path.join(fakeRoot, "deployment-definitions", "b"), { recursive: true });
+    mkdirSync(path.join(fakeRoot, "schemas"));
+    writeFileSync(path.join(fakeRoot, "deployment-definitions", "a", "x.yaml"), "deploymentId: dup-deployment\n");
+    writeFileSync(path.join(fakeRoot, "deployment-definitions", "b", "y.yaml"), "deploymentId: dup-deployment\n");
+    const source = new BundledDefinitionSource({ repoRoot: fakeRoot, env: {} });
+    await expect(source.getDeploymentDefinition("dup-deployment")).rejects.toThrow(/more than one definition/);
   });
 
   describe("repo root resolution via CICD_DEFINITIONS_ROOT", () => {
     it("uses CICD_DEFINITIONS_ROOT directly, bypassing the walk-up, when set", async () => {
       const fakeRoot = mkdtempSync(path.join(os.tmpdir(), "cicd-definitions-root-"));
-      mkdirSync(path.join(fakeRoot, "pipeline-definitions", "targets"), { recursive: true });
+      mkdirSync(path.join(fakeRoot, "deployment-definitions", "targets"), { recursive: true });
       mkdirSync(path.join(fakeRoot, "schemas"));
-      writeFileSync(path.join(fakeRoot, "pipeline-definitions", "targets", "dev.yaml"), "fake-target-registry: {}\n");
+      writeFileSync(path.join(fakeRoot, "deployment-definitions", "targets", "dev.yaml"), "fake-target-registry: {}\n");
 
       const source = new BundledDefinitionSource({ env: { CICD_DEFINITIONS_ROOT: fakeRoot } });
       const { content } = await source.getTargetRegistry();

@@ -21,9 +21,9 @@ import { readFileSync } from "node:fs";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { describe, expect, it, beforeAll } from "vitest";
 import {
-  pipelineSchemaPath,
+  deploymentSchemaPath,
   targetsSchemaPath,
-  prmsReportingDevYamlPath,
+  prmsReportingDevDeploymentYamlPath,
   targetsDevYamlPath,
 } from "../contract/support/schema-paths.js";
 import { InMemoryDefinitionSource } from "../support/in-memory-definition-source.js";
@@ -33,7 +33,14 @@ import {
   validateForStartup,
   DefinitionValidationError,
   UnresolvedReferenceError,
+  type PlatformPrincipalRefs,
 } from "../../src/application/definition-service/index.js";
+
+const PRINCIPAL_REFS: PlatformPrincipalRefs = {
+  executorPrincipalRef: "<EXECUTOR_PRINCIPAL_REF>",
+  schedulerPrincipalRef: "<SCHEDULER_PRINCIPAL_REF>",
+  operatorPrincipalRef: "<OPERATOR_PRINCIPAL_REF>",
+};
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
@@ -70,9 +77,9 @@ class ThrowsOnSecretProvider implements SecretProvider {
 }
 
 describe("definition-service.validateForStartup — reference resolution (DD-23, §7.7 amended)", () => {
-  let pipelineSchemaContent: string;
+  let deploymentSchemaContent: string;
   let targetsSchemaContent: string;
-  let pipelineDefinitionContent: string;
+  let deploymentDefinitionContent: string;
   let baseEntry: Record<string, unknown>;
 
   const MAIN_HOST_CONNECTION = JSON.stringify({ host: "resolved-main-host", port: 22, user: "deploy" });
@@ -82,14 +89,20 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
   // to pass. `<PRMS_REPORTING_SERVER_RUNTIME_SECRET_REF>` (containers[].envSecretRef)
   // is DELIBERATELY ABSENT — it must never be requested (NFR-01).
   const KNOWN_REFS: Record<string, string> = {
-    "<PRMS_REPORTING_REPO_URL>": "resolved-repo-url",
-    "<PRMS_REPORTING_DEV_BRANCH>": "resolved-branch",
-    "<GITHUB_CREDENTIAL_REF>": "resolved-github-credential",
-    "<PRMS_REPORTING_SLACK_CHANNEL>": "resolved-slack-channel",
+    // Deployment Definition identifier refs (DD-23, DD-25, DD-27): fake values only.
+    "<PRMS_REPORTING_REPO_REF>": "resolved-repository",
+    "<PRMS_REPORTING_DEPLOY_WORKFLOW_REF>": "resolved-workflow",
+    "<PRMS_REPORTING_GITHUB_ENVIRONMENT_REF>": "resolved-environment",
+    "<PRMS_REPORTING_CI_ROLE_REF>": "FAKE-CI-ROLE-ID",
+    "<PRMS_REPORTING_SERVER_HEALTH_URL_REF>": "resolved-server-health",
+    "<PRMS_REPORTING_CLIENT_HEALTH_URL_REF>": "resolved-client-health",
+    "<PRMS_REPORTING_SLACK_CHANNEL_REF>": "resolved-slack-channel",
+    // Platform principal refs (DD-25).
+    "<EXECUTOR_PRINCIPAL_REF>": "FAKE-EXECUTOR-ROLE-ID",
+    "<SCHEDULER_PRINCIPAL_REF>": "FAKE-SCHEDULER-ROLE-ID",
+    "<OPERATOR_PRINCIPAL_REF>": "FAKE-OPERATOR-ROLE-ID",
+    // CREDENTIAL reference: existence-only.
     "<SLACK_TOKEN_REF>": "resolved-slack-token",
-    "<PRMS_REPORTING_SERVER_DIR>": "resolved-server-dir",
-    "<PRMS_REPORTING_CLIENT_DIR>": "resolved-client-dir",
-    "<QUALITY_WORKER_FUNCTION>": "resolved-quality-function",
     "<PRMS_REPORTING_DEV_CONNECTION_REF>": MAIN_HOST_CONNECTION,
     "<PRMS_REPORTING_DEV_HOST_KEY_REF>": "resolved-host-key",
     // CREDENTIAL reference (owner ruling, execution.md 2026-10-05): existence-
@@ -106,19 +119,19 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
   };
 
   beforeAll(() => {
-    pipelineSchemaContent = readFileSync(pipelineSchemaPath, "utf8");
+    deploymentSchemaContent = readFileSync(deploymentSchemaPath, "utf8");
     targetsSchemaContent = readFileSync(targetsSchemaPath, "utf8");
-    pipelineDefinitionContent = readFileSync(prmsReportingDevYamlPath, "utf8");
+    deploymentDefinitionContent = readFileSync(prmsReportingDevDeploymentYamlPath, "utf8");
     const registry = parseYaml(readFileSync(targetsDevYamlPath, "utf8")) as Record<string, Record<string, unknown>>;
     baseEntry = registry["prms-reporting-dev"]!;
   });
 
   function sourceWithRegistry(registry: Record<string, unknown>): InMemoryDefinitionSource {
     return new InMemoryDefinitionSource({
-      pipelines: { "prms-reporting-dev": pipelineDefinitionContent },
+      deployments: { "prms-reporting-dev": deploymentDefinitionContent },
       targetRegistry: stringifyYaml(registry),
       schemas: {
-        "pipeline.schema.json": pipelineSchemaContent,
+        "deployment.schema.json": deploymentSchemaContent,
         "targets.schema.json": targetsSchemaContent,
       },
       definitionRef: "test-fixture-ref",
@@ -128,7 +141,7 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
   it("resolves every allowlisted reference, and returns a non-empty resolved externalDeployers list for a required target", async () => {
     const registry = { "prms-reporting-dev": clone(baseEntry) };
     const result = await validateForStartup(
-      { definitionSource: sourceWithRegistry(registry), secretProvider: new FakeSecretProvider(KNOWN_REFS) },
+      { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(KNOWN_REFS) },
       ["prms-reporting-dev"],
     );
     expect(result.resolvedExternalDeployers["prms-reporting-dev"]).toEqual(["<JENKINS_JOB_A>", "<JENKINS_JOB_B>"]);
@@ -139,7 +152,7 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
     const provider = new ThrowsOnSecretProvider(KNOWN_REFS, "<PRMS_REPORTING_SERVER_RUNTIME_SECRET_REF>");
 
     const result = await validateForStartup(
-      { definitionSource: sourceWithRegistry(registry), secretProvider: provider },
+      { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: provider },
       ["prms-reporting-dev"],
     );
     expect(result.resolvedExternalDeployers["prms-reporting-dev"]).toEqual(["<JENKINS_JOB_A>", "<JENKINS_JOB_B>"]);
@@ -147,17 +160,16 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
 
   describe("CREDENTIAL references are existence-checked only (owner ruling, execution.md 2026-10-05)", () => {
     const CREDENTIAL_REFS = [
-      "<GITHUB_CREDENTIAL_REF>", // repository.credentialRef
       "<SLACK_TOKEN_REF>", // notifications.slack.tokenRef
       "<PRMS_REPORTING_DEV_SSH_CREDENTIAL_REF>", // target registry credentialRef
     ];
 
-    it("never calls getSecret for repository.credentialRef, slack.tokenRef or the target's credentialRef — only exists()", async () => {
+    it("never calls getSecret for slack.tokenRef or the target's credentialRef — only exists()", async () => {
       const registry = { "prms-reporting-dev": clone(baseEntry) };
       const provider = new ThrowsOnSecretProvider(KNOWN_REFS, CREDENTIAL_REFS);
 
       const result = await validateForStartup(
-        { definitionSource: sourceWithRegistry(registry), secretProvider: provider },
+        { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: provider },
         ["prms-reporting-dev"],
       );
       expect(result.resolvedExternalDeployers["prms-reporting-dev"]).toEqual(["<JENKINS_JOB_A>", "<JENKINS_JOB_B>"]);
@@ -170,7 +182,7 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
 
       await expect(
         validateForStartup(
-          { definitionSource: sourceWithRegistry(registry), secretProvider: new FakeSecretProvider(refsWithoutCredential) },
+          { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(refsWithoutCredential) },
           ["prms-reporting-dev"],
         ),
       ).rejects.toSatisfy(
@@ -179,18 +191,18 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
       );
     });
 
-    it("aborts startup naming only the ref when repository.credentialRef does not exist", async () => {
+    it("aborts startup naming only the ref when notifications.slack.tokenRef does not exist", async () => {
       const registry = { "prms-reporting-dev": clone(baseEntry) };
       const refsWithoutCredential = { ...KNOWN_REFS };
-      delete refsWithoutCredential["<GITHUB_CREDENTIAL_REF>"];
+      delete refsWithoutCredential["<SLACK_TOKEN_REF>"];
 
       await expect(
         validateForStartup(
-          { definitionSource: sourceWithRegistry(registry), secretProvider: new FakeSecretProvider(refsWithoutCredential) },
+          { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(refsWithoutCredential) },
           ["prms-reporting-dev"],
         ),
       ).rejects.toSatisfy(
-        (error: unknown) => error instanceof UnresolvedReferenceError && error.ref === "<GITHUB_CREDENTIAL_REF>",
+        (error: unknown) => error instanceof UnresolvedReferenceError && error.ref === "<SLACK_TOKEN_REF>",
       );
     });
   });
@@ -208,7 +220,7 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
 
     await expect(
       validateForStartup(
-        { definitionSource: sourceWithRegistry(registry), secretProvider: new FakeSecretProvider(refs) },
+        { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(refs) },
         ["prms-reporting-dev"],
       ),
     ).rejects.toSatisfy((error: unknown) => {
@@ -221,6 +233,97 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
     });
   });
 
+  it("returns the resolved allowedSender, bound source and platform principals for the sender authorizer (DD-25, DD-27)", async () => {
+    const registry = { "prms-reporting-dev": clone(baseEntry) };
+    const result = await validateForStartup(
+      { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(KNOWN_REFS) },
+      ["prms-reporting-dev"],
+    );
+    expect(result.resolvedAllowedSenders["prms-reporting-dev"]).toBe("FAKE-CI-ROLE-ID");
+    expect(result.resolvedSources["prms-reporting-dev"]).toEqual({
+      repository: "resolved-repository",
+      workflow: "resolved-workflow",
+      environment: "resolved-environment",
+    });
+    expect(result.resolvedPrincipals).toEqual({
+      executor: "FAKE-EXECUTOR-ROLE-ID",
+      scheduler: "FAKE-SCHEDULER-ROLE-ID",
+      operator: "FAKE-OPERATOR-ROLE-ID",
+    });
+  });
+
+  it("blocks startup, naming only the ref, when allowedSenderRef does not resolve (DD-25 fail-closed)", async () => {
+    const registry = { "prms-reporting-dev": clone(baseEntry) };
+    const refs = { ...KNOWN_REFS };
+    delete refs["<PRMS_REPORTING_CI_ROLE_REF>"];
+    await expect(
+      validateForStartup(
+        { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(refs) },
+        ["prms-reporting-dev"],
+      ),
+    ).rejects.toSatisfy(
+      (error: unknown) => error instanceof UnresolvedReferenceError && error.ref === "<PRMS_REPORTING_CI_ROLE_REF>",
+    );
+  });
+
+  it.each(["<PRMS_REPORTING_REPO_REF>", "<PRMS_REPORTING_DEPLOY_WORKFLOW_REF>", "<PRMS_REPORTING_GITHUB_ENVIRONMENT_REF>"])(
+    "blocks startup when the bound-source reference %s does not resolve (DD-27)",
+    async (sourceRef) => {
+      const registry = { "prms-reporting-dev": clone(baseEntry) };
+      const refs = { ...KNOWN_REFS };
+      delete refs[sourceRef];
+      await expect(
+        validateForStartup(
+          { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(refs) },
+          ["prms-reporting-dev"],
+        ),
+      ).rejects.toSatisfy((error: unknown) => error instanceof UnresolvedReferenceError && error.ref === sourceRef);
+    },
+  );
+
+  it.each(["<EXECUTOR_PRINCIPAL_REF>", "<SCHEDULER_PRINCIPAL_REF>", "<OPERATOR_PRINCIPAL_REF>"])(
+    "blocks startup when the platform principal reference %s does not resolve (DD-25)",
+    async (principalRef) => {
+      const registry = { "prms-reporting-dev": clone(baseEntry) };
+      const refs = { ...KNOWN_REFS };
+      delete refs[principalRef];
+      await expect(
+        validateForStartup(
+          { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(refs) },
+          ["prms-reporting-dev"],
+        ),
+      ).rejects.toSatisfy((error: unknown) => error instanceof UnresolvedReferenceError && error.ref === principalRef);
+    },
+  );
+
+  it("rejects a platform principal reference that is not a logical <PLACEHOLDER>, naming the field", async () => {
+    const registry = { "prms-reporting-dev": clone(baseEntry) };
+    await expect(
+      validateForStartup(
+        {
+          definitionSource: sourceWithRegistry(registry),
+          principalRefs: { ...PRINCIPAL_REFS, operatorPrincipalRef: "not-a-ref" },
+          secretProvider: new FakeSecretProvider(KNOWN_REFS),
+        },
+        ["prms-reporting-dev"],
+      ),
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof DefinitionValidationError &&
+        error.issues.some((i) => i.rule === "principal-ref-invalid" && i.field === "platformConfig/operatorPrincipalRef"),
+    );
+  });
+
+  it("never resolves runtimeSecretRefs values — the application's runtime secrets (NFR-01); a provider that throws on them does not abort startup", async () => {
+    const registry = { "prms-reporting-dev": clone(baseEntry) };
+    const provider = new ThrowsOnSecretProvider(KNOWN_REFS, "<PRMS_REPORTING_SERVER_RUNTIME_SECRET_REF>");
+    const result = await validateForStartup(
+      { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: provider },
+      ["prms-reporting-dev"],
+    );
+    expect(result.deployments).toHaveLength(1);
+  });
+
   it("aborts startup with a clear, named error when an allowlisted reference does not resolve", async () => {
     const registry = { "prms-reporting-dev": clone(baseEntry) };
     const incompleteRefs = { ...KNOWN_REFS };
@@ -228,7 +331,7 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
 
     await expect(
       validateForStartup(
-        { definitionSource: sourceWithRegistry(registry), secretProvider: new FakeSecretProvider(incompleteRefs) },
+        { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(incompleteRefs) },
         ["prms-reporting-dev"],
       ),
     ).rejects.toSatisfy(
@@ -243,7 +346,7 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
 
     await expect(
       validateForStartup(
-        { definitionSource: sourceWithRegistry(registry), secretProvider: new FakeSecretProvider(refsWithEmptyList) },
+        { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(refsWithEmptyList) },
         ["prms-reporting-dev"],
       ),
     ).rejects.toSatisfy(
@@ -263,7 +366,7 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
 
     await expect(
       validateForStartup(
-        { definitionSource: sourceWithRegistry(registry), secretProvider: new FakeSecretProvider(refs) },
+        { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(refs) },
         ["prms-reporting-dev"],
       ),
     ).rejects.toSatisfy((error: unknown) => {
@@ -301,7 +404,7 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
 
     await expect(
       validateForStartup(
-        { definitionSource: sourceWithRegistry(registry), secretProvider: new FakeSecretProvider(refs) },
+        { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(refs) },
         ["prms-reporting-dev"],
       ),
     ).rejects.toSatisfy(
@@ -332,7 +435,7 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
     };
 
     const result = await validateForStartup(
-      { definitionSource: sourceWithRegistry(registry), secretProvider: new FakeSecretProvider(refs) },
+      { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(refs) },
       ["prms-reporting-dev"],
     );
     expect(Object.keys(result.registry.entries)).toHaveLength(2);
@@ -362,7 +465,7 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
 
     await expect(
       validateForStartup(
-        { definitionSource: sourceWithRegistry(registry), secretProvider: new FakeSecretProvider(refs) },
+        { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(refs) },
         ["prms-reporting-dev"],
       ),
     ).rejects.toSatisfy(
@@ -396,7 +499,7 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
 
     await expect(
       validateForStartup(
-        { definitionSource: sourceWithRegistry(registry), secretProvider: new FakeSecretProvider(refs) },
+        { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(refs) },
         ["prms-reporting-dev"],
       ),
     ).rejects.toSatisfy(
@@ -412,7 +515,7 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
 
     await expect(
       validateForStartup(
-        { definitionSource: sourceWithRegistry(registry), secretProvider: new FakeSecretProvider(refs) },
+        { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(refs) },
         ["prms-reporting-dev"],
       ),
     ).rejects.toThrow(/not valid JSON/);
@@ -424,7 +527,7 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
 
     await expect(
       validateForStartup(
-        { definitionSource: sourceWithRegistry(registry), secretProvider: new FakeSecretProvider(refs) },
+        { definitionSource: sourceWithRegistry(registry), principalRefs: PRINCIPAL_REFS, secretProvider: new FakeSecretProvider(refs) },
         ["prms-reporting-dev"],
       ),
     ).rejects.toThrow(/host.*container.*mapping/);

@@ -9,7 +9,7 @@
 // heartbeat metric.
 import { describe, expect, it } from "vitest";
 import { createMetrics, type MetricsSink } from "../../src/observability/metrics/index.js";
-import type { EventRouterMetrics } from "../../src/application/event-router/index.js";
+import type { EventRouterMetrics } from "../../src/observability/metrics/index.js";
 
 function fakeClock(iso: string) {
   return { now: () => new Date(iso) };

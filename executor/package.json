@@ -15,9 +15,13 @@
     "inspect:image": "node scripts/inspect-image.mjs",
     "check:deps": "npm audit --omit=dev --audit-level=high",
     "check:local": "npm run typecheck && npm run lint && npm run build && npm run validate && npm test && npm run check:deps && node -e \"console.log('inspect:image (npm run inspect:image) is an environment-dependent DEFERRED validation: it builds and runs the Docker image and requires a reachable Docker daemon. It is NOT part of this local gate — run it on a Docker-capable environment before deploying.'); process.exit(0)\"",
-    "validate": "node scripts/guards/run-all.mjs"
+    "validate": "node scripts/guards/run-all.mjs",
+    "dynamodb:local": "node test/support/dynamodb-local.mjs",
+    "test:integration": "node test/integration/run-integration-tests.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1146.0",
+    "@aws-sdk/lib-dynamodb": "^3.1146.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "yaml": "^2.9.1"
@@ -25,6 +29,7 @@
   "devDependencies": {
     "@types/node": "^22.7.0",
     "eslint": "^9.12.0",
+    "tar": "^7.5.22",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.8.1",
     "vitest": "^2.1.2"

@@ -11,8 +11,6 @@
 // edge. There is NO `RECEIVED` state: X1/X2 are creations (CW-3).
 import { classifyExitCode, type FailureCode, type RejectReason } from "../errors/index.js";
 
-export type { ExecutionState, StepState, StepType } from "./legacy-vocabulary.js";
-
 export const EXECUTION_STATUSES = [
   "QUEUED",
   "WAITING_LOCK",
