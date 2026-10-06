@@ -16,6 +16,7 @@
     "check:deps": "npm audit --omit=dev --audit-level=high",
     "check:local": "npm run typecheck && npm run lint && npm run build && npm run validate && npm test && npm run check:deps && node -e \"console.log('inspect:image (npm run inspect:image) is an environment-dependent DEFERRED validation: it builds and runs the Docker image and requires a reachable Docker daemon. It is NOT part of this local gate — run it on a Docker-capable environment before deploying.'); process.exit(0)\"",
     "validate": "node scripts/guards/run-all.mjs",
+    "definitions:check": "tsc && node dist/src/tools/definitions-check/main.js",
     "dynamodb:local": "node test/support/dynamodb-local.mjs",
     "test:integration": "node test/integration/run-integration-tests.mjs",
     "sqs:local": "node test/support/elasticmq-local.mjs",

@@ -644,3 +644,10 @@
 |---|---|---|
 | G-8 | EventBridge Scheduler cannot produce a UUID `eventId` (`<aws.scheduler.execution-id>` is a short id), while `schemas/event.schema.json` requires `format: uuid` for RECONCILE_TICK | The reconcile schedule stays DISABLED; the B1 evidence "scheduler-originated RECONCILE_TICK consumed" is blocked. Options for the owner: a schema/design change for the scheduler branch, or another UUID source |
 | G-9 | `BundledDefinitionSource.listDeploymentIds()` skips definition files that fail to parse, so the Executor starts without such a deployment instead of refusing | K-3's offline check reports these files (tool-side); the Executor's own behavior is unchanged pending an owner decision |
+
+### K-3 — Offline definitions check (2026-10-06)
+
+| Item | Record |
+|---|---|
+| Attempt 1 | `executor/src/tools/definitions-check/` (`runDefinitionsCheck` + `main.ts`), npm script `definitions:check` (`tsc` then the compiled tool): `validateForCi` only (no SecretProvider, no network), OK/FAIL per deployment, exit 0/1/2; definitions from `--root`, schemas from the repository if the root has none. Compiled into the image `dist` but never imported by the runtime path (no new dependency). Implementer falsifier (always exit 0) → red. Leader evidence: isolated worktree tsc 0, lint clean, guards 8/8, vitest 954 passed. Review: **FAIL** — a definition file that fails to parse was silently skipped (false green) |
+| Attempt 2 | Tool-side scan of every definition file: unparsable → FAIL with path, parser code and position (no content); file without `deploymentId` → FAIL; zero deployments → exit 1; NOTE when schemas come from the repository fallback; unused deploy-scripts fallback removed; registry-load error printed once. Implementer falsifier → red. Leader evidence: isolated worktree tsc 0, lint clean, guards 8/8, vitest 1026 passed / 74 skipped / 1 todo; Leader manual falsifier (broken YAML next to the real definitions) → FAIL naming the file, exit 1. Review: **PASS**. Known limitation (→ K-8): literal migration commands with line breaks or NUL are refused at startup but not by this check. Executor-side silent skip = spec gap G-9 |
