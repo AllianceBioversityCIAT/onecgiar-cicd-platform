@@ -535,7 +535,35 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 
 ---
 
-## 6. Gate B: DEV infrastructure (blocked)
+## 6. Gate B: DEV infrastructure
+
+Gate B is split per `gate-b-plan.md` (approved 2026-10-06). **B0** is the repository-only integration kit (no external mutation; Claude executes it through the triad). **B1–B5** are owner-executed milestones and need a separate approval; the N-23…N-29 rows below are their checklist anchors.
+
+### 6.0 B0: integration kit (repository only)
+
+| ID | Task | Depends on | Verification and falsifier | Review |
+|---|---|---|---|---|
+| [ ] **K-1** | SAM template (`infra/sam/`), parameter example, `samconfig.example.toml`, static contract test | Gate A | Contract test over the parsed template: DD-24 exact `StringEquals`, queue policy explicit `Deny`, no wildcard resources, no static keys, CI role `sqs:GetQueueUrl` scoped to the deploy queue. Falsifier: `StringLike` trust or a `*` resource fails. `sam validate --lint` is **owner-executed (B1, checkpoint B)**: NOT EXECUTED | full |
+| [ ] **K-2** | Secrets Manager `SecretProvider` adapter (carry-over §6.1) | Gate A | Unit tests on a mocked client: `exists` via `DescribeSecret`, `getSecret` via `GetSecretValue`, not-found → false, errors carry no ARN/account ID | full |
+| [ ] **K-3** | `npm run definitions:check -- --root <dir>` | Gate A | Valid root passes; a broken definition fails with the file and reason | checklist |
+| [ ] **K-4** | Example definitions under `docs/gate-b/examples/definitions/` | K-3 | Pass `definitions:check`; placeholders only (publication guard) | checklist |
+| [ ] **K-5** | Caller workflow example; reusable workflow and contract test follow the GitHub value classification (plan §12; DD-24 amended under owner direction) | K-1 | Exactly one secret (`CICD_ROLE_ARN`); registry, queue URL, account ID derived after OIDC and masked before use; guard 7 strict | full |
+| [ ] **K-6** | `executor.env.example` and `tools/gate-b/run-executor.{ps1,sh}` (Node 22 check, dry-run) | K-2 | Dry-run prints the resolved, redacted configuration and refuses Node ≠ 22 | checklist |
+| [ ] **K-7** | Probe tooling `tools/gate-b/probe/` (read-only target probe, SSH preflight) outside the deploy-script allowlist and the image | Gate A | Dockerfile-boundary guard still passes; probe makes no write outside its own lock | full |
+| [ ] **K-8** | Owner runbook `docs/gate-b/` (SAM checkpoints A–D, GitHub setup, Executor startup, target values, B1–B5 checklists, teardown) | K-1…K-7 | Commands reference only placeholders; validation and deploy are separate steps | checklist |
+| [ ] **K-9** | B0 closure evidence | K-1…K-8 | `check:local`, guards 8/8 strict, integration suite; NOT EXECUTED items listed | checklist |
+
+### 6.0.1 Owner milestones (B1–B5; not authorized for Claude)
+
+| Milestone | Content | Anchors |
+|---|---|---|
+| B1 | SAM checkpoints A–D, stack outputs recorded | N-24, N-29 |
+| B2 | Executor on the owner's workstation (Node 22), secret entries created by the owner | N-25, K-2 |
+| B3 | Read-only target probe and SSH preflight | N-23, K-7 |
+| B4 | GitHub Environment, variables, single secret, caller workflow (closed window first) | N-32 prep, K-5 |
+| B5 | Real AWS integration negatives (DLQ, wrong role, `DelaySeconds`) | N-26, N-27 |
+
+### 6.0.2 Original Gate B rows (anchors for B1–B5)
 
 | ID | Task | Depends on | Requirements / Design | Blocked by (not assumed) | Verification and falsifier | Review |
 |---|---|---|---|---|---|---|
@@ -551,7 +579,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 
 | Item | Owner task | Source |
 |---|---|---|
-| **Prerequisite:** Secrets Manager `SecretProvider` adapter (`exists()` via `DescribeSecret`, `getSecret` at point of use, no ARN or account ID in errors). Design §15 marks it KEEP but no Gate A task owns it; it must exist **before N-25 and N-32** | to be assigned by the owner (Gate B) | N-17b Leader decision; T-03 forward pointer |
+| **Prerequisite (now K-2):** Secrets Manager `SecretProvider` adapter (`exists()` via `DescribeSecret`, `getSecret` at point of use, no ARN or account ID in errors). Design §15 marks it KEEP but no Gate A task owns it; it must exist **before N-25 and N-32** | to be assigned by the owner (Gate B) | N-17b Leader decision; T-03 forward pointer |
 | Queue policy: explicit `Deny` for every principal outside the four bound senders (an `Allow` alone does not block same-account IAM principals); CI role states DEV-only scope; operator principal is a role | N-24 | N-20 forward pointer |
 | `ci.workflowRef` form: pin which GitHub value it carries (caller `workflow_ref` vs SHA-pinned `job_workflow_ref`, P-G11) and what `source.workflowRef` resolves to, or every real request ends `CONSISTENCY_MISMATCH` | N-24, verified at N-32 | N-05, N-21 forward pointers (open spec gap) |
 | No repository- or organization-level variable named `CICD_BOUND_REF` (variable precedence UNVERIFIED, P-G13) — candidate check, owner decision pending | N-24 / N-29 (if the owner adopts it) | N-21 escalation (open spec gap) |

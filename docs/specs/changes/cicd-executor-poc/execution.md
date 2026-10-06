@@ -602,3 +602,11 @@
 | Size | `executor/src`: 78 TypeScript files, 9,510 lines (incl. comments) |
 | Spec gaps for the owner | G-1 temporary-password marker (FR-12 vs §6.3); G-2 no QUEUED→FAILED edge for configuration errors; G-3 `CICD_BOUND_REF` variable precedence UNVERIFIED; G-4 `ci.workflowRef` form (N-24); G-5 `--unit` naming; G-6 unemitted/unimplemented metrics (`DispatchLatencyMs` for NFR-05, `LockWaitMs`, `ExecutionsSuperseded`, `DeployDurationMs`); G-7 pre-AC-01 step gaps obsolete |
 | Status | **Done** — Gate A complete; Gate B not started |
+
+---
+
+## Gate B — B0 (integration kit) start — 2026-10-06
+
+- Owner approved `gate-b-plan.md` revision 2 with clarifications: SAM option (b) — `sam validate --lint` is owner-executed at the start of B1 and stays **NOT EXECUTED** until the owner reports it; validation and deployment are separate checkpoints A–D; GitHub values classified (plan §12): one Environment secret (`CICD_ROLE_ARN`), the rest Environment variables or values derived after OIDC; no static AWS keys.
+- Scope authorized: K-1…K-9 only. No external mutation (AWS, GitHub, targets). B1 requires a separate approval.
+- No SAM CLI or cfn-lint installed; local Node is 20.19.5 (Node 22 remains DEFERRED).
