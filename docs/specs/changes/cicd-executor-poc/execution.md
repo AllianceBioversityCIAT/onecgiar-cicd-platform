@@ -619,3 +619,13 @@
 | Leader evidence (non-author) | Isolated worktree (HEAD + K-2 files): tsc 0, lint clean, guards 8/8, vitest 949 passed / 74 skipped / 1 todo. Leader falsifiers: `DeletedDate` check removed → red; `SecretString` check removed → red |
 | Review | Reviewer (opus): **PASS**. Advisories (non-blocking, not applied): pure prefix check could move out of the adapter module; an `undefined` DescribeSecret response returns true (unreachable with the real SDK); `loadConfig` runs twice at startup; `getSecret` leak test could also check `<AWS_ACCOUNT_ID>` |
 | Not executed | Any real Secrets Manager call (owner, B1) |
+
+### K-5 — GitHub value classification and the Gate B caller example (2026-10-06)
+
+| Item | Record |
+|---|---|
+| Owner direction | Plan §12: `CICD_ROLE_ARN` the only Environment secret; `CICD_AWS_REGION`, `CICD_ECR_REPOSITORY`, `CICD_DEPLOY_QUEUE_NAME`, `CICD_BOUND_REF` Environment variables; registry, queue URL and account ID derived after OIDC and masked; no static AWS keys |
+| Attempt 1 | Reusable workflow: account segment of the role ARN masked before OIDC; `mask-aws-account-id: true` (input verified in `action.yml` at the pinned SHA); `sts get-caller-identity` → mask; registry from the login step output; queue URL from `sqs get-queue-url`, fail-closed and masked before the single final `send-message`. Contract test (49 + 1 skipped actionlint) covers secret/variable sets, ordering, masking and both caller examples. New `docs/gate-b/github/caller-workflow.example.yml`. Leader spec edits: design DD-24 v4.6 (classification, CI role `sqs:GetQueueUrl`), `infra/RESOURCES.md`, `docs/resources.md`. Implementer falsifiers → red. Leader evidence: isolated worktree tsc 0, lint clean, guards 8/8, vitest 964 passed / 74 skipped / 1 todo; Leader falsifier (queue URL mask removed) → red. Review: **FAIL** — FR-22 scenario and two design sentences still stated the superseded rule |
+| Attempt 2 | Requirements v3.6 (FR-22 "public-safe logs"), design DD-29 decision and §11 security row aligned, proposal pointers, N-21 supersede note, RESOURCES verification row. Review: **FAIL** — one RESOURCES verification row left |
+| Attempt 3 | RESOURCES row aligned. Review: **PASS**. Advisory: P-G14 (Environment values visible in a called workflow) stays deferred to the first real run |
+| Not executed | Any real GitHub run (owner, B2) |

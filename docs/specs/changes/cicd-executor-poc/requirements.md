@@ -10,7 +10,7 @@
 |---|---|
 | Spec Path | `changes/cicd-executor-poc` |
 | Phase | Phase 1: Requirements |
-| Version | **v3.5** (Gate A closure editorial sync, no new decision). v3.4 (owner approval 2026-10-06; aligned with `proposal.md` v3.4) |
+| Version | **v3.6** (owner direction, Gate B approval 2026-10-06: FR-22 "public-safe logs" follows the DD-24 v4.6 GitHub value classification). v3.5 (Gate A closure editorial sync, no new decision). v3.4 (owner approval 2026-10-06; aligned with `proposal.md` v3.4) |
 | Depth | **Full** (new infrastructure, trust boundary, concurrency, deployment and migrations) |
 | Type | Change |
 | Approval Mode | `gated` (inherited from the proposal) |
@@ -608,8 +608,8 @@ The reusable workflow SHALL be the only producer of deploy requests in the norma
 
 #### Scenario: public-safe logs
 - GIVEN the run's logs and workflow file (treated as public, P-A7)
-- THEN role ARNs, registry host and queue URL come only from GitHub **secrets**, and the account ID is explicitly masked before first use
-- BUT they must NOT come from configuration variables, which render unmasked in logs (P-G8)
+- THEN the role ARN comes only from a GitHub Environment **secret**; the registry host, the queue URL and the account ID are **derived after OIDC** and masked (`::add-mask::`) before first use; the account segment of the role ARN is masked before the OIDC step (owner direction, 2026-10-06, v3.6; design DD-24 v4.6)
+- BUT no value that embeds the account ID may come from a configuration variable, which renders unmasked in logs (P-G8); only non-sensitive values (region, repository name, queue name, bound ref) are variables
 
 #### Scenario: requestId derivation
 - GIVEN a successful run

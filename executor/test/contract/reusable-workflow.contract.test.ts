@@ -113,10 +113,14 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
       expect(first.run).toMatch(/"\$CURRENT_REF" != "\$BOUND_REF"/);
     });
 
-    it("uses vars.CICD_BOUND_REF as the ONLY vars.* reference anywhere", () => {
+    it("references exactly the four Environment variables and uses CICD_BOUND_REF only in the first step", () => {
       const refs = [...workflowText.matchAll(/\bvars\.([A-Za-z0-9_]+)/g)].map((m) => m[1]);
-      expect(refs.length).toBeGreaterThan(0);
-      expect(new Set(refs)).toEqual(new Set(["CICD_BOUND_REF"]));
+      expect(new Set(refs)).toEqual(
+        new Set(["CICD_BOUND_REF", "CICD_AWS_REGION", "CICD_ECR_REPOSITORY", "CICD_DEPLOY_QUEUE_NAME"]),
+      );
+      envSteps.forEach((st, i) => {
+        expect(JSON.stringify(st).includes("vars.CICD_BOUND_REF"), `step ${i}`).toBe(i === 0);
+      });
     });
 
     it("never takes the bound ref from an input", () => {
@@ -125,22 +129,65 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
     });
   });
 
-  describe("identifiers come from secrets only (P-G8)", () => {
-    it("reads role ARN, region, registry, repository and queue URL from secrets.*", () => {
-      const secrets = new Set([...workflowText.matchAll(/\bsecrets\.([A-Za-z0-9_]+)/g)].map((m) => m[1]));
-      expect(secrets).toEqual(
-        new Set(["CICD_ROLE_ARN", "CICD_AWS_REGION", "CICD_ECR_REGISTRY", "CICD_ECR_REPOSITORY", "CICD_QUEUE_URL"]),
-      );
+  describe("one secret, four variables, derived identifiers (gate-b-plan section 12)", () => {
+    const idx = (pred: (st: Step) => boolean) => envSteps.findIndex(pred);
+    const oidcIdx = idx((st) => !!st.uses?.startsWith("aws-actions/configure-aws-credentials@"));
+    const loginIdx = idx((st) => !!st.uses?.startsWith("aws-actions/amazon-ecr-login@"));
+    const buildIdx = idx((st) => !!st.run?.includes("docker push"));
+    const sendIdx = idx((st) => !!st.run?.includes("aws sqs send-message"));
+
+    it("reads exactly ONE secret, CICD_ROLE_ARN, anywhere", () => {
+      const secrets = [...workflowText.matchAll(/\bsecrets\.([A-Za-z0-9_]+)/g)].map((m) => m[1]);
+      expect(secrets.length).toBeGreaterThan(0);
+      expect(new Set(secrets)).toEqual(new Set(["CICD_ROLE_ARN"]));
     });
 
-    it("masks the account ID before the first step that uses a secret identifier elsewhere", () => {
-      const names = envSteps.map((s) => s.name);
-      const maskIdx = envSteps.findIndex((s) => s.run?.includes("::add-mask::"));
+    it("takes region and repository name from vars and the registry from the login step output", () => {
+      expect(envSteps[oidcIdx]!.with?.["aws-region"]).toBe("${{ vars.CICD_AWS_REGION }}");
+      expect(envSteps[loginIdx]!.id).toBeTruthy();
+      const build = envSteps[buildIdx]!;
+      expect(build.env?.["REGISTRY"]).toBe(`${"${{"} steps.${envSteps[loginIdx]!.id}.outputs.registry }}`);
+      expect(build.env?.["REPOSITORY"]).toBe("${{ vars.CICD_ECR_REPOSITORY }}");
+    });
+
+    it("masks the role ARN account segment before the first step that uses the secret elsewhere", () => {
+      const maskIdx = idx((st) => !!st.run?.includes("::add-mask::") && JSON.stringify(st).includes("secrets.CICD_ROLE_ARN"));
       expect(maskIdx).toBe(1);
-      const firstOtherSecretUse = envSteps.findIndex(
-        (s, i) => i > 0 && !s.run?.includes("::add-mask::") && JSON.stringify(s).includes("secrets."),
-      );
-      expect(firstOtherSecretUse, names.join(",")).toBeGreaterThan(maskIdx);
+      const firstOtherSecretUse = idx((st) => st !== envSteps[maskIdx] && JSON.stringify(st).includes("secrets."));
+      expect(firstOtherSecretUse).toBeGreaterThan(maskIdx);
+    });
+
+    it("masks the account ID from get-caller-identity after OIDC and before login, build and send", () => {
+      const m = idx((st) => !!st.run?.includes("sts get-caller-identity"));
+      expect(m).toBeGreaterThan(oidcIdx);
+      expect(envSteps[m]!.run).toMatch(/::add-mask::\$account_id/);
+      expect(m).toBeLessThan(loginIdx);
+      expect(m).toBeLessThan(buildIdx);
+      expect(m).toBeLessThan(sendIdx);
+    });
+
+    it("sets mask-aws-account-id on the OIDC step", () => {
+      expect(envSteps[oidcIdx]!.with?.["mask-aws-account-id"]).toBe(true);
+    });
+
+    it("derives the queue URL from the queue-name variable, fails closed and masks it before send-message", () => {
+      const send = envSteps[sendIdx]!;
+      expect(send.env?.["QUEUE_NAME"]).toBe("${{ vars.CICD_DEPLOY_QUEUE_NAME }}");
+      const run = send.run!;
+      const get = run.indexOf("aws sqs get-queue-url");
+      const empty = run.indexOf('-z "$queue_url"');
+      const mask = run.indexOf('::add-mask::$queue_url');
+      const sendAt = run.indexOf("aws sqs send-message");
+      expect(get).toBeGreaterThan(-1);
+      expect(get).toBeLessThan(empty);
+      expect(empty).toBeLessThan(mask);
+      expect(mask).toBeLessThan(sendAt);
+      expect(run).toContain('--queue-url "$queue_url"');
+    });
+
+    it("uses no static AWS credentials (OIDC only)", () => {
+      expect(workflowText).not.toMatch(/aws-access-key-id|aws-secret-access-key|aws-session-token/i);
+      expect(workflowText).not.toMatch(/AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY/);
     });
 
     it("carries no ARN, account ID, host, URL or IP literal", () => {
@@ -154,19 +201,20 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
   });
 
   describe("step ordering (FR-22: one request after every CI step)", () => {
-    it("runs bound-ref, mask, checkout, OIDC, registry login, build+push, body, send in that order", () => {
+    it("runs bound-ref, mask, checkout, OIDC, account mask, registry login, build+push, body, send in that order", () => {
       const kinds = envSteps.map((s) => {
         if (s.uses?.startsWith("actions/checkout@")) return "checkout";
         if (s.uses?.startsWith("aws-actions/configure-aws-credentials@")) return "oidc";
         if (s.uses?.startsWith("aws-actions/amazon-ecr-login@")) return "ecr-login";
         if (s.run?.includes("BOUND_REF")) return "bound-ref";
+        if (s.run?.includes("aws sqs send-message")) return "send";
+        if (s.run?.includes("sts get-caller-identity")) return "account-mask";
         if (s.run?.includes("::add-mask::")) return "mask";
         if (s.run?.includes("docker push")) return "build-push";
         if (s.run?.includes("jq -n")) return "body";
-        if (s.run?.includes("aws sqs send-message")) return "send";
         return "unknown";
       });
-      expect(kinds).toEqual(["bound-ref", "mask", "checkout", "oidc", "ecr-login", "build-push", "body", "send"]);
+      expect(kinds).toEqual(["bound-ref", "mask", "checkout", "oidc", "account-mask", "ecr-login", "build-push", "body", "send"]);
     });
 
     it("has exactly one send step, it is the LAST step and nothing in the workflow uses always()", () => {
@@ -326,8 +374,11 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
   });
 });
 
-describe("docs/examples/caller-workflow.yml (FR-22, DD-29)", () => {
-  const callerText = readFileSync(path.join(repoRoot, "docs", "examples", "caller-workflow.yml"), "utf8");
+describe.each([
+  ["docs/examples/caller-workflow.yml", ["docs", "examples", "caller-workflow.yml"]],
+  ["docs/gate-b/github/caller-workflow.example.yml", ["docs", "gate-b", "github", "caller-workflow.example.yml"]],
+])("%s (FR-22, DD-29)", (_label, segments) => {
+  const callerText = readFileSync(path.join(repoRoot, ...segments), "utf8");
   const caller = parse(callerText) as {
     on: Record<string, { branches?: string[] } | null>;
     permissions?: Record<string, string>;
@@ -355,7 +406,7 @@ describe("docs/examples/caller-workflow.yml (FR-22, DD-29)", () => {
 
   it("does not inherit or pass secrets", () => {
     expect(deploy.secrets).toBeUndefined();
-    expect(callerText).not.toMatch(/secrets:\s*inherit/);
+    expect(callerText.replace(/^\s*#.*$/gm, "")).not.toMatch(/secrets:\s*inherit/);
   });
 
   it("passes exactly deploymentId, environment and units", () => {
@@ -364,6 +415,14 @@ describe("docs/examples/caller-workflow.yml (FR-22, DD-29)", () => {
 
   it("grants the deploy job only id-token: write and contents: read", () => {
     expect(deploy.permissions).toEqual({ "id-token": "write", contents: "read" });
+  });
+
+  it("uses no forbidden trigger, no secrets.* expression and no static AWS credentials", () => {
+    for (const forbidden of ["pull_request", "pull_request_target", "workflow_run"]) {
+      expect(Object.keys(caller.on)).not.toContain(forbidden);
+    }
+    expect(callerText).not.toMatch(/\bsecrets\./);
+    expect(callerText).not.toMatch(/aws-access-key-id|aws-secret-access-key|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY/i);
   });
 
   it("carries no ARN, account ID, URL or host literal", () => {

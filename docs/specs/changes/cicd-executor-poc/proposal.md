@@ -228,7 +228,7 @@ The requirements phase turns these into FRs (AC-01 §10).
 | Immutable output | Captures the pushed **digest** of each image. Tags pushed for humans never drive a deploy and must not collide with Jenkins's integer tags in the shared repository (OD-A7) |
 | One request per successful build | Sends exactly one `DEPLOY_REQUESTED` after all CI steps succeed. Any CI failure ends the run with nothing sent |
 | Action pinning | Every action in the trusted reusable workflow is pinned by a full commit SHA (trailing version comment); `docker://` by digest; mutable refs prohibited; `./` exempt; enforced by a static guard (owner rule, 2026-10-06) |
-| Public-safe logs | Role ARN, registry and queue URL come only from GitHub **secrets** (configuration variables render unmasked); the account ID is masked explicitly (P-A7, §13.3) |
+| Public-safe logs | Role ARN, registry and queue URL come only from GitHub **secrets** (configuration variables render unmasked); the account ID is masked explicitly (P-A7, §13.3). *Refined by owner direction (2026-10-06): design DD-24 v4.6 — the role ARN is the only secret; registry, queue URL and account ID are derived after OIDC and masked* |
 | Event allowlist | The pinned reusable workflow runs only for `push` or `workflow_dispatch`, and only when the ref is the bound ref (both events), read from an administrator-controlled Environment variable, never from caller input (design DD-24); `pull_request`, `pull_request_target` and `workflow_run` stop before any OIDC token is requested (§13.2) |
 | No deploy logic | The workflow never selects a host, script or command |
 
@@ -461,7 +461,7 @@ Removed vs v2: ZIP/S3 secret controls (no ZIPs) and webhook HMAC (no ingress).
 
 ### 13.3 Public repositories: what becomes visible
 
-- **Workflow files and CI logs are public** (P-A7, UNVERIFIED; the safe assumption is yes): role ARNs, registry host and queue URL come only from **secrets** (variables render unmasked); the account ID is masked explicitly. DD-23's publication policy extends to application repos.
+- **Workflow files and CI logs are public** (P-A7, UNVERIFIED; the safe assumption is yes): role ARNs, registry host and queue URL come only from **secrets** (variables render unmasked); the account ID is masked explicitly (refined by design DD-24 v4.6, owner direction 2026-10-06: only the role ARN is a secret; registry, queue URL and account ID are derived after OIDC and masked). DD-23's publication policy extends to application repos.
 - **The deploy request** carries only public-safe identifiers; hosts never appear. **Build-time secrets:** prefer none; otherwise Environment-scoped, never available to fork PRs.
 - **P-A5 "repositories are public"** is UNVERIFIED per repository (OD-A9). If a repo is private, the security model depends on the organization plan: deployment branch rules and environment secrets need Pro/Team or higher, required reviewers need Enterprise, and on Free a conversion to private makes protection rules be ignored (design P-G7). Not resolved here: OD-A9 gates B and C.
 

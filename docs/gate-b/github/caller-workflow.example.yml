@@ -1,0 +1,55 @@
+# @akili-spec changes/cicd-executor-poc requirements FR-22, FR-25; design DD-24, DD-29
+#
+# EXAMPLE ONLY (documentation, Gate B hardened caller). Placeholders in angle brackets
+# are resolved outside Git (DD-23). Replace each one in the application repository:
+#   <GITHUB_ORG>/<PLATFORM_REPO>  the repository that holds the trusted reusable workflow
+#   <PINNED_COMMIT_SHA>           the full 40-hex commit SHA of that repository; never a tag
+#                                 or branch. The CI role trust policy pins the same SHA
+#                                 (DD-24): moving the pin means changing the trust policy
+#                                 in the same change.
+#   <BOUND_BRANCH>                the one branch allowed to deploy
+#   <OWNER_DEPLOYMENT_ID>         the semantic deployment identifier (matches a Deployment
+#                                 Definition owned by the platform)
+#   <GITHUB_ENVIRONMENT>          the GitHub Environment (deployment branch rules = the
+#                                 bound branch) that holds the values below
+#
+# The Environment <GITHUB_ENVIRONMENT> holds exactly 1 secret and 4 variables:
+#   Secret:    CICD_ROLE_ARN (embeds the account ID; a secret is the only way GitHub masks it)
+#   Variables: CICD_BOUND_REF (full ref of the bound branch; administrators only),
+#              CICD_AWS_REGION, CICD_ECR_REPOSITORY (repository name only),
+#              CICD_DEPLOY_QUEUE_NAME (queue name only)
+# The account ID, registry and queue URL are derived after OIDC and masked. No static AWS
+# access key exists anywhere; authentication is OIDC only.
+#
+# Secrets mechanism: this caller passes NO secrets (no `secrets:` key, no `secrets: inherit`).
+# The reusable workflow's Environment job reads the Environment values itself.
+name: example-deployment
+
+on:
+  push:
+    branches: ["<BOUND_BRANCH>"]
+  workflow_dispatch:
+
+# No permissions by default; each job asks for the minimum it needs.
+permissions: {}
+
+jobs:
+  ci:
+    # The caller's own lint and tests. A failure here means the deploy job never starts.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - run: echo "<LINT_AND_TEST_STEPS>"
+
+  deploy:
+    needs: ci
+    # Required so the reusable workflow's Environment job can request an OIDC token.
+    permissions:
+      id-token: write
+      contents: read
+    uses: <GITHUB_ORG>/<PLATFORM_REPO>/.github/workflows/deploy-request.reusable.yml@<PINNED_COMMIT_SHA>
+    with:
+      deploymentId: "<OWNER_DEPLOYMENT_ID>"
+      environment: "<GITHUB_ENVIRONMENT>"
+      units: '[{"unit":"<UNIT_A>","context":"<CONTEXT_A>"},{"unit":"<UNIT_B>","context":"<CONTEXT_B>","dockerfile":"<DOCKERFILE_B>"}]'

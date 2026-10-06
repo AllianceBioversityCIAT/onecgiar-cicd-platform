@@ -6,9 +6,9 @@
 #
 # Prerequisites configured by an administrator, not in this file:
 #   - GitHub Environment <GITHUB_ENVIRONMENT> with deployment branch rules = the bound branch
-#   - Environment variable CICD_BOUND_REF (full ref of the bound branch; admin-only)
-#   - Environment secrets CICD_ROLE_ARN, CICD_AWS_REGION, CICD_ECR_REGISTRY,
-#     CICD_ECR_REPOSITORY, CICD_QUEUE_URL
+#   - Environment secret CICD_ROLE_ARN (the only secret; it embeds the account ID)
+#   - Environment variables CICD_BOUND_REF (full ref of the bound branch; admin-only),
+#     CICD_AWS_REGION, CICD_ECR_REPOSITORY (name only), CICD_DEPLOY_QUEUE_NAME (name only)
 #   - The CI role trust policy pins the reusable workflow at <PINNED_COMMIT_SHA> (DD-24);
 #     moving the pin means changing the trust policy in the same change.
 name: prms-reporting-dev

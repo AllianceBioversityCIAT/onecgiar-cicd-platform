@@ -7,14 +7,14 @@
 # Trust model (DD-24): the CI role trust policy pins this file via `job_workflow_ref`
 # at an immutable commit SHA. Event allowlist = `guard` job; bound-ref check = FIRST
 # step of the Environment job, read ONLY from the administrator-only Environment
-# variable CICD_BOUND_REF (the single allowed `vars.*`; fail closed when empty).
-# Role ARN, registry, repository, region and queue URL come ONLY from Environment
-# secrets, never from `vars.*` (P-G8). The account ID is masked before first use.
+# variable CICD_BOUND_REF (fail closed when empty).
 #
-# Environment secrets expected (names are generic):
-#   CICD_ROLE_ARN, CICD_AWS_REGION, CICD_ECR_REGISTRY, CICD_ECR_REPOSITORY, CICD_QUEUE_URL
-# Environment variable expected (administrators only): CICD_BOUND_REF (a full ref,
-# for example refs/heads/<bound-branch>).
+# Values (gate-b-plan section 12; AWS auth is OIDC only, no static access keys):
+#   Environment secret (the ONLY one; it embeds the account ID):  CICD_ROLE_ARN
+#   Environment variables: CICD_BOUND_REF (admin-only), CICD_AWS_REGION,
+#     CICD_ECR_REPOSITORY (repository name only), CICD_DEPLOY_QUEUE_NAME (queue name only)
+#   Derived after OIDC and masked before use: the account ID (sts get-caller-identity),
+#     the registry (output of the registry login step) and the queue URL (sqs get-queue-url).
 #
 # Lint and tests are the caller's own jobs; the caller makes its deploy job `needs:` them,
 # so a failing CI step means this workflow never starts and no request is sent (FR-22).
@@ -111,17 +111,13 @@ jobs:
             echo "::error::ref is not the bound ref"; exit 1
           fi
 
-      - name: Mask account identifiers
+      - name: Mask the account segment of the role ARN
         env:
           ROLE_ARN: ${{ secrets.CICD_ROLE_ARN }}
-          REGISTRY: ${{ secrets.CICD_ECR_REGISTRY }}
         run: |
           set -euo pipefail
-          account_from_registry="${REGISTRY%%.*}"
           account_from_role="$(printf '%s' "$ROLE_ARN" | cut -d: -f5)"
-          for value in "$account_from_registry" "$account_from_role"; do
-            if [ -n "$value" ]; then echo "::add-mask::$value"; fi
-          done
+          if [ -n "$account_from_role" ]; then echo "::add-mask::$account_from_role"; fi
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -132,16 +128,27 @@ jobs:
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.CICD_ROLE_ARN }}
-          aws-region: ${{ secrets.CICD_AWS_REGION }}
+          aws-region: ${{ vars.CICD_AWS_REGION }}
+          mask-aws-account-id: true
+
+      - name: Derive and mask the account ID
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          if [ -z "$account_id" ]; then
+            echo "::error::could not derive the account ID (fail closed)"; exit 1
+          fi
+          echo "::add-mask::$account_id"
 
       - name: Log in to the registry
+        id: ecr-login
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
 
       - name: Build and push units, capture digests
         env:
           UNITS: ${{ inputs.units }}
-          REGISTRY: ${{ secrets.CICD_ECR_REGISTRY }}
-          REPOSITORY: ${{ secrets.CICD_ECR_REPOSITORY }}
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          REPOSITORY: ${{ vars.CICD_ECR_REPOSITORY }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
@@ -213,10 +220,15 @@ jobs:
 
       - name: Send deploy request
         env:
-          QUEUE_URL: ${{ secrets.CICD_QUEUE_URL }}
+          QUEUE_NAME: ${{ vars.CICD_DEPLOY_QUEUE_NAME }}
         run: |
           set -euo pipefail
+          queue_url="$(aws sqs get-queue-url --queue-name "$QUEUE_NAME" --query QueueUrl --output text)"
+          if [ -z "$queue_url" ] || [ "$queue_url" = "None" ]; then
+            echo "::error::could not derive the queue URL (fail closed)"; exit 1
+          fi
+          echo "::add-mask::$queue_url"
           aws sqs send-message \
-            --queue-url "$QUEUE_URL" \
+            --queue-url "$queue_url" \
             --message-body "file://$RUNNER_TEMP/deploy-request.json" \
             --output text --query MessageId > /dev/null
