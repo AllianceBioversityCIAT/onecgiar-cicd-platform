@@ -80,7 +80,7 @@ Share sanitized outputs (replace account ids, hosts, ARNs, queue URLs with the p
 |---|---|
 | Checkpoint B | The full `sam validate --lint` output and exit code |
 | B1 | `describe-stacks` outputs table (with account id masked), `describe-secret` existence list (names only), Executor startup lines, `Get-ChildItem Env:AWS_*` result (names only) |
-| B2 | Run URL or run id, public-safe job log (confirm no account id, registry or queue URL visible), the real `job_workflow_ref` and `sub` claim values, Executor log lines for the request, `get-item` of the execution, the untrusted-trigger results |
+| B2 | Run URL or run id, public-safe job log (no credential-like value; the role ARN and account id are expected to appear, G-10), the real `job_workflow_ref` and `sub` claim values, Executor log lines for the request, `get-item` of the execution, the untrusted-trigger results |
 | B3 | `get-item` results, the `SUPERSEDED` execution, the DLQ attributes and alarm state after the poison message |
 | B4 | The three probe outputs, including the deliberate host-key mismatch result |
 | B5 | Final execution item, Slack thread text (sanitized), forced-failure rollback result if run |
@@ -96,10 +96,10 @@ Do not work around these; they are recorded decisions or findings, not mistakes 
 | G-3 | Precedence of `CICD_BOUND_REF` across Environment, repository and organization levels is unverified (P-G13) | You check that no repository- or organization-level variable has that name ([03](03-github.md)); owner decision pending |
 | G-4 | `ci.workflowRef` form (caller `workflow_ref` vs SHA-pinned `job_workflow_ref`) and what `source.workflowRef` must resolve to is unverified | Exact equality, fail closed (`CONSISTENCY_MISMATCH`); you pin it at B2 ([03](03-github.md), section 7) |
 | G-6 | Metrics `ExecutionsSuperseded` and `DeployDurationMs` are not implemented, and `LockWaitMs` / `DispatchLatencyMs` are never emitted | Do not expect them in any evidence; NFR-05 evidence is due in Gate C |
-| G-8 | EventBridge Scheduler cannot produce a UUID `eventId`, but `RECONCILE_TICK` requires one | The reconcile schedule stays **DISABLED**; do not enable it. The B1 evidence "scheduler-originated `RECONCILE_TICK` consumed" and the B3 reconciler activity are **blocked** until the owner decides G-8 |
-| G-9 | The Executor silently skips a definition file that fails to parse (it starts without that deployment) | Always run `definitions:check` first; it reports such files |
+| G-8 | **Resolved (owner, 2026-10-06):** `RECONCILE_TICK` has a minimal internal contract without `eventId`; the Executor generates the correlation id | The schedule is created **DISABLED**; enable it deliberately in B1 after the Executor runs ([01](01-aws-sam.md), [07](07-verification.md)) |
+| G-9 | **Resolved (owner, 2026-10-06):** the Executor parses and validates every definition file at startup and refuses to start (exit 1, file and reason logged) on any problem | Run `definitions:check` first as a preflight; startup still enforces it |
 | P-G11 | The `job_workflow_ref` claim form for a SHA-pinned reusable workflow call is unverified | You record the real claim at B2. If the trust does not match, the role assumption fails **closed and silently** ([03](03-github.md)) |
-| P-G14 | Visibility of Environment values inside a called workflow is unverified | Observe at B2: confirm the account id, registry and queue URL are masked in the log |
+| P-G14 | Visibility of Environment values inside a called workflow is unverified | Observe at B2: the Environment variables reach the called job (the OIDC step uses `CICD_ROLE_ARN`); the role ARN and account id may appear (G-10) |
 | K-3 | `definitions:check` does not refuse literal migration commands with line breaks or NUL bytes | The Executor refuses them at startup instead; a green check does not guarantee startup |
 | ECR | One ECR repository parameter (`CiEcrRepositoryArn` or the probe repository) | Two units in two repositories need a second parameter (B5 follow-up) |
 | EMF | The workstation run writes EMF metrics to stdout, which is not shipped to CloudWatch | The heartbeat, rejected-sender and past-deadline alarms have no data ([05](05-run-executor-node22.md)) |

@@ -40,7 +40,7 @@ Every such command appears **only** in the kit documentation, for the owner to r
 | D-4 | **RESOLVED: Node 22** for the local Executor, via a portable/local approach; no system-wide Node change |
 | D-5 | **REFRAMED:** non-destructive SSH/`flock` validation is **owner-run probe tooling outside the production `deployScript` allowlist**. No new approved deploy script |
 
-Still open, and **not** resolved by this plan: OD-Q5 (target credentials to pull from ECR), OD-Q11 and OD-Q12 (permanent host and its credentials; Gate C), OD-N1, OD-A6 (PRMS repo; Gate C), OD-A7, OD-A8, and spec gaps G-1 to G-6, plus G-8 and G-9 found in B0 (`execution.md`, "Spec gaps found in B0").
+Still open, and **not** resolved by this plan: OD-Q5 (target credentials to pull from ECR), OD-Q11 and OD-Q12 (permanent host and its credentials; Gate C), OD-N1, OD-A6 (PRMS repo; Gate C), OD-A7, OD-A8, and spec gaps G-1 to G-6, plus G-8 and G-9 found in B0 — both **resolved by the owner on 2026-10-06** (minimal RECONCILE_TICK contract; fail-fast definition loading), together with G-10 (no GitHub secret) (`execution.md`, "Spec gaps found in B0").
 
 ---
 
@@ -66,9 +66,9 @@ Implementation tasks, each through Implementer → Leader evidence re-run → Re
 
 | Milestone | Owner does | Expected evidence (owner shares back; Claude checks) |
 |---|---|---|
-| **B1** AWS foundation | Reviews the template; runs the documented `sam deploy`; creates the Secrets Manager entries; configures the local profile that assumes the Executor role; starts the Executor under Node 22 | Stack outputs; startup log "definitions validated"; heartbeat metric; a scheduler-originated `RECONCILE_TICK` consumed (**blocked by spec gap G-8** until the owner resolves it; the schedule stays DISABLED); a negative: the Executor role cannot read an application secret |
-| **B2** GitHub OIDC → SQS → local Executor | Creates the GitHub Environment, the variables and the single Environment secret of §12; adds the caller workflow to a chosen repo and branch; triggers `workflow_dispatch` | Workflow run log (public-safe), SQS receipt in the Executor log with `senderRef`, execution QUEUED, then `FAILED (DEPLOY_WINDOW_CLOSED)` with the window closed (no SSH). Premises pinned: P-A4 SenderId form, P-G11, P-G14, G-3 (repo-level decoy variable), G-4, P-A3. Negatives: `pull_request`, `pull_request_target`, `workflow_run` cannot assume the role |
-| **B3** State, dedupe, locks | Re-runs the same workflow run; runs an older build after a newer one; lets the scheduler tick (blocked by G-8); sends a poison message (documented command) | The re-run is a **new** execution (new `requestId` = `runId-runAttempt`, same `runNumber`, not superseded; FR-23, FR-13 idempotent path) — dedupe applies to SQS redelivery of the same message, which cannot be forced from outside (corrected in B0, K-8); `SUPERSEDED` for the older; reconciler activity (**blocked by G-8**); DLQ after 5 receives + alarm |
+| **B1** AWS foundation | Reviews the template; runs the documented `sam deploy`; creates the Secrets Manager entries; configures the local profile that assumes the Executor role; starts the Executor under Node 22 | Stack outputs; startup log "definitions validated"; heartbeat metric; a scheduler-originated `RECONCILE_TICK` consumed (G-8 resolved 2026-10-06; the schedule is created DISABLED and the owner enables it in B1 once the Executor runs); a negative: the Executor role cannot read an application secret |
+| **B2** GitHub OIDC → SQS → local Executor | Creates the GitHub Environment and the five variables of §12 (no secret); adds the caller workflow to a chosen repo and branch; triggers `workflow_dispatch` | Workflow run log (public-safe), SQS receipt in the Executor log with `senderRef`, execution QUEUED, then `FAILED (DEPLOY_WINDOW_CLOSED)` with the window closed (no SSH). Premises pinned: P-A4 SenderId form, P-G11, P-G14, G-3 (repo-level decoy variable), G-4, P-A3. Negatives: `pull_request`, `pull_request_target`, `workflow_run` cannot assume the role |
+| **B3** State, dedupe, locks | Re-runs the same workflow run; runs an older build after a newer one; lets the scheduler tick (after enabling it in B1); sends a poison message (documented command) | The re-run is a **new** execution (new `requestId` = `runId-runAttempt`, same `runNumber`, not superseded; FR-23, FR-13 idempotent path) — dedupe applies to SQS redelivery of the same message, which cannot be forced from outside (corrected in B0, K-8); `SUPERSEDED` for the older; reconciler activity (G-8 resolved); DLQ after 5 receives + alarm |
 | **B4** SSH (non-destructive) | Runs `ssh-preflight`, then `target-probe.sh` on the target, then `executor-ssh-probe` | Host-key match (and a deliberate mismatch rejected), `flock` contention = busy, fresh 0700 directory, checksum, parsed `CICD_RESULT` |
 | **B5** One controlled deployment (optional; needs OD-Q5) | Fills the real deployment definition for a unit of their choice, opens a window if required, triggers the workflow | `SUCCEEDED`, Slack thread, `lastDeployed` fenced; optional forced health failure → previous image restored |
 
@@ -127,7 +127,7 @@ All tagged `Project=cicd-poc`; names derived from a `Stage` parameter (default `
 | `README.md` | The 11-step owner sequence, prerequisites, milestone map, what Claude did vs what the owner does, evidence checklist |
 | `01-aws-sam.md` | Template review guide; `sam validate --lint`; `sam deploy` with the example config (`--guided` alternative); `aws cloudformation describe-stacks` / `describe-stack-resources` inspection; drift detection; outputs to note |
 | `02-secrets.md` | Secret naming convention (`CICD_SECRET_ID_PREFIX` + ref); exact `aws secretsmanager create-secret` / `put-secret-value` commands with placeholder values; connection identity JSON shape `{host, port?, user}`; host key format; Slack token; how to verify existence with `describe-secret` |
-| `03-github.md` | Where the caller workflow goes (`.github/workflows/<name>.yml` in the owner-chosen repo); values to change; GitHub Environment creation; deployment branch rules; admin-only `CICD_BOUND_REF`; the Environment variables and the single Environment secret of §12, and their sources (stack outputs); required branch protection; the platform repository/reusable workflow visibility requirement and the pinned SHA; `workflow_dispatch` trigger; how to verify OIDC (workflow log step) and SQS submission (`aws sqs get-queue-attributes` approximate count, Executor log) |
+| `03-github.md` | Where the caller workflow goes (`.github/workflows/<name>.yml` in the owner-chosen repo); values to change; GitHub Environment creation; deployment branch rules; admin-only `CICD_BOUND_REF`; the five Environment variables of §12 (no secret), and their sources (stack outputs); required branch protection; the platform repository/reusable workflow visibility requirement and the pinned SHA; `workflow_dispatch` trigger; how to verify OIDC (workflow log step) and SQS submission (`aws sqs get-queue-attributes` approximate count, Executor log) |
 | `04-definitions-and-target.md` | Parameter table the owner fills (§7); copying the examples into the local definitions root; `npm run definitions:check`; mapping each logical ref to its secret |
 | `05-run-executor-node22.md` | Portable Node 22 (download, checksum verification, unzip into `executor/.local/node22/`, no PATH change); `npm ci` + `npm run build`; `executor.env`; AWS profile with `role_arn` + `source_profile` (no static keys); start command; expected startup output; safe stop (Ctrl+C / SIGTERM → ordered shutdown); verifying consumption (log lines, queue attributes, heartbeat metric); troubleshooting (credentials, region, missing secrets, definitions refused, Node version, clock skew, proxy) |
 | `06-target-validation.md` | Owner-run SSH preflight, `target-probe.sh`, `executor-ssh-probe`; expected outputs; what must be true before B5 |
@@ -177,7 +177,7 @@ All tagged `Project=cicd-poc`; names derived from a `Stage` parameter (default `
 6. Download and verify the portable Node 22; `npm ci`, `npm run build`.
 7. Fill `executor.env` and the local definitions root; run `npm run definitions:check`.
 8. Start the Executor locally; verify startup, heartbeat and queue consumption.
-9. In the chosen GitHub repository: create the Environment, deployment branch rules, admin-only `CICD_BOUND_REF`, the Environment variables and the single secret (§12); add the caller workflow to the chosen branch.
+9. In the chosen GitHub repository: create the Environment, deployment branch rules, admin-only `CICD_BOUND_REF`, the five Environment variables (no secret, §12); add the caller workflow to the chosen branch.
 10. Trigger the workflow with `workflow_dispatch`; observe OIDC, SQS submission and the Executor log.
 11. Run the documented negative checks (untrusted triggers, wrong sender, poison message).
 12. Enable the reconcile schedule when ready.
@@ -215,15 +215,15 @@ Until the owner reports checkpoint B, its status is **NOT EXECUTED**.
 
 | Value | Class | Rationale |
 |---|---|---|
-| `CICD_ROLE_ARN` | **Environment secret** | Not a credential, but it embeds the AWS account ID and is printed as an action input; a secret is the only way GitHub masks it in public logs (P-G8, DD-23) |
+| `CICD_ROLE_ARN` | Environment variable | **Not a secret (owner, 2026-10-06, G-10):** not a credential; access is controlled by the OIDC trust. It and the account ID may appear in public logs |
 | `CICD_AWS_REGION` | Environment variable | Non-sensitive |
 | `CICD_ECR_REPOSITORY` (repository name only) | Environment variable | Non-sensitive; no account ID |
 | `CICD_DEPLOY_QUEUE_NAME` (queue name only) | Environment variable | Non-sensitive; the URL is derived |
 | `CICD_BOUND_REF` | Environment variable (admin-only) | Trusted bound ref (E1, P-G13) |
-| ECR registry host | **Derived** after OIDC (registry login output) | Contains the account ID; masked before use |
-| Queue URL | **Derived** after OIDC (`sqs:GetQueueUrl` on the deploy queue only) | Contains the account ID; masked before use |
-| AWS account ID | **Derived** after OIDC (`sts:GetCallerIdentity`) and masked immediately | Never stored in GitHub |
+| ECR registry host | **Derived** after OIDC (registry login output) | Not stored in GitHub |
+| Queue URL | **Derived** after OIDC (`sqs:GetQueueUrl` on the deploy queue only) | Not stored in GitHub |
+| AWS account ID | Part of the role ARN variable | Not a credential; may appear in logs |
 | GitHub Environment name, deployment branch rules, branch protection, (prod) required reviewers | Repository/Environment configuration | Not values |
 | `deploymentId`, `environment`, `units` | Caller workflow inputs | Non-sensitive, in the caller file |
 
-**No AWS access key or secret access key is stored anywhere.** This replaces the earlier "five Environment secrets" model (DD-24 text amended under owner direction; the reusable workflow, its contract test and the CI role's `sqs:GetQueueUrl` permission change accordingly in K-1/K-5).
+**The GitHub configuration contains no secret and no AWS credential; AWS authentication is OIDC only (G-10, 2026-10-06).** This replaces the earlier "five Environment secrets" model (DD-24 text amended under owner direction; the reusable workflow, its contract test and the CI role's `sqs:GetQueueUrl` permission change accordingly in K-1/K-5).

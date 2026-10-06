@@ -10,7 +10,7 @@
 |---|---|
 | Spec Path | `changes/cicd-executor-poc` |
 | Phase | Phase 1: Requirements |
-| Version | **v3.6** (owner direction, Gate B approval 2026-10-06: FR-22 "public-safe logs" follows the DD-24 v4.6 GitHub value classification). v3.5 (Gate A closure editorial sync, no new decision). v3.4 (owner approval 2026-10-06; aligned with `proposal.md` v3.4) |
+| Version | **v3.7** (owner direction, B0 acceptance 2026-10-06: FR-22 "public-safe logs" and NFR-02 — no GitHub secret, role ARN and account ID owner-accepted in CI logs (G-10); RECONCILE_TICK minimal internal contract (G-8); fail-fast definition loading at startup (G-9)). v3.6 (owner direction, Gate B approval 2026-10-06: FR-22 "public-safe logs" follows the DD-24 v4.6 GitHub value classification). v3.5 (Gate A closure editorial sync, no new decision). v3.4 (owner approval 2026-10-06; aligned with `proposal.md` v3.4) |
 | Depth | **Full** (new infrastructure, trust boundary, concurrency, deployment and migrations) |
 | Type | Change |
 | Approval Mode | `gated` (inherited from the proposal) |
@@ -174,6 +174,12 @@ The system SHALL determine each deployment's behavior exclusively from a version
 - THEN it is rejected with an error that names the field and the violated rule
 - BUT it must NOT allow any execution for that `deploymentId`
 - AND IT MUST reject any expression, interpolation, loop or embedded script
+
+#### Scenario: unparsable or incomplete definition file at startup (G-9, owner direction 2026-10-06)
+- GIVEN the Executor starting with a definitions root where any file under `deployment-definitions/` cannot be parsed, lacks a `deploymentId`, duplicates another file's `deploymentId`, or fails validation
+- WHEN the Executor discovers, parses and validates **all** definition files at startup
+- THEN it logs a safe error naming each affected file and the reason (never the file content) and terminates startup with a non-zero exit code
+- BUT it must NOT ignore the file silently and must NOT start with a partially valid definition set (the offline `definitions:check` is a preflight, not a substitute)
 
 #### Scenario: sender reference
 - GIVEN a definition
@@ -608,8 +614,8 @@ The reusable workflow SHALL be the only producer of deploy requests in the norma
 
 #### Scenario: public-safe logs
 - GIVEN the run's logs and workflow file (treated as public, P-A7)
-- THEN the role ARN comes only from a GitHub Environment **secret**; the registry host, the queue URL and the account ID are **derived after OIDC** and masked (`::add-mask::`) before first use; the account segment of the role ARN is masked before the OIDC step (owner direction, 2026-10-06, v3.6; design DD-24 v4.6)
-- BUT no value that embeds the account ID may come from a configuration variable, which renders unmasked in logs (P-G8); only non-sensitive values (region, repository name, queue name, bound ref) are variables
+- THEN no credential and no AWS authentication secret appears in the workflow, its configuration or its logs: AWS access is OIDC only; the role ARN, region, repository name, queue name and bound ref are Environment variables, and the registry host and queue URL are derived after OIDC (owner direction, 2026-10-06, v3.7; design DD-24 v4.7)
+- BUT the role ARN and the AWS account ID MAY appear in logs (owner-accepted: neither is a credential), and no AWS access key or secret access key may exist anywhere
 
 #### Scenario: requestId derivation
 - GIVEN a successful run
@@ -769,7 +775,7 @@ The infrastructure SHALL restrict who can obtain AWS credentials from GitHub and
 | ID | Requirement | Measure / verification |
 |---|---|---|
 | **NFR-01 Executor boundary** | The Executor MUST NOT: clone or fetch source, hold git or a GitHub credential; install dependencies, compile, test or build images; invoke, orchestrate or correlate CI (no Lambda, CodeBuild or CI callbacks in the normal path); run scripts from application repos; connect to application databases; read application secrets; contain per-project or per-application code branches; interpret expressions, loops or embedded scripts; host the Docker daemon or socket | Image inspection (no toolchains, no git, no socket); IAM review (no S3, Lambda, CodeBuild, GitHub rights); boundary guards: project identifiers in Executor code = 0; schema rejects expressions |
-| **NFR-02 Security** | No secrets in requests, definitions, registry, the Executor image or logs; no internal identifiers in public CI logs. Least privilege per component, repository and environment. CI credentials short-lived (OIDC). Executor AWS credentials temporary or explicitly justified (OD-Q12). Pinned host key. SSH credential in memory only | Scans of image, logs and a CI run log; IAM review; FR-25 checks |
+| **NFR-02 Security** | No secrets in requests, definitions, registry, the Executor image or logs; no internal identifiers in public CI logs (exception, G-10: the CI role ARN and the AWS account ID are owner-accepted in CI logs (G-10, design DD-24 v4.7); hosts, IPs, credential IDs, credentials and secret values stay forbidden). Least privilege per component, repository and environment. CI credentials short-lived (OIDC). Executor AWS credentials temporary or explicitly justified (OD-Q12). Pinned host key. SSH credential in memory only | Scans of image, logs and a CI run log; IAM review; FR-25 checks |
 | **NFR-03 Reliability** | Correctness under at-least-once delivery, out-of-order delivery and restarts. No duplicate deploys. Locks recoverable without intervention | Duplicate, concurrency and kill tests |
 | **NFR-04 Resource footprint** | Container with CPU and memory limits; no working-disk volume. Concurrent SSH sessions bounded and configurable | Container configuration review |
 | **NFR-05 Coordination latency** | From a valid request becoming visible in the queue to the script starting, when the lock is free and the window open: ≤ 60 s | p95 over ≥ 10 executions; if the spread exceeds the threshold, it is reported, not taken as evidence |
@@ -794,7 +800,7 @@ Name the defect class, then the gate. Gates A–D are the proposal's (§18).
 | **Unauthorized sender accepted** | Tests with simulated sender identities | A (logic only); **B** (real `SenderId` format, P-A4, and real foreign role) | — |
 | **Trust-boundary misconfiguration (OIDC / IAM / queue policy)** | (1) **Static policy check** of the trust and permission documents: exact `sub`, no `pull_request`, no wildcard, scoped ECR and SQS actions. (2) **Negative tests:** `pull_request`, `pull_request_target` and `workflow_run` runs, and a job outside the pinned reusable workflow, cannot assume the CI role or send; a role without binding cannot send. (3) Subject template content and opt-out state checked | (1) A, on the documents in `infra/` (only if they are written as concrete policies; their application is B). (2) **C only** (N-32): needs the real GitHub repo, Environment and AWS account | GitHub Environment branch rules and branch protection: **no automatic gate**; human inspection of repository settings by a repo admin at Gate C, before the first real run |
 | CI workflow violates the contract (sends on failure, sends twice, no digest, deploy logic) | Static validation of the workflow files | A (static); C (first real run, N-32) | Review of the caller in the application repo (OD-A6) |
-| Internal identifiers in public CI logs | Scan of a real run log for account ID, ARNs, hosts | **C** (N-32) | Human review of the first runs |
+| Internal identifiers in public CI logs | Scan of a real run log for hosts, IPs, credential IDs, credentials and secret values (the CI role ARN and account ID are expected, G-10) | **C** (N-32) | Human review of the first runs |
 | Invalid definition or registry accepted | Validation tests with negative cases | A | — |
 | Type error in contracts | Type-check / build | A | — |
 | Secret leaked into image, definitions or logs | Automated scan | A (image, definitions); C (E2E logs) | Human review of the scan at the E2E HITL |
