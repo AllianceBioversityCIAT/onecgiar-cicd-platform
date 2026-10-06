@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { repoRoot } from "../contract/support/schema-paths.js";
 import { runDockerfileBoundaryGuard } from "../../scripts/guards/dockerfile-boundary.mjs";
 import { scanForProjectIdentifiers, runProjectIdentifiersGuard } from "../../scripts/guards/project-identifiers.mjs";
-import { runPipelineSchemaExpressionGuard } from "../../scripts/guards/pipeline-schema-expressions.mjs";
+import { runPipelineSchemaExpressionGuard } from "../../scripts/guards/deployment-schema-expressions.mjs";
 import { runPublicationPolicyGuard } from "../../scripts/guards/publication-policy.mjs";
 import { runLocalAnalysisFilesGuard } from "../../scripts/guards/local-analysis-files.mjs";
 import { runExtensibilityFixtureGuard } from "../../scripts/guards/extensibility-fixture.mjs";

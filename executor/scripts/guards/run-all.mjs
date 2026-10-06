@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runDockerfileBoundaryGuard } from "./dockerfile-boundary.mjs";
 import { runProjectIdentifiersGuard } from "./project-identifiers.mjs";
-import { runPipelineSchemaExpressionGuard } from "./pipeline-schema-expressions.mjs";
+import { runPipelineSchemaExpressionGuard } from "./deployment-schema-expressions.mjs";
 import { runPublicationPolicyGuard } from "./publication-policy.mjs";
 import { runLocalAnalysisFilesGuard } from "./local-analysis-files.mjs";
 import { runExtensibilityFixtureGuard } from "./extensibility-fixture.mjs";
