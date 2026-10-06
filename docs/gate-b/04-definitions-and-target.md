@@ -63,7 +63,7 @@ This needs Node and a build (see [05](05-run-executor-node22.md) for the portabl
 
 Expected: `OK <deployment id>` per deployment, then `definitions:check passed (N deployment(s))`, exit 0.
 
-**Stop if** it prints `FAIL` for any file or reports zero deployments. A definition file that cannot be parsed is reported here by file, parser code and position; the Executor would instead start **without** that deployment (gap G-9), so never skip this step.
+**Stop if** it prints `FAIL` for any file or reports zero deployments. A definition file that cannot be parsed is reported here by file, parser code and position. The Executor itself refuses to start (exit code 1, the affected file and reason on stderr) if ANY definition file cannot be parsed or validated: it never starts with a partially valid definition set. This check is the preflight; it does not replace the startup validation.
 
 Limitation: the check does not refuse a literal migration command containing line breaks or NUL bytes; the Executor refuses it at startup. A green check does not guarantee startup.
 

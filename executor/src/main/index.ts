@@ -5,9 +5,10 @@
 // and the exit code. Shutdown order on SIGTERM/SIGINT: stop the consumer, wait
 // for in-flight work, flush logs (design §12; NFR-04).
 import { createSecretsManagerClient, SecretsManagerSecretProvider } from "../adapters/secrets-manager-provider/index.js";
-import { ConfigError, loadConfig } from "../composition/config.js";
+import { loadConfig } from "../composition/config.js";
 import type { SecretProvider } from "../ports/secret-provider.js";
 import { bootstrap } from "./bootstrap.js";
+import { describeStartupFailure } from "./definition-diagnosis.js";
 
 /**
  * The Executor's own operational secrets come from Secrets Manager through the SDK default credential chain
@@ -24,8 +25,8 @@ async function run(): Promise<number> {
   try {
     executor = await bootstrap({ env: process.env, secrets: createRuntimeSecretProvider(process.env) });
   } catch (error) {
-    const message = error instanceof ConfigError ? error.message : error instanceof Error ? error.message : String(error);
-    process.stderr.write(`executor refused to start: ${message}\n`);
+    // Definition problems are listed one file per line (owner decision 2026-10-06: no partially valid definition set).
+    process.stderr.write(`${describeStartupFailure(error).join("\n")}\n`);
     return 1;
   }
   const shutdown = (): void => {

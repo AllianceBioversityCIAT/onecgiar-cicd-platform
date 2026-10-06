@@ -31,6 +31,28 @@ export class DefinitionSourceError extends Error {
   }
 }
 
+/** Relative path (from the definitions root) of the target registry: the only definition file allowed to carry no `deploymentId`. */
+export const TARGET_REGISTRY_RELATIVE_PATH = path.join("deployment-definitions", "targets", "dev.yaml");
+
+/** One unusable definition file: its path relative to the definitions root and a reason that never echoes file content. */
+export interface DefinitionProblem {
+  readonly file: string;
+  readonly reason: string;
+}
+
+export interface DefinitionScan {
+  readonly deployments: readonly { readonly deploymentId: string; readonly file: string }[];
+  readonly problems: readonly DefinitionProblem[];
+}
+
+/** Thrown when the definition set is not fully loadable: carries EVERY problem at once (fail fast, owner decision 2026-10-06). */
+export class DefinitionLoadError extends DefinitionSourceError {
+  constructor(readonly problems: readonly DefinitionProblem[]) {
+    super(`refusing to start: ${problems.length} definition file(s) cannot be loaded: ${problems.map((p) => `${p.file}: ${p.reason}`).join("; ")}`);
+    this.name = "DefinitionLoadError";
+  }
+}
+
 export interface BundledDefinitionSourceOptions {
   /** Override the computed repo root (tests only). Takes priority over CICD_DEFINITIONS_ROOT and the walk-up. */
   readonly repoRoot?: string;
@@ -91,27 +113,38 @@ function resolveDefinitionRef(env: NodeJS.ProcessEnv, requireInjectedRef: boolea
   return DEV_FALLBACK_DEFINITION_REF;
 }
 
-async function listYamlFilesRecursively(dir: string): Promise<string[]> {
-  const entries = await readdir(dir, { withFileTypes: true });
-  const out: string[] = [];
+/**
+ * Strict walk of `deployment-definitions/` (trusted configuration, owner decision 2026-10-06): every entry must be a
+ * regular directory or a regular file named `*.yaml` / `*.yml` (lowercase). Anything else is reported as a problem
+ * instead of being skipped, so no definition can be silently ignored. Paths in problems are relative to `rootDir`.
+ */
+async function walkDefinitions(dir: string, rootDir: string, files: string[], problems: DefinitionProblem[]): Promise<void> {
+  const entries = (await readdir(dir, { withFileTypes: true })).sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      out.push(...(await listYamlFilesRecursively(full)));
-    } else if (entry.isFile() && (entry.name.endsWith(".yaml") || entry.name.endsWith(".yml"))) {
-      out.push(full);
-    }
+    const file = path.relative(rootDir, full);
+    if (entry.isSymbolicLink()) problems.push({ file, reason: "unsupported entry type (symbolic link)" });
+    else if (entry.isDirectory()) await walkDefinitions(full, rootDir, files, problems);
+    else if (!entry.isFile()) problems.push({ file, reason: "unsupported entry type" });
+    else if (entry.name.endsWith(".yaml") || entry.name.endsWith(".yml")) files.push(full);
+    else if (/\.ya?ml$/i.test(entry.name)) problems.push({ file, reason: "definition files must use the lowercase .yaml or .yml extension" });
+    else problems.push({ file, reason: "unexpected file in deployment-definitions/ (only .yaml/.yml definition files are allowed)" });
   }
-  return out;
+}
+
+async function listYamlFilesRecursively(dir: string): Promise<string[]> {
+  const files: string[] = [];
+  await walkDefinitions(dir, path.dirname(dir), files, []);
+  return files;
 }
 
 /**
  * Finds the file declaring `deploymentId` by scanning `deployment-definitions/`
  * and reading each YAML file's own `deploymentId` field — NOT by assuming any
  * per-project directory convention (NFR-01: no per-project logic in the
- * Executor). A file that fails to parse, or has no matching `deploymentId`,
- * is silently skipped (e.g. `deployment-definitions/targets/dev.yaml`, which
- * has no `deploymentId` field at all).
+ * Executor). Non-matching files are skipped HERE only because
+ * `listDeploymentIds` (run at startup) already rejects any unparsable or
+ * id-less definition file, so no invalid file reaches this lookup.
  */
 async function findDeploymentDefinitionPath(deploymentDefinitionsDir: string, deploymentId: string): Promise<string> {
   const files = await listYamlFilesRecursively(deploymentDefinitionsDir);
@@ -163,28 +196,66 @@ export class BundledDefinitionSource implements DefinitionSource {
   }
 
   /**
-   * Every `deploymentId` declared under `deployment-definitions/` (files without one, such as the target registry, are skipped).
-   * Startup validates ALL of them (design §6.2); this enumeration is a property of this adapter, not of the `DefinitionSource` port.
+   * Parses EVERY yaml file under `deployment-definitions/` and reports all problems at once (it does not throw for content problems).
+   * Used by `listDeploymentIds` (which fails fast) and by the offline `definitions:check` preflight.
    */
-  async listDeploymentIds(): Promise<string[]> {
-    const files = await listYamlFilesRecursively(path.join(this.repoRoot, "deployment-definitions"));
-    const ids: string[] = [];
+  async scanDefinitions(): Promise<DefinitionScan> {
+    const found: string[] = [];
+    const problems: DefinitionProblem[] = [];
+    await walkDefinitions(path.join(this.repoRoot, "deployment-definitions"), this.repoRoot, found, problems);
+    const files = found.sort();
+    const deployments: { deploymentId: string; file: string }[] = [];
+    const seen = new Map<string, string>();
     for (const filePath of files) {
+      const file = path.relative(this.repoRoot, filePath);
+      let text: string;
+      try {
+        text = await readFile(filePath, "utf8");
+      } catch (error) {
+        const code = (error as { code?: unknown }).code;
+        problems.push({ file, reason: `cannot read file${typeof code === "string" ? ` (${code})` : ""}` });
+        continue;
+      }
       let parsed: unknown;
       try {
-        parsed = parseYaml(await readFile(filePath, "utf8"));
-      } catch {
+        parsed = parseYaml(text);
+      } catch (error) {
+        // Only the parser's code and position: the message of a YAML error quotes file content.
+        const e = error as { code?: unknown; linePos?: readonly { line: number; col: number }[] };
+        const pos = e.linePos?.[0];
+        problems.push({ file, reason: `YAML parse error${typeof e.code === "string" ? ` (${e.code})` : ""}${pos ? ` at line ${pos.line}, column ${pos.col}` : ""}` });
         continue;
       }
       const id = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>).deploymentId : undefined;
-      if (typeof id === "string") ids.push(id);
+      if (typeof id === "string") {
+        const first = seen.get(id);
+        if (first !== undefined) {
+          problems.push({ file, reason: `duplicate deploymentId "${id}", already declared in ${first} (DD-27: one definition per deploymentId)` });
+          continue;
+        }
+        seen.set(id, file);
+        deployments.push({ deploymentId: id, file });
+      } else if (file !== TARGET_REGISTRY_RELATIVE_PATH) {
+        problems.push({ file, reason: `parsed, but declares no string deploymentId and is not the target registry (${TARGET_REGISTRY_RELATIVE_PATH})` });
+      }
     }
-    return ids.sort();
+    return { deployments, problems };
+  }
+
+  /**
+   * Every `deploymentId` declared under `deployment-definitions/`. Fails fast (owner decision 2026-10-06): a file that cannot be
+   * parsed, a non-registry file without a `deploymentId` or a duplicate id throws a `DefinitionLoadError` listing ALL problems.
+   * Startup validates ALL of the ids (design §6.2); this enumeration is a property of this adapter, not of the `DefinitionSource` port.
+   */
+  async listDeploymentIds(): Promise<string[]> {
+    const { deployments, problems } = await this.scanDefinitions();
+    if (problems.length > 0) throw new DefinitionLoadError(problems);
+    return deployments.map((d) => d.deploymentId).sort();
   }
 
   async getTargetRegistry(): Promise<DefinitionContent> {
     // NFR-09: the PoC is DEV-only — a single registry file, no per-environment selection logic.
-    const filePath = path.join(this.repoRoot, "deployment-definitions", "targets", "dev.yaml");
+    const filePath = path.join(this.repoRoot, TARGET_REGISTRY_RELATIVE_PATH);
     if (!existsSync(filePath)) {
       throw new DefinitionSourceError(`target registry not found at ${filePath}`);
     }

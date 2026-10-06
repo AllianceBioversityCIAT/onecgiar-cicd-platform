@@ -8,10 +8,11 @@
 // otherwise.
 import os from "node:os";
 import path from "node:path";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   BundledDefinitionSource,
+  DefinitionLoadError,
   DefinitionSourceError,
   DEV_FALLBACK_DEFINITION_REF,
   findRepoRoot,
@@ -143,5 +144,95 @@ describe("BundledDefinitionSource", () => {
       const { content } = await source.getTargetRegistry();
       expect(content).toContain("prms-reporting-dev:");
     });
+  });
+});
+
+describe("BundledDefinitionSource.listDeploymentIds fails fast on any unusable definition file (owner decision 2026-10-06)", () => {
+  const VALID = "deploymentId: valid-deployment\n";
+  function rootWith(files: Record<string, string>): string {
+    const root = mkdtempSync(path.join(os.tmpdir(), "cicd-failfast-"));
+    mkdirSync(path.join(root, "schemas"));
+    for (const [rel, content] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(root, "deployment-definitions", rel)), { recursive: true });
+      writeFileSync(path.join(root, "deployment-definitions", rel), content);
+    }
+    return root;
+  }
+  const sourceOf = (root: string): BundledDefinitionSource => new BundledDefinitionSource({ repoRoot: root, env: {} });
+
+  it("lists the ids (sorted) when every file is valid and the registry carries no deploymentId", async () => {
+    const root = rootWith({ "b.yaml": "deploymentId: zeta\n", "a/x.yml": "deploymentId: alpha\n", "targets/dev.yaml": "targets: {}\n" });
+    expect(await sourceOf(root).listDeploymentIds()).toEqual(["alpha", "zeta"]);
+  });
+
+  it("rejects an unparsable file next to a valid one, naming the file and position and never echoing its content", async () => {
+    const root = rootWith({ "ok.yaml": VALID, "prms/broken.yaml": "key: [unclosed\n  sentinel-content-xyz: {\n" });
+    const error = (await sourceOf(root).listDeploymentIds().catch((e: unknown) => e)) as DefinitionLoadError;
+    expect(error).toBeInstanceOf(DefinitionLoadError);
+    expect(error.problems).toHaveLength(1);
+    expect(error.problems[0]!.file).toBe(path.join("deployment-definitions", "prms", "broken.yaml"));
+    expect(error.problems[0]!.reason).toMatch(/YAML parse error \(\w+\) at line \d+, column \d+/);
+    expect(error.message).not.toContain("sentinel-content-xyz");
+  });
+
+  it("rejects an unparsable target registry", async () => {
+    const root = rootWith({ "ok.yaml": VALID, "targets/dev.yaml": "a: [\n" });
+    await expect(sourceOf(root).listDeploymentIds()).rejects.toThrow(/targets[\\/]dev\.yaml: YAML parse error/);
+  });
+
+  it("rejects a non-registry file without a string deploymentId", async () => {
+    const root = rootWith({ "ok.yaml": VALID, "stray.yaml": "foo: bar\n", "numeric.yaml": "deploymentId: 7\n" });
+    const error = (await sourceOf(root).listDeploymentIds().catch((e: unknown) => e)) as DefinitionLoadError;
+    expect(error.problems.map((p) => p.file)).toEqual([
+      path.join("deployment-definitions", "numeric.yaml"),
+      path.join("deployment-definitions", "stray.yaml"),
+    ]);
+    expect(error.problems[0]!.reason).toContain("no string deploymentId");
+  });
+
+  it("rejects a duplicate deploymentId across files", async () => {
+    const root = rootWith({ "a.yaml": VALID, "b.yaml": VALID });
+    const error = (await sourceOf(root).listDeploymentIds().catch((e: unknown) => e)) as DefinitionLoadError;
+    expect(error.problems).toEqual([{ file: path.join("deployment-definitions", "b.yaml"), reason: expect.stringContaining('duplicate deploymentId "valid-deployment"') }]);
+  });
+
+  describe("strict entry types under deployment-definitions/", () => {
+    const reasonsOf = async (root: string) => ((await sourceOf(root).listDeploymentIds().catch((e: unknown) => e)) as DefinitionLoadError).problems;
+
+    it("rejects a wrong-case extension", async () => {
+      const root = rootWith({ "ok.yaml": VALID, "Upper.YAML": VALID, "Mixed.Yml": VALID });
+      const problems = await reasonsOf(root);
+      expect(problems.map((p) => p.file).sort()).toEqual([path.join("deployment-definitions", "Mixed.Yml"), path.join("deployment-definitions", "Upper.YAML")].sort());
+      expect(problems.every((p) => p.reason === "definition files must use the lowercase .yaml or .yml extension")).toBe(true);
+    });
+
+    it("rejects any other file (README.md, x.yaml.bak, x.json)", async () => {
+      const root = rootWith({ "ok.yaml": VALID, "README.md": "# hi\n", "x.yaml.bak": VALID, "x.json": "{}" });
+      const problems = await reasonsOf(root);
+      expect(problems).toHaveLength(3);
+      expect(problems.every((p) => p.reason.startsWith("unexpected file in deployment-definitions/"))).toBe(true);
+    });
+
+    it("rejects a symbolic link to a file and to a directory", async () => {
+      const root = rootWith({ "ok.yaml": VALID, "real/inner.yaml": "deploymentId: inner\n" });
+      const base = path.join(root, "deployment-definitions");
+      try {
+        symlinkSync(path.join(base, "ok.yaml"), path.join(base, "link.yaml"), "file");
+        symlinkSync(path.join(base, "real"), path.join(base, "linkdir"), "junction");
+      } catch (error) {
+        // Only when the OS cannot create a symlink (e.g. Windows without the privilege).
+        console.warn(`symlink test skipped: ${(error as { code?: string }).code}`);
+        return;
+      }
+      const problems = await reasonsOf(root);
+      expect(problems.map((p) => p.file).sort()).toEqual([path.join("deployment-definitions", "link.yaml"), path.join("deployment-definitions", "linkdir")].sort());
+      expect(problems.every((p) => p.reason === "unsupported entry type (symbolic link)")).toBe(true);
+    });
+  });
+
+  it("reports ALL problems at once", async () => {
+    const root = rootWith({ "ok.yaml": VALID, "bad1.yaml": "a: [\n", "bad2.yaml": "foo: bar\n", "dup.yaml": VALID });
+    const error = (await sourceOf(root).listDeploymentIds().catch((e: unknown) => e)) as DefinitionLoadError;
+    expect(error.problems).toHaveLength(3);
   });
 });

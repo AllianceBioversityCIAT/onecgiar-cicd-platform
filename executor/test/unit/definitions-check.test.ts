@@ -84,6 +84,21 @@ describe("definitions:check", () => {
     expect(r.out.join("\n")).toContain(path.join("deployment-definitions", "prms", "stray.yaml"));
   });
 
+  it("names BOTH files when two deployments share the same invalid targetRef (no cross-file dedupe)", async () => {
+    const dir = copyDefinitions();
+    const first = path.join(dir, "deployment-definitions", "prms", "reporting-dev.yaml");
+    const second = path.join(dir, "deployment-definitions", "prms", "second.yaml");
+    const text = readFileSync(first, "utf8");
+    writeFileSync(first, text.replace(/^targetRef:.*$/m, "targetRef: unknown-target"));
+    writeFileSync(second, text.replace(/^targetRef:.*$/m, "targetRef: unknown-target").replace(/^deploymentId:.*$/m, "deploymentId: second-dev"));
+    const r = await run(["--root", dir]);
+    expect(r.code).toBe(1);
+    const output = r.out.join("\n");
+    expect(output).toContain(`${path.join("deployment-definitions", "prms", "reporting-dev.yaml")}: targetRef`);
+    expect(output).toContain(`${path.join("deployment-definitions", "prms", "second.yaml")}: targetRef`);
+    expect(output).not.toContain("OK second-dev");
+  });
+
   it("fails (exit 1) when there are zero deployments", async () => {
     const dir = copyDefinitions();
     rmSync(path.join(dir, "deployment-definitions", "prms"), { recursive: true });

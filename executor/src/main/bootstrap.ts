@@ -3,8 +3,10 @@
 // order of design §4.2. Pure wiring: every business rule lives in the module
 // it names. Order matters:
 //   1. configuration (fail fast, all problems at once);
-//   2. `validateForStartup` over EVERY bundled deployment definition: an
-//      invalid set prevents startup (design §6.2, DD-23). Definitions are
+//   2. every definition file is discovered, parsed (`listDeploymentIds` throws
+//      a `DefinitionLoadError` naming each bad file) and `validateForStartup`
+//      runs over EVERY bundled deployment definition: a partially valid set
+//      prevents startup (design §6.2, DD-23; owner decision 2026-10-06). Definitions are
 //      served to the core ONLY from that validated result (`StartupCatalog`);
 //   3. adapters and services, the consumer last (nothing is read from the
 //      queue before everything it can reach is wired).
@@ -33,7 +35,7 @@ import { createSqsQueuePublisher } from "../adapters/sqs-publisher/index.js";
 import { Ssh2DeployTransport } from "../adapters/ssh-deployer/index.js";
 import { createDeployCoordinator, DEFAULT_SSH_CONCURRENCY, Semaphore } from "../application/deploy-coordinator/index.js";
 import { DeployWindowService, TargetResolutionService } from "../application/deploy-window-service/index.js";
-import { validateForStartup, UnresolvedReferenceError } from "../application/definition-service/index.js";
+import { DefinitionValidationError, validateForStartup, UnresolvedReferenceError } from "../application/definition-service/index.js";
 import { createExecutionService } from "../application/execution-service/index.js";
 import { createMessageValidators, routeMessage } from "../application/message-router/index.js";
 import { createNotificationService } from "../application/notification-service/index.js";
@@ -57,6 +59,7 @@ import type { DeployTransport } from "../ports/deploy-transport.js";
 import type { NotificationProvider } from "../ports/notification-provider.js";
 import type { QueuePublisher } from "../ports/queue-publisher.js";
 import type { SecretProvider } from "../ports/secret-provider.js";
+import { attributeToFiles } from "./definition-diagnosis.js";
 import { createStartupCatalog } from "../composition/catalog.js";
 import {
   createExecutionLookup,
@@ -73,7 +76,12 @@ import { createPendingTasks } from "../composition/pending-tasks.js";
 import { createPlanResolver, verifyPlansAtStartup } from "../composition/plan-resolver.js";
 
 /** A `DefinitionSource` that can also enumerate the deployment ids it bundles (a property of the adapter, not of the port). */
-export type EnumerableDefinitionSource = DefinitionSource & { listDeploymentIds(): Promise<readonly string[]> };
+export type EnumerableDefinitionSource = DefinitionSource & {
+  /** Fails fast (a `DefinitionLoadError`) when any definition file cannot be loaded (owner decision 2026-10-06). */
+  listDeploymentIds(): Promise<readonly string[]>;
+  /** Optional: which file declares each deployment (used only to name the file in a startup validation error). */
+  scanDefinitions?(): Promise<{ readonly deployments: readonly { readonly deploymentId: string; readonly file: string }[] }>;
+};
 
 /** The queue consumer seam: production is `createSqsConsumer`; the composition test substitutes an in-memory queue. */
 export interface ConsumerHandle {
@@ -138,7 +146,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
     options.definitions ?? new BundledDefinitionSource({ env: { ...options.env, ...(config.definitionsRoot === undefined ? {} : { CICD_DEFINITIONS_ROOT: config.definitionsRoot }) } });
   const deploymentIds = await definitions.listDeploymentIds();
   if (deploymentIds.length === 0) throw new Error("refusing to start: no deployment definitions were found (design §6.2)");
-  const startup = await validateForStartup({ definitionSource: definitions, secretProvider: secrets, principalRefs: config.principalRefs }, deploymentIds);
+  let startup;
+  try {
+    startup = await validateForStartup({ definitionSource: definitions, secretProvider: secrets, principalRefs: config.principalRefs }, deploymentIds);
+  } catch (error) {
+    if (!(error instanceof DefinitionValidationError) || definitions.scanDefinitions === undefined) throw error;
+    const scan = await definitions.scanDefinitions();
+    throw await attributeToFiles(definitions, new Map(scan.deployments.map((d) => [d.deploymentId, d.file])), error);
+  }
   for (const ref of [config.platformSlack.channelRef, config.platformSlack.tokenRef]) {
     if (!(await secrets.exists(ref))) throw new UnresolvedReferenceError(ref);
   }
