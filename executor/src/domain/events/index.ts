@@ -16,7 +16,6 @@
 // ORPHAN_EVENT (that needs the current attempt's state, which lives in
 // StateStore — application/event-router's job, design §6.1 "Orphan
 // events").
-import type { DomainErrorCode } from "../errors/index.js";
 
 // ---------------------------------------------------------------------------
 // Envelope shape (design §6.1 table), transcribed as TypeScript types for
@@ -240,7 +239,7 @@ export function normalizeLambdaDestinationsRecord(record: LambdaDestinationsReco
     if (success.logUrl !== undefined) payload.logUrl = success.logUrl;
 
     const isPassed = success.status === "PASSED";
-    if (!isPassed) payload.failureCode = "QUALITY" satisfies DomainErrorCode;
+    if (!isPassed) payload.failureCode = "QUALITY";
 
     return {
       eventId: record.requestContext.requestId,
@@ -262,7 +261,7 @@ export function normalizeLambdaDestinationsRecord(record: LambdaDestinationsReco
   const payload: Record<string, unknown> = {};
   if (errorPayload.errorMessage !== undefined) payload.error = errorPayload.errorMessage;
   if (errorPayload.errorType !== undefined) payload.errorType = errorPayload.errorType;
-  if (!timedOut) payload.failureCode = "INFRA" satisfies DomainErrorCode;
+  if (!timedOut) payload.failureCode = "INFRA";
 
   return {
     eventId: record.requestContext.requestId,
@@ -374,7 +373,7 @@ export function normalizeCodeBuildStateChangeEvent(event: CodeBuildStateChangeEv
     if (imageUri !== undefined) payload.imageUri = imageUri;
     if (digest !== undefined) payload.digest = digest;
   } else if (eventType === "BUILD_FAILED") {
-    payload.failureCode = "BUILD" satisfies DomainErrorCode;
+    payload.failureCode = "BUILD";
   }
 
   return {

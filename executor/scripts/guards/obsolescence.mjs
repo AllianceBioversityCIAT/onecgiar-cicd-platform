@@ -32,9 +32,9 @@ export const OBSOLESCENCE_ENTRIES = [
   { path: "executor/src/ports/artifact-store.ts", status: "DELETED" },
   { path: "executor/src/ports/git-client.ts", status: "DELETED" },
   { path: "executor/src/application/step-dispatcher", status: "DELETED" },
+  { path: "executor/src/domain/planner", status: "DELETED" },
+  { path: "executor/test/unit/planner.test.ts", status: "DELETED" },
   // PENDING (still imported; owner task removes them)
-  { path: "executor/src/domain/planner", status: "PENDING", owner: "N-04" },
-  { path: "executor/test/unit/planner.test.ts", status: "PENDING", owner: "N-04" },
   { path: "schemas/pipeline.schema.json", status: "PENDING", owner: "N-03" },
   { path: "pipeline-definitions", status: "PENDING", owner: "N-03" },
   { path: "executor/test/contract/pipeline-schema.contract.test.ts", status: "PENDING", owner: "N-03" },
@@ -49,6 +49,9 @@ export const OBSOLESCENCE_ENTRIES = [
   { path: "executor/src/adapters/dynamodb-state-store/instance-lease-repository.ts", status: "PENDING", owner: "N-08" },
   { path: "executor/test/integration/step-repository.transition.int.test.ts", status: "PENDING", owner: "N-08" },
   { path: "executor/src/ports/step-handler.ts", status: "PENDING", owner: "N-12" },
+  // N-04 compatibility shim (types only): event-router still imports StepState; the T-08 adapters import StepType/StepState/ExecutionState
+  { path: "executor/src/domain/state-machine/legacy-vocabulary.ts", status: "PENDING", owner: "N-05", reason: "event-router imports StepState" },
+  { path: "executor/src/domain/state-machine/legacy-vocabulary.ts", status: "PENDING", owner: "N-08", reason: "dynamodb-state-store types/step-repository import the v2 vocabulary" },
 ];
 
 const stripExtension = (p) => p.replace(/\.(?:d\.)?(?:ts|mts|cts|tsx|js|mjs|cjs)$/, "");

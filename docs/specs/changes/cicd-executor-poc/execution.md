@@ -306,3 +306,40 @@
 | Reviewer attempt 1 | **PASS** (`opus`, full): every §15 DELETE row deleted or PENDING with the right owner; imports (incl. dynamic, `require`, `vi.mock`) checked; nothing KEEP/REWORK deleted; residual references acceptable with their owners |
 | Forward pointers | **Every owner task** (N-03, N-04, N-05, N-07, N-08, N-12) flips its PENDING entries to DELETED when it removes the path or symbol. **N-22:** add a strict mode that fails while any PENDING entry remains (advisory 1). **N-19:** add `executor/scripts` to the scan roots and drop the stale `scripts`/`ingress` roots; cover `vi.doMock`/`vi.importMock`. Next task touching `ports/queue-publisher.ts` fixes its stale comment |
 | Status | **Done** |
+
+### N-15 — `deploy-container.sh` adaptation · in progress
+
+| Field | Value |
+|---|---|
+| Step 1: T-14 attempt-3 evidence (Leader re-run) | `bash -n` OK; `bash deploy-scripts/test/run-tests.sh` → 14 run, 0 failed, 0 whole-test skips, 1 assertion skipped (0600 bits; not reflected on this filesystem, deferred to Gate C); shellcheck SKIPPED (not installed). Leader falsifier: `cat` of the secret file to stderr in `materialize_runtime_secret` → "secret value leaked into stderr", TEST FAILED; reverted, suite green — **VERIFIED**. T-14 attempt 3 fixed failure-over-skip precedence (Leader MISMATCH of attempt 2) |
+| Attempt 1 (N-15) | In progress |
+
+### N-02 — Schemas: deployment, deploy request, internal events · done (commit together with N-05)
+
+| Field | Value |
+|---|---|
+| Attempt 1 | New `deploy-request.schema.json`, `deployment.schema.json`; `event.schema.json` reduced to `LOCK_RETRY_REQUESTED`, `RECONCILE_TICK`, `DEPLOY_WINDOW_OPEN_REQUESTED`, `DEPLOY_WINDOW_CLOSE_REQUESTED`, `TARGET_RESOLUTION_RECORDED`; flat `deployment-definitions/prms/reporting-dev.yaml`; `deployment-definitions/targets/dev.yaml` copied (old `pipeline-definitions/` kept for N-03). Contract suite 103. Falsifier (nested `additionalProperties`/digest rule removed) → 7 red; permissive red run → 66 failed. Evidence re-run (Leader): `test/contract` 103/103, validate PASS — **VERIFIED** |
+| Sequencing | Reducing `event.schema.json` breaks 5 old event-router tests (old types); N-05 rewrites the router. **N-02 is committed together with N-05** so no red tree is pushed |
+| Reviewer attempt 1 | **PASS** (`opus`, full): exact §6.1/§6.2/§6.4 fields; nested rules exercised; `*Ref` pattern enforces DD-23; body `source` is an integrity check only — authorization stays with `SenderId` (DD-25) |
+| Forward pointers | **N-10:** own the §6.2 "unit set must equal the request's" check (missing-unit and extra-unit tests) at X1 consistency. **N-05:** tighten per-type event fields (`oneOf` + `unevaluatedProperties: false`); authorize only from the `SenderId` mapping, never from body `source`. **N-03:** add negatives for raw `imageRepositoryRef`/`container`, `runtimeSecretRefs`, raw health `url`, extra `observedDigests` key; reword the targets comment that cites an unpublished source; use the same Ajv options at runtime as the contract tests |
+| Status | **Done** (commit pending with N-05) |
+
+### N-04 — State machine X1–X16 and errors · done
+
+| Field | Value |
+|---|---|
+| Attempt 1 | Pure `applyTransition` with X1–X16, effect hints (`clear`, `appendTargetUnresolved`, `raiseHighestDispatched`, `conditionOnDispatchToken`, `terminal`); errors reworked (`classifyExitCode`); planner deleted (guard 8 → DELETED); temporary types-only `legacy-vocabulary.ts` for frozen T-08 files and the old router. 100 tests (72-pair matrix). Red run 92 failed; falsifier X14→QUEUED → 6 failed. Evidence re-run (Leader): typecheck/lint clean, validate PASS, 100/100; Leader falsifier X3→WAITING_LOCK → 2 failed — **VERIFIED** |
+| Reviewer attempt 1 | **FAIL** (`opus`): X2 gated on an owned dedupe claim, but rejection precedes the claim (design §3.3, §7 ordering) and `REJECT#MSG#` cases have no dedupe key (§5.1) — would force claiming dedupe for unauthorized senders |
+| Attempt 2 | Reject reason first, X2 without a claim; only X1 needs the claim. Leader rulings: legacy shim PENDING in guard 8 (owners N-05, N-08); `DISPATCH_INTERRUPTED` only via the reconciler request; X7 on elapsed ≥ 1,800 s **or** `lockWaitAttempts` ≥ 10 (§7.6), X14/X15 same facts. Falsifier (re-gating X2) → 5 failed. Evidence re-run (Leader): typecheck/lint clean, validate PASS, 116/116 — **VERIFIED** |
+| Forward pointers | **N-10/N-12:** maintain `lockWaitAttempts`; own lock release at X6 and resource release at X14; reset `deadlineAt` at X5/X14 (§7.1). **N-05/N-06:** reuse `REJECT_REASONS` |
+| Reviewer attempt 2 | **PASS** (`opus`): Issue 1 resolved; rulings (a)–(c) correct; no regressions. Committed snapshot (HEAD + N-04 only) checked in a clean worktree: typecheck 0 errors, guards PASS, vitest 474/474 |
+| Status | **Done** |
+
+### N-15 — attempt 1
+
+| Field | Value |
+|---|---|
+| Attempt 1 | `--artifact <container>=<repo>@sha256:<64-hex>`; `validate_artifact_ref` in `parse_args` before effects (tags, bare repo, short/non-hex digest, `..`, leading `-`/`/` → exit 2); `--previous` validated the same; pull/run/previous by digest; pruning by digest; already-running-same-digest → exit 0 without migration/swap; shims fail loudly on non-digest pulls; 3 new cases; README updated. Suite 17/0, 1 assertion skipped (0600). Falsifier (validation disabled) → tag cases red |
+| Evidence re-run (Leader) | `bash -n` OK; suite 17/0; Leader falsifier disabling the `--previous` validation → "--previous with a tag: expected exit 2, got 0", docker invoked, 1 failed; restored — **VERIFIED** |
+| Deferred (environment) | `docker ps` image reporting for digest-started containers and `docker images --digests` pruning semantics → Gate C (T-33) |
+| Reviewer attempt 1 | In progress |

@@ -157,7 +157,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-02 — Schemas: deployment, deploy request, internal events
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · M · **A** |
+| Status / Size / Gate | **[x] done** (commit with N-05) · M · **A** |
 | Goal | Add `deployment.schema.json`, `deploy-request.schema.json`; reduce `event.schema.json` to internal types; move and flatten the PRMS definition |
 | Depends on | N-01 |
 | Requirements / Design | FR-01, FR-03, FR-04 · design §6.1, §6.2, §6.4 |
@@ -193,7 +193,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-04 — State machine X1–X16 and errors
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · M · **A** |
+| Status / Size / Gate | **[x] done** · M · **A** |
 | Goal | Rewrite the pure state machine as design §7.3's closed list; rework error codes; delete the planner |
 | Depends on | N-01 |
 | Requirements / Design | FR-05, FR-16 · design §7.2, §7.3 |
