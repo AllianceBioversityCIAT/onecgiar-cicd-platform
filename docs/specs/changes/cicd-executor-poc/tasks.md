@@ -283,7 +283,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-09 — Target state with ordering and fencing (DD-27, approved)
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · S · **A** |
+| Status / Size / Gate | **[x] done** · S · **A** |
 | Goal | `lastDeployed` (fenced, monotonic `token ≥ stored`) and `highestAccepted` (conditional max) |
 | Depends on | N-07, N-08 |
 | Requirements / Design | FR-11, FR-23 · design §5.1, DD-09, DD-27; T-06 forward pointer |

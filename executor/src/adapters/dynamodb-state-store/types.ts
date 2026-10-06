@@ -108,16 +108,45 @@ export interface SequenceItem {
   readonly value: number;
 }
 
-/** Target state item (`TARGET#{lockKey}` / `STATE`), design §5.1/DD-09. */
+/** `highestDispatched` value (design §5.1): ordering key plus the execution that reached X9. */
+export interface DispatchedStamp {
+  readonly sourceRef: string;
+  readonly runNumber: number;
+  readonly executionId: string;
+}
+
+/** `highestAccepted` value (design §5.1). */
+export type AcceptedStamp = DispatchedStamp;
+
+/** `lastDeployed` value (design §5.1), written at X12 success under the lock. */
+export interface DeployedStamp extends DispatchedStamp {
+  readonly commitSha: string;
+}
+
+/** `unresolved[]` entry (design §5.1/§12.2). */
+export interface UnresolvedEntry {
+  readonly executionId: string;
+  readonly since: number;
+}
+
+/**
+ * Target state item (`TARGET#{lockKey}` / `STATE`), design §5.1/DD-09/DD-27.
+ * Every attribute except `lockKey` is absent until first written: the ordering
+ * attributes are created by independent conditional updates.
+ */
 export interface TargetStateItem {
   readonly lockKey: string;
   readonly currentImages?: Record<string, string>;
+  /** Opaque strings: a value may be the script's `unresolved:sha256:<id>` marker, never a digest. */
   readonly previousImages?: Record<string, string>;
-  readonly lastDeployedSequence: number;
-  readonly lastExecutionId?: string;
-  readonly updatedAt: number;
-  /** The fencing token of the lock-owner write that produced this state (DD-09). */
-  readonly fencingToken: number;
+  readonly lastDeployed?: DeployedStamp;
+  readonly highestDispatched?: DispatchedStamp;
+  readonly highestAccepted?: AcceptedStamp;
+  readonly unresolved?: readonly UnresolvedEntry[];
+  readonly updatedAt?: number;
+  /** Fencing token of the lock-owner write that produced `lastDeployed` and the images (DD-09). */
+  readonly fencingToken?: number;
+  readonly version?: number;
 }
 
 /** Lock item (`LOCK#{lockKey}` / `LOCK`), design DD-09. */

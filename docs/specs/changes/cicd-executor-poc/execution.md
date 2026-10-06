@@ -402,3 +402,22 @@
 | Forward pointers | **N-09:** replace `lastDeployedSequence` with the ordering fields. **N-16/N-17:** remove pre-AC-01 step names left in observability (`stepId`, `STEP_NOT_FOUND`, `recordStepDuration`, orphan vocabulary). **N-22 / CI (OD-N1):** treat the integration runner SKIP path as a failure in CI; confirm the POSIX kill path on the first Linux run |
 | Landing | One combined commit with N-02, N-03 and N-05 (shared files: guard 8, `schema-paths.ts`, the definition port; splitting would require hand-built intermediate versions). The full working tree was verified green before the commit |
 | Status | **Done** |
+
+### N-06 — Sender authorizer · in progress
+
+| Field | Value |
+|---|---|
+| Attempt 1 | `createSenderAuthorizer` with the router's port shape; per-type rule (DEPLOY_REQUESTED ← that deployment's allowedSender; LOCK_RETRY_REQUESTED ← Executor; RECONCILE_TICK ← scheduler; DEPLOY_WINDOW_* and TARGET_RESOLUTION_RECORDED ← operator); role-ID prefix only, session discarded, body never an input; fail-closed reasons; `decide()` returns `{authorized, senderRef, reason}`. 26 tests. Falsifier (stub authorizing from `ci.repository`) → 3 failed. Evidence re-run (Leader): 67/67; Leader falsifier (RECONCILE_TICK mapped to CI) → 2 failed — **VERIFIED** |
+| Reviewer attempt 1 | **FAIL** (`opus`): metric emitted as `UnauthorizedSender`, but design §12 and DD-25 define `RejectedRequests` by reason with the alarm on `RejectedRequests{UNAUTHORIZED_SENDER}` — the specified alarm would never fire |
+| Forward pointers | **N-17:** widen the router port to `decide()`, write `senderRef` into `REJECT#…` and `EXEC#…` (FR-21 audit); decide whether to log the session suffix as labeled untrusted audit data; avoid double-counting rejections |
+| Attempt 2 | In progress |
+
+### N-09 — Target state with ordering and fencing · done
+
+| Field | Value |
+|---|---|
+| Attempt 1 | `TargetStateRepository` rewritten (replaces `lastDeployedSequence`): `recordDeployed` fenced `token >= stored`, refuses a different source, opaque previous images (`unresolved:` marker); `highestDispatchedUpdate` (Update spec for the X9 transaction, `stored <= new`, unfenced) and standalone raise; `raiseHighestAccepted` as a separate conditional update after X1 (E2; tasks text was stale); `unresolvedAppendUpdate` for X16; `removeUnresolved` never touches ordering fields. Ordering via `decideRaiseMax` (N-07). 14 integration tests, 60-rep races. Falsifier (condition removed) → 8 failed. Evidence re-run (Leader): integration exit 0, 8 files / 37 tests, no JVM left — **VERIFIED** |
+| Reviewer attempt 1 | **PASS** (`opus`, full): token order implies run order under S2 + the X9 condition, so the fence alone keeps `lastDeployed` monotonic |
+| Committed snapshot | HEAD + N-09 files: tsc 0, lint, guards PASS, vitest 590 / 37 skipped |
+| Forward pointers | **N-12:** owns the lock-owner half of the §5.1 `lastDeployed` condition (check ownership before `recordDeployed`, or request a transaction builder); assert the companion `Put` is absent when the X9 transaction is cancelled. Editorial (closure spec sync): design §5.1 line still says `highestAccepted` is written in the X1 transaction; tasks N-09/N-10 scope text likewise |
+| Status | **Done** |

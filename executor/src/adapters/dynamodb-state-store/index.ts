@@ -25,7 +25,13 @@ export {
 export { RejectionRepository } from "./rejection-repository.js";
 export { DedupeRepository } from "./dedupe-repository.js";
 export { SequenceRepository } from "./sequence-repository.js";
-export { TargetStateRepository } from "./target-state-repository.js";
+export {
+  TargetStateRepository,
+  type RaiseOutcome,
+  type RecordDeployedInput,
+  type RecordDeployedOutcome,
+  type TargetUpdateSpec,
+} from "./target-state-repository.js";
 export { LockRepository, type LockAcquireOutcome, LOCK_ITEM_TTL_SECONDS } from "./lock-repository.js";
 export { DeployWindowRepository } from "./deploy-window-repository.js";
 export { EventMarkRepository } from "./event-mark-repository.js";
