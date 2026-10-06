@@ -11,7 +11,8 @@
 // `DispatchLatencyMs` (NFR-05's coordination latency), `RejectedRequests`,
 // `NotificationFailures` (FR-14: provider failure is logged and counted,
 // never state-changing) and the liveness `ExecutorHeartbeat` metric (design
-// §12 "Liveness": "emits a heartbeat metric every minute").
+// §12 "Liveness": "emits a heartbeat metric every minute") and
+// `ExecutionsPastDeadline` (FR-17; emitted by the reconciler once per tick).
 import type { Clock } from "../../ports/clock.js";
 import type { RejectReason } from "../../domain/errors/index.js";
 
@@ -40,6 +41,8 @@ export interface Metrics {
   recordHeartbeat(): void;
   /** design §12: EMF `RejectedRequests` = 1 with dimension `reason` (any X2 reason; alarm on `reason=UNAUTHORIZED_SENDER`, DD-25). */
   recordRejectedRequest(reason: RejectReason): void;
+  /** FR-17: executions found past `deadlineAt` by one reconcile pass (0 is emitted too, so the alarm has data); no dimensions. */
+  recordExecutionsPastDeadline(count: number): void;
 }
 
 interface EmfUnit {
@@ -97,6 +100,9 @@ export function createMetrics(deps: CreateMetricsDeps): Metrics {
     },
     recordRejectedRequest(reason) {
       emit(deps, "RejectedRequests", 1, "Count", { reason });
+    },
+    recordExecutionsPastDeadline(count) {
+      emit(deps, "ExecutionsPastDeadline", count, "Count");
     },
   };
 }

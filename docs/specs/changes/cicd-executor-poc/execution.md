@@ -512,3 +512,34 @@
 | Committed snapshot | HEAD + N-21 files: tsc 0, lint, guards PASS, vitest 825 / 53 skipped |
 | Deferred | Real GitHub run, RepoDigests on GitHub-hosted runners, Environment secrets/variables in a called workflow (P-G14), `ci.workflowRef` form — Gate C (N-32) |
 | Status | **Done** |
+
+### N-14 — Reconciler (reduced) · done
+
+| Field | Value |
+|---|---|
+| Attempt 1 | `createReconciler().reconcile()`: two GSI2 queries (EXECUTION, WINDOW; scan-forbidding client), re-read before acting; overdue QUEUED → `evaluateQueued`; overdue WAITING_LOCK → fresh `LOCK_RETRY_REQUESTED` (attempt + 1) or canonical X7; overdue DEPLOYING → X16 (with `unresolved[]`) or X11, never publishes or re-runs; expired windows closed (EXPIRED); `ExecutionsPastDeadline` metric every tick; per-item failure isolation. 19 unit + 7 integration tests; X7 race handler vs reconciler → one winner, identical item. Falsifier (TIMED_OUT) → red. Evidence re-run (Leader): 25/25; integration exit 0, 11 files / 59 tests, no JVM — **VERIFIED** |
+| Reviewer attempt 1 | **FAIL** (`opus`): overdue QUEUED is re-evaluated without S1/X3 (design §7, §7.1, §7.3 CW-2, FR-15 require X3/X4/X5). No-re-run property verified at source (X11 and the phase-2 `execStartedAt` write are mutually exclusive). Accepted: no orphan-lock action (leases expire, §7.5/QAS-2/DD-13 — FR-15 prose to align at closure), window closure via the store, AggregateError redelivery, attempt + 1 |
+| Open obligations | **N-17:** wire `onTransitioned` so LOCK_TIMEOUT, UNKNOWN_TARGET_STATE and SUPERSEDED notify (FR-15, FR-23) + test; pass `target` to `createReconciler`; bind `reconcileTick`. **Closure spec sync:** FR-15 "orphan locks" wording vs lease expiry |
+| Attempt 2 | Overdue QUEUED runs S1 (persisted `order.sourceRef`/`runNumber`, target ordering read) before `evaluateQueued`: newer → X3 conditional, nothing published; source mismatch → error, nothing written. `buildPatch` exported from the coordinator (export only) and reused for X3/X7/X11/X16. RESOURCES.md metric wording aligned. Falsifier (S1 branch dead) → 3 unit + 1 integration red. Evidence re-run (Leader): 25/25; integration 3 consecutive runs exit 0, 62/62 — **VERIFIED** |
+| Reviewer attempt 2 | **PASS** (`opus`) |
+| Committed snapshot | HEAD + N-14 files: tsc 0, lint, guards PASS, vitest 850 / 63 skipped |
+| Status | **Done** |
+
+### N-13 — SSH deployer adapter · in progress
+
+| Field | Value |
+|---|---|
+| Attempt 1 | `adapters/ssh-deployer` (DeployTransport over `ssh2`): pinned host key checked in `hostVerifier` before auth (constant time, fail closed, never retried); credential from `SecretProvider` per attempt, memory only, scrubbed from errors/logs; private key by default, password only with an explicit temporary flag; SFTP delivery to `/tmp/cicd-{executionId}/` with read-back sha256 checksum before exec; every argument single-quoted, `\n`/`\r`/NUL rejected; strict last-line `CICD_RESULT`; no retry after exec; `ssh2` ^1.17.0 (0 vulnerabilities). Tests against a real in-process `ssh2` Server with runtime-generated keys: 40. Falsifier (hostVerifier always true) → mismatch test red. Evidence re-run (Leader): 40/40, lint clean, check:deps 0 vulnerabilities; Leader falsifier (single-quote escaping removed) → 2 failed — **VERIFIED** |
+| Reviewer attempt 1 | **PASS** (`opus`, full). Retry budget within §7.2 (coordinator 3 attempts, adapter 0) |
+| Leader-directed hardening (before commit) | HIGH advisory: a pre-existing `/tmp/cicd-{id}` with open permissions could let another local user swap the script after the checksum (FR-12) → refuse non-fresh / non-0700 directories; DD-23: no host/IP/port in SSH_CONNECT messages; `connectRetries` test-only |
+| Spec gap escalated to the owner | FR-12 allows a password "only if the entry marks it temporary", but the Target Registry schema (§6.3) has no such marker; the adapter defaults to key-only (safe) |
+| Forward pointers | **N-17:** `assertSafeScriptArgs(plan.scriptArgs(...))` before the X9 intent (else an unsafe argument yields X16 instead of X11); persist the delivered-script checksum on the execution (FR-12); `TargetResolver`; keep `connectRetries` at 0; confirm `getDeployScript` is bound to the definition version. **Closure spec sync:** add `/tmp/cicd-{id}.result.json` to §5.2 |
+
+### Observed flake — N-10 parallel-duplicates integration test (2026-10-06)
+
+| Field | Value |
+|---|---|
+| Observation | One run (reported by the N-14 implementer, concurrent with other DynamoDB Local runs) failed `rep 0: no other outcome or error: expected 7 to be 8` in `execution-service.int.test.ts:117` — one of 8 contenders rejected with an error other than `ClaimInProgressError` |
+| Leader reproduction | 3 consecutive full integration runs: 62/62 each — not reproduced |
+| Safety assessment | The single CREATED, sequence = 1 and BOUND assertions were not reached in that run; in production an unexpected error leaves the message un-acked and redelivered (idempotent), so no duplicate deploy is possible, but an unclassified race outcome exists |
+| Owner | **N-22:** diagnose (log the unexpected error type in the test, run the race repeatedly), and either classify the outcome in execution-service or fix the test isolation |

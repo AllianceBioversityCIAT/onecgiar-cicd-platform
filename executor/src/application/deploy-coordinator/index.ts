@@ -124,8 +124,8 @@ function accept(t: TransitionResult): Accepted {
   return t;
 }
 
-/** Turns an accepted transition into the persisted patch: cleared fields are removed, terminal states leave GSI2 (sparse). */
-function buildPatch(
+/** Turns an accepted transition into the persisted patch: cleared fields are removed, terminal states leave GSI2 (sparse). Exported for the reconciler, which must write the same canonical results (X7, X11, X16, X3). */
+export function buildPatch(
   t: Accepted,
   now: number,
   opts: { deadlineAt?: number; extra?: Record<string, unknown> } = {},

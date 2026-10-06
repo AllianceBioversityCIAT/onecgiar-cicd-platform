@@ -373,7 +373,7 @@ Completed-and-kept work is **not** re-done. "Reworked" states exactly what chang
 ### N-14 — Reconciler (reduced)
 | Field | Value |
 |---|---|
-| Status / Size / Gate | pending · S · **A** |
+| Status / Size / Gate | **[x] done** · S · **A** |
 | Goal | Two GSI2 queries per tick: executions past deadline, expired windows |
 | Depends on | N-08, N-11, N-12 |
 | Requirements / Design | FR-15 · design §7.1, §7.3, DD-13 |
