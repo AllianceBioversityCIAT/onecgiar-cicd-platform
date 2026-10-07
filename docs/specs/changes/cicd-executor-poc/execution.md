@@ -800,3 +800,12 @@ Final Leader evidence: isolated worktree with all changed files: tsc 0, lint cle
 ### B1-B — owner-executed `sam validate --lint` after the security corrections (2026-10-07): **PASS**
 
 Commit 9558289, SAM CLI 1.151.0, `--region us-east-1` → `infra\sam\template.yaml is a valid SAM Template`, exit 0. Owner direction: SR-1 sufficiently mitigated for the PoC (separate build/push jobs deferred to production hardening); SR-2 is a blocker before B2, not before B1. Back to B1-C.
+
+### B1-C — dedicated Executor principal and first-deploy configuration (2026-10-07): **PASS**
+
+| Item | Record |
+|---|---|
+| Dedicated principal (owner-executed) | IAM user `cicd-poc-dev-executor-local` (`arn:aws:iam::<AWS_ACCOUNT_ID>:user/cicd-poc-dev-executor-local`) created before the deploy; verified: no managed or inline policies, no groups, no access keys, no console login profile (`NoSuchEntity`). Inline `sts:AssumeRole` policy and the access key wait until after the deploy / Executor start |
+| Option B (owner-approved) | B2-only GitHub parameters set to fail-closed sentinels for B1: `GitHubRepositoryId=0`, `GitHubRepositoryOwnerId=0`, `GitHubEnvironment=pending`, `PinnedWorkflowSha=` 40 zeros, `GitHubOidcSub=repo:pending/pending:environment:pending`, `GitHubBoundRef=refs/heads/pending`; `PlatformWorkflowRepository` real. Replaced with real values by an in-place stack update before B2 (trust change does not replace the role) |
+| Local config | `executor/.local/gate-b/samconfig.toml` (Git-ignored; holds the account ID). Leader check: all 16 template parameters valid against their `AllowedPattern`/`AllowedValues` (13 given, 3 empty defaults) |
+| Next | B1-D: owner-executed `sam deploy` (NOT EXECUTED) |
