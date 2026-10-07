@@ -10,7 +10,7 @@
 |---|---|
 | Spec Path | `changes/cicd-executor-poc` |
 | Phase | Phase 1: Requirements |
-| Version | **v3.7** (owner direction, B0 acceptance 2026-10-06: FR-22 "public-safe logs" and NFR-02 — no GitHub secret, role ARN and account ID owner-accepted in CI logs (G-10); RECONCILE_TICK minimal internal contract (G-8); fail-fast definition loading at startup (G-9)). v3.6 (owner direction, Gate B approval 2026-10-06: FR-22 "public-safe logs" follows the DD-24 v4.6 GitHub value classification). v3.5 (Gate A closure editorial sync, no new decision). v3.4 (owner approval 2026-10-06; aligned with `proposal.md` v3.4) |
+| Version | **v3.8** (owner decision 2026-10-07, AC-02: FR-01 without `targetRef`; FR-02 runtime Target Registry with inline non-secret values and `allowedDeploymentIds`; FR-03 request carries `targetId`; FR-21 target authorization). v3.7 (owner direction, B0 acceptance 2026-10-06: FR-22 "public-safe logs" and NFR-02 — no GitHub secret, role ARN and account ID owner-accepted in CI logs (G-10); RECONCILE_TICK minimal internal contract (G-8); fail-fast definition loading at startup (G-9)). v3.6 (owner direction, Gate B approval 2026-10-06: FR-22 "public-safe logs" follows the DD-24 v4.6 GitHub value classification). v3.5 (Gate A closure editorial sync, no new decision). v3.4 (owner approval 2026-10-06; aligned with `proposal.md` v3.4) |
 | Depth | **Full** (new infrastructure, trust boundary, concurrency, deployment and migrations) |
 | Type | Change |
 | Approval Mode | `gated` (inherited from the proposal) |
@@ -73,8 +73,8 @@
 | Deploy request | The `DEPLOY_REQUESTED` message (FR-03) |
 | Sender | The AWS identity that put a message on the queue, as asserted by AWS, not by the message body |
 | Executor | Deploy-coordination service: receive → validate → authenticate → resolve → coordinate → deploy → record → notify |
-| Deployment Definition | Flat versioned document mapping a `deploymentId` to a target, an approved script, static parameters, a `lockKey`, a window policy and an `allowedSender` reference (FR-01) |
-| Target Registry | Versioned document describing deploy destinations by reference (FR-02) |
+| Deployment Definition | Flat versioned document mapping a `deploymentId` to an approved script, static parameters and an `allowedSender` reference; the target is chosen by the request and authorized by the Target Registry (FR-01, FR-02) |
+| Target Registry | Runtime table of deploy destinations (`cicd-registry-<stage>`), one record per `targetId` (FR-02, AC-02) |
 | Execution | One processing of one deploy request, identified by `executionId` = `<deploymentId>-<sequence>` |
 | Artifact identity | An image digest (`sha256:<64-hex>`). Never a tag |
 | Deploy unit / `lockKey` | Containers on a host deployed together and sharing a lock |
@@ -160,7 +160,7 @@
 
 ### FR-01 — Deployment Definitions
 
-The system SHALL determine each deployment's behavior exclusively from a versioned, **flat** Deployment Definition validated against a schema. A definition declares: `deploymentId`, environment, `targetRef`, the approved deploy script, static script parameters (logical containers, port references, an image repository reference per artifact unit), the `lockKey` (through `targetRef`: the Target Registry entry holds it, design §6.2/§6.3), timeout, notification channel, and an `allowedSender` **logical reference**. It contains no step graph.
+The system SHALL determine each deployment's behavior exclusively from a versioned, **flat** Deployment Definition validated against a schema. A definition declares: `deploymentId`, environment, the approved deploy script (since v3.8 it names no target: the request's `targetId` selects one and the target record authorizes it, FR-02), static script parameters (logical containers, port references, an image repository reference per artifact unit), (the `lockKey` belongs to the target record, FR-02), timeout, notification channel, and an `allowedSender` **logical reference**. It contains no step graph.
 
 #### Scenario: valid definition
 - GIVEN a definition that satisfies the schema and whose references resolve
@@ -193,33 +193,46 @@ The system SHALL determine each deployment's behavior exclusively from a version
 
 ### FR-02 — Target Registry
 
-The system SHALL resolve every deploy destination through a versioned Target Registry that declares, by reference only, the connection identity, credential, host key, containers, ports and lock key, the deploy-window policy and external deployers (FR-24), and the migration-compatibility attestation (FR-13).
+The system SHALL resolve every deploy destination at request time from a runtime Target Registry (one record per `targetId`, AC-02) that declares inline the project, environment, SSH host, port, user, pinned host key, containers and ports, lock key, the deploy-window policy and external deployers (FR-24), the migration-compatibility attestation (FR-13) and the `allowedDeploymentIds`, and that references the SSH credential (`credentialRef`) held in Secrets Manager. Adding or changing a target SHALL NOT require changing, rebuilding or redeploying the Executor.
 
-#### Scenario: port or name conflict
-- GIVEN two registry entries on the same host that publish the same port or the same container name
-- WHEN the registry is validated
-- THEN it is rejected, naming both entries
+#### Scenario: new target without redeploy
+- GIVEN an administrator registers a valid target record and its credential secret
+- WHEN an authorized request names that `targetId`
+- THEN the Executor resolves and uses it without any code change, rebuild or restart
+
+#### Scenario: unknown, invalid or unauthorized target
+- GIVEN a request whose `targetId` does not exist, whose record is invalid, whose `allowedDeploymentIds` does not contain the request's `deploymentId`, or whose environment differs from the deployment's
+- WHEN it is received
+- THEN it is `REJECTED` with the matching reason (`TARGET_UNKNOWN`, `TARGET_INVALID`, `TARGET_NOT_AUTHORIZED`, `TARGET_ENVIRONMENT_MISMATCH`, or `TARGET_INCOMPATIBLE` when a deployed container is missing from the target or a migration lacks the target's attestation)
+- BUT it must NOT open SSH, take a lock or affect any other execution
+
+#### Scenario: record changed or deleted during an execution
+- GIVEN an accepted execution whose target record is edited or deleted before dispatch
+- THEN the execution keeps using the snapshot taken at acceptance (host, host key, `lockKey`)
+- AND the credential is still read only at connect time
 
 #### Scenario: missing host key
-- GIVEN an entry without a host key reference
-- WHEN it is validated
-- THEN it is rejected
-- AND IT MUST be considered invalid even if the credential exists
+- GIVEN a target record without a host key
+- THEN it is invalid even if the credential exists, and no connection is attempted
 
 #### Scenario: mandatory window policy (Judgment Day round 2, R2-W2)
-- GIVEN an entry that omits the external deployers or the window policy, or declares external deployers with a policy that does not require a window
-- WHEN it is validated
-- THEN it is rejected before any deploy
+- GIVEN a record that omits the external deployers or the window policy, or declares external deployers with a policy that does not require a window
+- THEN it is invalid
 - BUT there must NOT be a default value that leaves a shared target unprotected
 
-#### Scenario: secrets in the registry
+#### Scenario: port or name conflict and lock key ownership
+- GIVEN a record that would publish a port or container name already used on the same host, or reuse a `lockKey` owned by another deployment
+- WHEN the administrator registers it
+- THEN the onboarding tool refuses it, naming both records
+
+#### Scenario: secrets and write access
 - GIVEN the registry
-- THEN it contains only **references**
-- BUT it must NOT contain credential values or real identifiers (DD-23)
+- THEN it contains no credential value (only `credentialRef`)
+- AND only the administrative principal can write it; the Executor can only read it (`GetItem`) and the CI role has no access
 
 ### FR-03 — Deploy request contract and execution identity
 
-The system SHALL accept deployments only through a `DEPLOY_REQUESTED` message that matches a strict schema: `specVersion`, `eventType`, `requestId`, `deploymentId`, `commitSha` (40 hex), `artifacts` (artifact unit → image digest), audit-only `ci` metadata, and the ordering fields fixed by OD-A1. It SHALL create at most one execution per `deploymentId` + `requestId` (the dedupe scope), with `executionId` = `<deploymentId>-<sequence>` and a monotonic sequence per deployment.
+The system SHALL accept deployments only through a `DEPLOY_REQUESTED` message that matches a strict schema: `specVersion`, `eventType`, `requestId`, `deploymentId`, `commitSha` (40 hex), `targetId` (since v3.8, FR-02), `artifacts` (artifact unit → image digest), audit-only `ci` metadata, and the ordering fields fixed by OD-A1. It SHALL create at most one execution per `deploymentId` + `requestId` (the dedupe scope), with `executionId` = `<deploymentId>-<sequence>` and a monotonic sequence per deployment.
 
 #### Scenario: valid request
 - GIVEN a schema-valid request from an authorized sender (FR-21) for a known `deploymentId`
@@ -435,8 +448,8 @@ The deploy script SHALL, in this order: take the target mutex for the `lockKey`;
 
 #### Scenario: migration-compatibility precondition
 - GIVEN a target with migrations enabled
-- THEN its registry entry declares that migrations are backward compatible, and who attests it
-- AND a definition that migrates onto a target without that declaration MUST be invalid
+- THEN its target record declares that migrations are backward compatible, and who attests it
+- AND a request that would run a migrating definition on a target without that declaration MUST be `REJECTED (TARGET_INCOMPATIBLE)` (v3.8, AC-02)
 - BUT the platform must NOT present that property as guaranteed: it is the application team's responsibility
 
 #### Scenario: failed migration
@@ -579,6 +592,12 @@ The system SHALL accept each message only from a sender identity authorized for 
 - WHEN it is received
 - THEN it is `REJECTED`, audited with the sender reference and reason, and an alarm fires
 - BUT it must NOT open SSH, take a lock or affect any other execution
+
+#### Scenario: CI selects another project's target (AC-02)
+- GIVEN the authorized CI role of deployment X sends a request for `deploymentId` X naming a `targetId` whose `allowedDeploymentIds` does not contain X
+- WHEN it is received
+- THEN it is `REJECTED (TARGET_NOT_AUTHORIZED)`, audited and counted
+- BUT it must NOT open SSH, take a lock or read the target's credential
 
 #### Scenario: identity claims in the body
 - GIVEN a request whose `ci.repository` claims to be the bound repository

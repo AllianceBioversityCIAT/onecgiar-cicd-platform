@@ -136,24 +136,18 @@ All tagged `Project=ONECGIAR-CICD-Platform`; names derived from a `Stage` parame
 
 ---
 
-## 7. Target parameters the owner supplies
+## 7. Target parameters the owner supplies (AC-02, 2026-10-07)
 
 | Parameter | Where it goes | Notes |
 |---|---|---|
-| `deploymentId` | Deployment Definition | Semantic id (e.g. `<OWNER_DEPLOYMENT_ID>`); must be unique; one per `lockKey` |
-| `targetRef` | Deployment Definition → Target Registry | Logical ref, e.g. `<OWNER_TARGET_REF>` |
-| `lockKey` | Target Registry | One deployment per lockKey (DD-27) |
-| Hostname | Secret (connection identity JSON) | Never in Git |
-| SSH port | Secret (connection identity JSON, optional, default 22) | |
-| SSH username | Secret (connection identity JSON) | A dedicated deploy user is recommended |
-| Host-key fingerprint / public key | Secret (`hostKeyRef`) | Obtained out of band and compared with `ssh-keyscan` output (documented) |
-| Credential reference | Secret (`credentialRef`) | Private key; password only if FR-12's temporary marker existed — it does not (G-1), so key only |
-| Deployment script | Deployment Definition `deployScript` | `deploy-container.sh` (the only approved script) |
-| Artifacts / units | Deployment Definition `artifacts[]` | `unit`, `container`, `imageRepositoryRef` (secret holds the repository URI) |
-| Runtime secrets | `runtimeSecretRefs` | Passed through unresolved (OD-Q5 open) |
-| Health | `health` per container | Command or URL ref |
-| Source binding | `source.repositoryRef/workflowRef/environmentRef`, `allowedSenderRef` | Values in secrets; `allowedSender` = the CI role ID (stack output) |
-| Deploy window policy | Target Registry | `none` or `required` + external deployers |
+| `deploymentId` | Deployment Definition (bundled) | Semantic id; must be unique; one per `lockKey` |
+| `targetId`, `project`, `environment` | Target record (`cicd-registry-<stage>`) | The caller workflow sends the `targetId` in the request |
+| Host, SSH port, SSH user | Target record, inline | Never in Git; not a secret |
+| Host key (public key lines) | Target record, inline | Obtained out of band and compared with `ssh-keyscan` output |
+| SSH credential | Secrets Manager (referenced by `credentialRef` in the target record) | Private key only (G-1); under the Executor's secret prefix |
+| `lockKey`, containers and ports, window policy + external deployers, migration attestation, `allowedDeploymentIds` | Target record, inline | One deployment per `lockKey` (DD-27) |
+| Deployment script, artifacts/units, runtime secret refs, health, migration commands | Deployment Definition (bundled) | Unchanged |
+| Source binding, `allowedSenderRef`, image repository, Slack channel | Deployment Definition refs | Where their values live: open point AC2-7 |
 
 ---
 
@@ -197,6 +191,10 @@ All tagged `Project=ONECGIAR-CICD-Platform`; names derived from a `Stage` parame
 Gate C keeps permanent hosting and operational readiness (container image build and inspection, the Executor on the designated server under OD-Q11/OD-Q12, env-key parity, PRMS Reporting DEV end to end with Jenkins coexistence).
 
 ---
+
+## 10a. AC-02 (owner decision 2026-10-07)
+
+B1 Executor startup is **PENDING** until AC-02 tasks R-1…R-6 are implemented (the Executor can then start with zero targets) and the startup prerequisites that remain exist (a real Slack token, AC2-6; the definition references, AC2-7). Deployments wait for the first real target record and its real credential. No sentinel or example secrets are created (owner direction). See `architecture-change-02.md` and tasks §6.0.3.
 
 ## 11. Owner clarifications (2026-10-06)
 

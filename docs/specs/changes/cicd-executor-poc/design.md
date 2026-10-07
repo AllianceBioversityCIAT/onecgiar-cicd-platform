@@ -10,7 +10,7 @@
 |---|---|
 | Spec Path | `changes/cicd-executor-poc` |
 | Phase | Phase 2: Design |
-| Version | **v4.8** (owner-authorized B1-C security corrections 2026-10-07: SR-4 bound `ref` in the CI role trust, SR-1 build before credentials with workspace-confined build inputs, SR-5 probe ECR lifecycle (100 most recent images), SR-3 dedicated workstation Executor principal; SR-2 pending owner decision). v4.7 (owner direction, B0 acceptance 2026-10-06: G-8 minimal internal RECONCILE_TICK contract, G-9 fail-fast definition loading, G-10 role ARN as an Environment variable — no GitHub secret). v4.6 (owner direction, Gate B approval 2026-10-06: DD-24 GitHub value classification — one Environment secret, variables, values derived after OIDC; CI role adds `sqs:GetQueueUrl`; DD-29 decision and §11 security row aligned). v4.5 (Gate A closure editorial sync, no new decision: §5.1 `highestAccepted` write, implemented attributes and items; §5.2 result file and fresh 0700 directory; §6.5 `--unit` value; §12 metric names as implemented and the FR-17 alarm; §12.2 CLI path; DD-29 trailing-comment wording. Points that would need a decision are listed for the owner in `execution.md`, "Spec gaps for the owner (Gate A closure)"). v4.4 (owner approval 2026-10-06: DD-25 / OD-A2 APPROVED; DD-27 / OD-A1 APPROVED for the PoC under the single-source invariant; new action-pinning rule in DD-29 and guard 7). v4.3 (editorial E1–E5 after JD APPROVED: bound-ref source, X1 `highestAccepted`, §5.1 attribute, stale text; no new decision). v4.2 (JD round-2 correction: R2-A1, R2-1…R2-8, R2-A2…R2-A6). v4.1 (JD round-1 correction: CS-1, CS-2, CC-1, CC-2, SU-1, CW-1…CW-6). v4 (Model B). History: v3.2 (2026-10-05, owner amendments), v3.1, v3, v2 — detail in `judgment.md` |
+| Version | **v4.9** (owner decision 2026-10-07, AC-02: runtime multi-project Target Registry in a separate DynamoDB table `cicd-registry-<stage>` read with `GetItem` only; `DEPLOY_REQUESTED` carries `targetId`; target-side `allowedDeploymentIds` + environment authorization; target values inline; credentials in Secrets Manager; the target record snapshotted on the Execution at X1; window events name the `targetId`; where the remaining non-secret definition refs resolve is open point AC2-7; Deployment Definitions stay bundled without `targetRef`). v4.8 (owner-authorized B1-C security corrections 2026-10-07: SR-4 bound `ref` in the CI role trust, SR-1 build before credentials with workspace-confined build inputs, SR-5 probe ECR lifecycle (100 most recent images), SR-3 dedicated workstation Executor principal; SR-2 pending owner decision). v4.7 (owner direction, B0 acceptance 2026-10-06: G-8 minimal internal RECONCILE_TICK contract, G-9 fail-fast definition loading, G-10 role ARN as an Environment variable — no GitHub secret). v4.6 (owner direction, Gate B approval 2026-10-06: DD-24 GitHub value classification — one Environment secret, variables, values derived after OIDC; CI role adds `sqs:GetQueueUrl`; DD-29 decision and §11 security row aligned). v4.5 (Gate A closure editorial sync, no new decision: §5.1 `highestAccepted` write, implemented attributes and items; §5.2 result file and fresh 0700 directory; §6.5 `--unit` value; §12 metric names as implemented and the FR-17 alarm; §12.2 CLI path; DD-29 trailing-comment wording. Points that would need a decision are listed for the owner in `execution.md`, "Spec gaps for the owner (Gate A closure)"). v4.4 (owner approval 2026-10-06: DD-25 / OD-A2 APPROVED; DD-27 / OD-A1 APPROVED for the PoC under the single-source invariant; new action-pinning rule in DD-29 and guard 7). v4.3 (editorial E1–E5 after JD APPROVED: bound-ref source, X1 `highestAccepted`, §5.1 attribute, stale text; no new decision). v4.2 (JD round-2 correction: R2-A1, R2-1…R2-8, R2-A2…R2-A6). v4.1 (JD round-1 correction: CS-1, CS-2, CC-1, CC-2, SU-1, CW-1…CW-6). v4 (Model B). History: v3.2 (2026-10-05, owner amendments), v3.1, v3, v2 — detail in `judgment.md` |
 | Depth | Full (re-checked in §14) |
 | Requirements | `requirements.md` v3.5 (+ Leader rulings RL-1…RL-7) |
 | Intent | `proposal.md` v3.4, under `architecture-change-01.md` (**AC-01**, APPROVED 2026-10-06) |
@@ -132,7 +132,7 @@ onecgiar-cicd-platform/
     Dockerfile                                    R  drop git
   ingress/github-webhook/                         D
   deployment-definitions/prms/reporting-dev.yaml  R  (from pipeline-definitions/, flat)
-  deployment-definitions/targets/dev.yaml         K  (moved)
+  deployment-definitions/targets/dev.yaml         K  (moved) — *superseded by AC-02 v4.9 (task R-9)*
   schemas/{deployment N (replaces pipeline D), deploy-request N, event R (internal only), targets K}.schema.json
   deploy-scripts/deploy-container.sh              R  --artifact by digest
   tools/                                          N  operator CLI: open/close deploy windows
@@ -148,7 +148,7 @@ onecgiar-cicd-platform/
 
 | Item | PK | SK | Attributes | Write |
 |---|---|---|---|---|
-| Execution | `EXEC#{executionId}` | `META` | `deploymentId, definitionRef, requestId, commitSha, artifacts{unit:digest}, order{sourceRef, runNumber, runAttempt}, ci{repository, runId, workflowRef, runUrl}, senderRef, lockKey, sequence, status, version, dispatchToken, attempt, execStartedAt (per attempt; cleared at X9 and X14), fencingToken, lockWaitStartedAt, lockWaitAttempts, nextAttemptAt, contentionCount, lockLostDuringRun, targetWriteRejected, windowClosedDuringRun, cicdResultMissing, scriptChecksum, result{code, cicdResult, logTail}, error{code, message}, slackThreadTs, deadlineAt, activeStatus = EXECUTION (non-terminal only), startedAt, finishedAt, expiresAt (180 d)` | Conditional on `status` + `version` (§7.3). The write-once audit fields `scriptChecksum` (sha256 of the delivered script, FR-12) and `slackThreadTs` (Slack root reference) are set with `attribute_exists` + `attribute_not_exists(field)` and never touch `status` or `version` |
+| Execution | `EXEC#{executionId}` | `META` | `deploymentId, definitionRef, requestId, commitSha, artifacts{unit:digest}, order{sourceRef, runNumber, runAttempt}, ci{repository, runId, workflowRef, runUrl}, senderRef, targetId, targetSnapshot{version, project, environment, host, port, user, hostKey, credentialRef, lockKey, containers, deployWindowPolicy, externalDeployers, migrationCompatibility} (v4.9, AC-02: taken at X1, used for the whole execution), lockKey (from the snapshot), sequence, status, version, dispatchToken, attempt, execStartedAt (per attempt; cleared at X9 and X14), fencingToken, lockWaitStartedAt, lockWaitAttempts, nextAttemptAt, contentionCount, lockLostDuringRun, targetWriteRejected, windowClosedDuringRun, cicdResultMissing, scriptChecksum, result{code, cicdResult, logTail}, error{code, message}, slackThreadTs, deadlineAt, activeStatus = EXECUTION (non-terminal only), startedAt, finishedAt, expiresAt (180 d)` | Conditional on `status` + `version` (§7.3). The write-once audit fields `scriptChecksum` (sha256 of the delivered script, FR-12) and `slackThreadTs` (Slack root reference) are set with `attribute_exists` + `attribute_not_exists(field)` and never touch `status` or `version` |
 | Rejection | `REJECT#{deploymentId}#{requestId}`, or `REJECT#MSG#{sqsMessageId}` when either is unusable | `META` | `reason, senderRef, deploymentId?, receivedAt, expiresAt (30 d)` | `attribute_not_exists` |
 | Dedupe | `DEDUPE#{deploymentId}#{requestId}` (scoped: `requestId` alone is unique only within a repository, P-G9) | `DEDUPE` | `state (CLAIMED/BOUND), claimToken, claimLeaseExpiresAt, sequence, executionId, expiresAt (7 d)` | DD-20 |
 | Sequence | `DEPLOYMENT#{deploymentId}` | `SEQ` | `value` | Atomic `ADD` |
@@ -165,6 +165,17 @@ onecgiar-cicd-platform/
 | Index | Key | Justification |
 |---|---|---|
 | GSI2 (sparse) | `activeStatus` (`EXECUTION`, `WINDOW`) + `deadlineAt` | The reconciler must find `QUEUED`/`WAITING_LOCK`/`DEPLOYING` executions past deadline and expired open windows **without scans** (FR-15; the T-08 harness forbids scans). The attribute is removed on terminal states and window closure, so the index holds only live items |
+
+### 5.3 `cicd-registry-<stage>` — runtime Target Registry (AC-02, v4.9)
+
+Separate DynamoDB table (on-demand, **no TTL**, PITR on, `DeletionPolicy: Retain`, tagged). **Configuration, not runtime state.** The Executor has `dynamodb:GetItem` only; writes come exclusively from the owner's administrative onboarding principal (never the Executor or CI role).
+
+| Item | PK | SK | Attributes |
+|---|---|---|---|
+| Target | `TARGET#{targetId}` | `META` | the target record of §6.3, plus `schemaVersion`, `version` (conditional writes), `updatedAt`, `updatedBy` |
+| Config value (**proposed, open point AC2-7; not adopted**) | `CONFIG#{NAME}` | `META` | `value` (string): a non-secret identifier referenced as `<NAME>` by a bundled definition or the platform configuration |
+
+The runtime state of a target stays in the state table (`TARGET#{lockKey}` / `STATE`, §5.1); the two tables never share items.
 
 ### 5.2 State on the target (v3.2 §5.3, plus the as-implemented Gate A details)
 
@@ -190,6 +201,7 @@ There is no orchestration API. Contracts are messages, schemas and a CLI.
 | `eventType` | const `DEPLOY_REQUESTED` |
 | `requestId` | `^[0-9]{1,20}-[0-9]{1,4}$`; **must equal** `` `${ci.runId}-${ci.runAttempt}` `` (validated; mismatch → X2 `REJECTED (REQUEST_ID_MISMATCH)`) |
 | `deploymentId` | `^[a-z0-9][a-z0-9-]{1,62}$` |
+| `targetId` | `^[a-z0-9][a-z0-9-]{1,62}$` — **v4.9 (AC-02):** selects a Target Registry item; authorized by the target's `allowedDeploymentIds` (DD-25); never a host, user, credential or command |
 | `commitSha` | `^[0-9a-f]{40}$` |
 | `artifacts` | object, 1–8 properties; key `^[a-z0-9][a-z0-9-]{0,31}$` (unit); value `^sha256:[0-9a-f]{64}$` |
 | `ci.repository` | `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$` (audit; must equal the definition's resolved source, consistency check only) |
@@ -207,7 +219,7 @@ There is no orchestration API. Contracts are messages, schemas and a CLI.
 | `schemaVersion` | const `1` |
 | `deploymentId` | semantic id (`prms-reporting-dev`) |
 | `environment` | const `dev` in the PoC |
-| `targetRef` | Target Registry entry |
+| `targetRef` | **Removed in v4.9 (AC-02).** The definition no longer names a target; the request's `targetId` selects one and the target record authorizes the `deploymentId` (§6.3, DD-25) |
 | `source` | `{ repositoryRef, workflowRef, environmentRef }`: logical references resolved at startup (DD-23); define the **bound source** (DD-27) |
 | `allowedSenderRef` | logical reference to the CI role identity (DD-25) |
 | `deployScript` | enum of bundled scripts (`deploy-container.sh`) |
@@ -220,9 +232,25 @@ There is no orchestration API. Contracts are messages, schemas and a CLI.
 
 `additionalProperties: false`. **No** steps, `needs`, `when`, interpolation, expressions or reserved step types. Validation in CI and at startup; an invalid set prevents startup. **Fail fast (G-9, owner direction 2026-10-06, v4.7):** Deployment Definitions are trusted Executor configuration; at startup the Executor discovers every file under `deployment-definitions/`, parses and validates all of them, and on any unparsable file, file without `deploymentId`, duplicate `deploymentId` or validation failure it logs a safe error per file (path and reason, never content) and exits non-zero before any consumer, poller or SQS call starts. Under `deployment-definitions/` only regular directories and regular files named `*.yaml`/`*.yml` (lowercase) are allowed; a symbolic link, any other entry type, a wrong-case extension or any other file fails startup the same way. `npm run definitions:check` is a preflight only.
 
-### 6.3 Target Registry (`schemas/targets.schema.json`, kept)
+### 6.3 Target Registry (runtime, `cicd-registry-<stage>`, AC-02 v4.9; schema `schemas/target-record.schema.json`)
 
-Unchanged from v3.2: `connectionRef`, `credentialRef` (existence-only at startup), `hostKeyRef` (mandatory), `lockKey`, logical containers and `portRef`, `deployWindowPolicy` + `externalDeployersRef | none` (§7.7), `migrationCompatibility` + `attestedBy`. Port and container-name conflicts per host rejected. **Added rule:** a `lockKey` may be referenced by **exactly one** `deploymentId` (bound source, DD-27).
+**v4.9:** the registry is no longer a bundled YAML file; each target is one item (§5.3) read with `GetItem` when a request names it. Values are **inline**; only the credential is a reference.
+
+| Field | Rule |
+|---|---|
+| `targetId` | semantic id `^[a-z0-9][a-z0-9-]{1,62}$` (= key) |
+| `project` | semantic id (e.g. `prms`, `star`, `marlo`, `clarisa`) |
+| `environment` | must equal the deployment's `environment` (`dev` in the PoC) |
+| `host`, `port`, `user` | SSH destination (port default 22); never in Git |
+| `hostKey` | mandatory; one or more OpenSSH public-key lines; pinned, strict (never `StrictHostKeyChecking=no`) |
+| `credentialRef` | logical reference to the **Secrets Manager** SSH credential, which must live under the Executor's secret prefix (the onboarding tool enforces it, so a new target needs no IAM change); read only when connecting, kept in memory only, never in the request, the registry, logs or artifacts |
+| `lockKey` | as before; exactly one `deploymentId` per `lockKey` (DD-27) |
+| `containers[]` | `{ name, port (host:container) }`; every container named by the deployment's `artifacts[]` must be listed, else `REJECTED (TARGET_INCOMPATIBLE)`. Runtime secrets stay in the definition's `runtimeSecretRefs` (single source; passed through, OD-Q5) |
+| `deployWindowPolicy` + `externalDeployers` | `required` + non-empty list, or `not-required` + `none` (§7.7, R2-W2) |
+| `migrationCompatibility` + `attestedBy` | if the deployment declares migrations and the target lacks the attestation → `REJECTED (TARGET_INCOMPATIBLE)` (FR-13) |
+| `allowedDeploymentIds` | the deployments allowed to deploy here; **PoC: exactly one entry** (DD-27, AC2-2) |
+
+**Rules.** A target is validated when it is read: missing item → `REJECTED (TARGET_UNKNOWN)`; schema-invalid item → `REJECTED (TARGET_INVALID)`; `deploymentId` not in `allowedDeploymentIds` → `REJECTED (TARGET_NOT_AUTHORIZED)`; environment mismatch → `REJECTED (TARGET_ENVIRONMENT_MISMATCH)`; container or migration incompatibility → `REJECTED (TARGET_INCOMPATIBLE)`. **Snapshot:** at X1 the non-secret fields of the record and its `version` are written on the Execution item (§5.1); lock retries, reconciliation and dispatch use that snapshot, so a later edit or deletion of the record never changes an in-flight execution's host, host key or `lockKey`; the credential is read from Secrets Manager at connect time through the snapshot's `credentialRef`. Cross-target invariants (one `deploymentId` per `lockKey`, no port or container-name conflict per host) are enforced by the administrative onboarding tool at write time (AC2-3). No secret value is ever stored in the registry.
 
 ### 6.4 Internal events (`schemas/event.schema.json`, reduced)
 
@@ -232,7 +260,7 @@ Envelope: `specVersion, eventId (UUID), eventType, timestamp, source ∈ {execut
 |---|---|---|
 | `LOCK_RETRY_REQUESTED` | `executionId, attempt` | Executor |
 | `RECONCILE_TICK` | — (no `eventId`; correlation id generated by the Executor, G-8) | Scheduler |
-| `DEPLOY_WINDOW_OPEN_REQUESTED` | `lockKey, openedBy, externalJobsDisabled[], closesAt, note?` | Operator |
+| `DEPLOY_WINDOW_OPEN_REQUESTED` | `targetId` (v4.9, AC-02), `lockKey, openedBy, externalJobsDisabled[], closesAt, note?` — the Executor reads the target with `GetItem`; its `lockKey` must equal the event's | Operator |
 | `DEPLOY_WINDOW_CLOSE_REQUESTED` | `lockKey, closedBy, note?` | Operator |
 | `TARGET_RESOLUTION_RECORDED` | `lockKey, executionId, resolvedBy, observedDigests{}, note?` (runbook §12.2; removes the entry from `unresolved[]`, audit only) | Operator |
 
@@ -273,11 +301,12 @@ Root message on `QUEUED`: `deploymentId`, `executionId`, short commit, GitHub ru
 | `sqs-consumer` | Long-poll 20 s; requests `SenderId`, `ApproximateReceiveCount`; visibility heartbeat every 60 s; ack only on finish or recognized no-op | FR-04 | Business logic |
 | `message-router` | Parse; unparseable → no ack (DLQ after 5); route by `eventType` | FR-04 | — |
 | `sender-authorizer` | Maps `SenderId` role ID → principal class; per-type rule (§6.4); for `DEPLOY_REQUESTED`, role ID must equal the definition's resolved `allowedSenderRef` | FR-21 | Trusting any body field |
-| `execution-service` | Schema validation → definition lookup → consistency checks → dedupe claim → sequence → create (X1) or reject (X2); `highestAccepted` update; S1 | FR-03, FR-07, FR-23 | — |
+| `execution-service` | Schema validation → definition lookup → **target authorization and snapshot (v4.9, AC-02)** → consistency checks → dedupe claim → sequence → create (X1) or reject (X2); `highestAccepted` update; S1 | FR-03, FR-07, FR-23 | — |
 | `deploy-coordinator` | V1–V4, lock (DD-09), S2, intent (DD-28), semaphore, transport, mapping, fenced target-state write, release (§7.5) | FR-11, FR-12, FR-24 | Concatenating commands; aborting a running script; re-running |
 | `deploy-window-service` | Open/close per §7.7; `isDeployAllowed(lockKey, needUntil)` | FR-24 | Jenkins knowledge |
 | `reconciler` | Two GSI2 `Query`s per tick (`EXECUTION`, `WINDOW`, `deadlineAt < now`). **Re-drive:** an overdue `QUEUED` is re-evaluated (X3/X4/X5) and an overdue `WAITING_LOCK` with budget left gets a fresh `LOCK_RETRY_REQUESTED` for its current `attempt` (no state change); budget exhausted → X7; overdue `DEPLOYING` → X11 or X16 by `execStartedAt` | FR-15 | Scans; re-running scripts; CI state |
-| `definition-service` | Loads via `DefinitionSource`; schema + semantic + registry rules; reference resolution (identifier refs resolved, credential refs existence-only) | FR-01, FR-02 | Reading secret values |
+| `definition-service` | Loads via `DefinitionSource`; schema + semantic rules of the bundled definitions (registry rules move to the target-registry adapter and the onboarding tool, v4.9); reference resolution (identifier refs resolved, credential refs existence-only) | FR-01 | Reading secret values |
+| `target-registry` (v4.9, AC-02) | `GetItem TARGET#{targetId}` on `cicd-registry-<stage>`; record schema validation; authorization (`allowedDeploymentIds`, environment, container and migration compatibility); never writes | FR-02, FR-21 | Writing the registry; reading credentials |
 | `notification-service` | Slack provider; `EVT#` dedupe | FR-14 | Changing state |
 | `observability` | JSON logger with redaction; EMF metrics; heartbeat | FR-17 | — |
 
@@ -294,7 +323,7 @@ Root message on `QUEUED`: `deploymentId`, `executionId`, short commit, GitHub ru
 | Origin | Outcome | Retry |
 |---|---|---|
 | Unparseable message / persistent processing error | DLQ after 5 receptions | SQS only |
-| Schema, unknown deployment, consistency mismatch, `requestId` ≠ `ci.runId-ci.runAttempt`, unauthorized sender | `REJECTED (reason)` (X2) | 0 |
+| Schema, unknown deployment, consistency mismatch, `requestId` ≠ `ci.runId-ci.runAttempt`, unauthorized sender, target unknown / invalid / not authorized / environment mismatch / incompatible (v4.9) | `REJECTED (reason)` (X2) | 0 |
 | Window invalid at V1–V4 | `FAILED (DEPLOY_WINDOW_CLOSED)` | 0 |
 | Lock wait ≥ 1,800 s | `FAILED (LOCK_TIMEOUT)` (canonical, X7/X15) | 0 |
 | SSH connect / host key | `FAILED (SSH_CONNECT)` after 2 retries before exec / `FAILED (HOST_KEY_MISMATCH)` | 2 / 0 |
@@ -309,8 +338,8 @@ General rule: **only** these transitions are valid. Every write is conditional o
 
 | # | From | To | Guard / trigger | Conditional write |
 |---|---|---|---|---|
-| X1 | ∅ | `QUEUED` | Authorized sender, schema valid, `requestId` = `ci.runId-ci.runAttempt`, known `deploymentId`, consistency OK, dedupe claim on `{deploymentId, requestId}` owned (DD-20) | `attribute_not_exists` on `EXEC#`. `highestAccepted` is **not** a condition of X1 (E2): after X1 commits, a separate update raises it only when it is absent or `stored <= new`; a failed condition is the expected, error-free outcome for an older request, which then proceeds to S1 → X3 `SUPERSEDED` (FR-23). A crash between the two writes only delays S1; S2 stays authoritative |
-| X2 | ∅ | `REJECTED` | Unauthorized sender, schema invalid, `requestId` mismatch, unknown `deploymentId` or consistency mismatch. Rejection record, **no sequence** (RL-5) | `attribute_not_exists` on `REJECT#` |
+| X1 | ∅ | `QUEUED` | Authorized sender, schema valid, `requestId` = `ci.runId-ci.runAttempt`, known `deploymentId`, **target authorized (v4.9: exists, valid, `allowedDeploymentIds`, environment, containers and migration compatible; the record snapshot is written on the item)**, consistency OK, dedupe claim on `{deploymentId, requestId}` owned (DD-20) | `attribute_not_exists` on `EXEC#`. `highestAccepted` is **not** a condition of X1 (E2): after X1 commits, a separate update raises it only when it is absent or `stored <= new`; a failed condition is the expected, error-free outcome for an older request, which then proceeds to S1 → X3 `SUPERSEDED` (FR-23). A crash between the two writes only delays S1; S2 stays authoritative |
+| X2 | ∅ | `REJECTED` | Unauthorized sender, schema invalid, `requestId` mismatch, unknown `deploymentId`, consistency mismatch, or a target rejection (`TARGET_UNKNOWN`, `TARGET_INVALID`, `TARGET_NOT_AUTHORIZED`, `TARGET_ENVIRONMENT_MISMATCH`, `TARGET_INCOMPATIBLE`; v4.9, checked before the dedupe claim). Rejection record, **no sequence** (RL-5) | `attribute_not_exists` on `REJECT#` |
 | X3 | `QUEUED` | `SUPERSEDED` | **S1** (DD-27): `TARGET.lastDeployed`, `TARGET.highestDispatched` or `TARGET.highestAccepted` is newer than this request | status + version |
 | X4 | `QUEUED` | `FAILED (DEPLOY_WINDOW_CLOSED)` | **V1** fails | status + version |
 | X5 | `QUEUED` | `WAITING_LOCK` | V1 OK; sets `lockWaitStartedAt`, `nextAttemptAt = now` | status + version |
@@ -369,7 +398,7 @@ Code 50 re-enters via X14 with the budget already consumed. Safety cap: 10 attem
 
 ### 7.7 Deploy windows (kept; RL-1)
 
-**Configuration safe by construction (R2-W2):** `externalDeployers` (versioned as `externalDeployersRef` or `none`) and `deployWindowPolicy` (`required | not-required`) are mandatory, no defaults. Reference ⇒ `required` only; **`none` ⇔ `not-required`** (owner amendment 2026-10-05). Validated in CI and at startup. Opening requires `openedBy` and `externalJobsDisabled[]` covering **all** resolved external deployers; maximum 8 h. The core compares opaque lists; no Jenkins logic.
+**Configuration safe by construction (R2-W2):** `externalDeployers` (inline in the target record since v4.9, or `none`) and `deployWindowPolicy` (`required | not-required`) are mandatory, no defaults. Reference ⇒ `required` only; **`none` ⇔ `not-required`** (owner amendment 2026-10-05). Validated by the onboarding tool and whenever the record is read (v4.9). The open event names the `targetId`, and the Executor reads that target's external deployers with `GetItem` (v4.9). Opening requires `openedBy` and `externalJobsDisabled[]` covering **all** resolved external deployers; maximum 8 h. The core compares opaque lists; no Jenkins logic.
 
 **Revalidation (R2-W1)** with `needUntil = now + timeoutMinutes`:
 
@@ -396,7 +425,7 @@ Not applicable. Operator surfaces: Slack, the GitHub run, CloudWatch Logs Insigh
 |---|---|---|
 | Deploy request | `schemas/deploy-request.schema.json` | Reusable workflow, Executor |
 | Deployment Definition | `schemas/deployment.schema.json` | `definition-service`, authors, CI validation |
-| Target Registry | `schemas/targets.schema.json` | `definition-service`, deploy-coordinator |
+| Target record | `schemas/target-record.schema.json` (v4.9; replaces `targets.schema.json`) | Target Registry adapter, onboarding tool, deploy-coordinator |
 | Internal events | `schemas/event.schema.json` | Executor, `tools/`, Scheduler target |
 | CI contract | `.github/workflows/deploy-request.reusable.yml` | Application caller workflows |
 | Deploy script CLI | `deploy-scripts/deploy-container.sh` + runbook | deploy-coordinator; future P1 waves |
@@ -414,7 +443,7 @@ Not applicable. Operator surfaces: Slack, the GitHub run, CloudWatch Logs Insigh
 | QAS-3 | Performance | Valid request visible in the queue, lock free, window open | Script started ≤ 60 s p95 (NFR-05) | Long-poll, immediate first lock attempt |
 | QAS-4 | Security | Foreign sender, tag, extra field, forged `ci.repository` | 100% `REJECTED`, 0 SSH sessions; 0 internal identifiers in a public CI log | Sender binding, strict schema, masking |
 | QAS-5 | Ordering | Late older build, re-run of an older run, replayed message | 0 regressions over the injection suite (AC17) | Bound source, in-source order, fenced `lastDeployed` |
-| QAS-6 | Modifiability | New P1 deployment | 0 Executor code lines; configuration only (image rebuild per DD-19) | Flat definitions, `DefinitionSource` |
+| QAS-6 | Modifiability | New P1 deployment; new or moved target | New deployment: 0 Executor code lines, definition rebuild per DD-19. **New or moved target: one registry item + its credential secret; no Executor change, rebuild or redeploy (AC-02)** | Flat definitions, `DefinitionSource`, runtime Target Registry |
 | QAS-7 | Cost | PoC run | 0 new permanent compute; CI on standard hosted runners | Existing host, GitHub Actions |
 | QAS-8 | Scalability | — | Not significant: bounded concurrency (NFR-04) | — |
 
@@ -439,11 +468,11 @@ Not applicable. Operator surfaces: Slack, the GitHub run, CloudWatch Logs Insigh
 | DD-16 | Executor AWS credentials via the SDK chain (OD-Q12 open) | Smaller permission set (§11.2) |
 | DD-17 | Infrastructure as inventory until OD-Q7 | Inventory re-derived |
 | DD-18 | Executor host parameterized (OD-Q11 open) | No `/work` volume |
-| DD-19 | Definitions behind `DefinitionSource`, bundled in the image | Paths `deployment-definitions/`, `schemas/`, `deploy-scripts/`; an implementation never skips an invalid definition file or an unexpected entry silently (G-9, v4.7) |
+| DD-19 | Definitions behind `DefinitionSource`, bundled in the image; **the Target Registry is not bundled (v4.9, AC-02: runtime table §5.3)** | Paths `deployment-definitions/`, `schemas/`, `deploy-scripts/`; an implementation never skips an invalid definition file or an unexpected entry silently (G-9, v4.7) |
 | DD-20 | Dedupe with a leased claim | Key = `{deploymentId}#{requestId}` (deployment already bound by DD-25); `requestId` validated against `ci.runId-ci.runAttempt` (CC-2) |
 | DD-21 | Per-target deploy windows | Fail-fast semantics kept (RL-1) |
 | DD-22 | Target kernel mutex as second barrier | Unchanged; exit 50 → X14 |
-| DD-23 | Real identifiers out of Git | Adds `allowedSenderRef`, `source.*Ref`, `imageRepositoryRef`; extends to CI logs (except the CI role ARN and account ID, owner-accepted, G-10 / DD-24 v4.7) |
+| DD-23 | Real identifiers out of Git; **v4.9 (AC-02): target values are inline in the registry; credentials (`credentialRef`, `tokenRef`) resolve from Secrets Manager. Where the remaining non-secret definition and platform references resolve (Secrets Manager today; registry `CONFIG#` items proposed) is open point AC2-7** | Adds `allowedSenderRef`, `source.*Ref`, `imageRepositoryRef`; extends to CI logs (except the CI role ARN and account ID, owner-accepted, G-10 / DD-24 v4.7) |
 
 ### 10.3 Decisions removed by AC-01
 
@@ -485,9 +514,10 @@ MaxSessionDuration: 1 h
 ### DD-25 — Sender binding per message type (OD-A2: **APPROVED by the owner, 2026-10-06**)
 - **Problem:** the queue accepts messages from several principals; a request for `deploymentId` Y must come only from Y's CI role (FR-21).
 - **Decision:** the consumer requests the `SenderId` system attribute (P-A4: `ROLEID:session` for roles). The authorizer takes the role-ID prefix and maps it to a principal class using **resolved references**:
-  - `allowedSenderRef` (per definition) and `executorPrincipalRef`, `schedulerPrincipalRef`, `operatorPrincipalRef` (platform config) resolve at startup, through `SecretProvider` as **non-sensitive identifier references** (DD-23), to role IDs. No role ID or ARN is committed.
+  - `allowedSenderRef` (per definition) and `executorPrincipalRef`, `schedulerPrincipalRef`, `operatorPrincipalRef` (platform config) resolve at startup, through `SecretProvider` as **non-sensitive identifier references** (DD-23; unchanged until open point AC2-7 is decided), to role IDs. No role ID or ARN is committed.
   - Per-type rule: `DEPLOY_REQUESTED` ← the definition's `allowedSender` only; `LOCK_RETRY_REQUESTED` ← Executor; `RECONCILE_TICK` ← scheduler; `DEPLOY_WINDOW_*` ← operator.
   - Mismatch → X2 `REJECTED (UNAUTHORIZED_SENDER)`, metric + alarm, ack.
+  - **Target authorization (v4.9, AC-02):** after the sender check, a `DEPLOY_REQUESTED` is accepted only if the named `targetId` exists, its `allowedDeploymentIds` contains the `deploymentId`, and the environments match; otherwise X2 `REJECTED (TARGET_UNKNOWN | TARGET_INVALID | TARGET_NOT_AUTHORIZED | TARGET_ENVIRONMENT_MISMATCH | TARGET_INCOMPATIBLE)`, metric `RejectedRequests{reason}` and alarm, ack. A CI authorized for one deployment cannot select another project's server.
 - **Defense in depth:** a queue policy allowing `SendMessage` only to those principals.
 - **Fail-closed:** a recreated role gets a new role ID → requests are rejected and alarmed until the reference is updated.
 - **Owner approval (2026-10-06), binding statements:**
@@ -532,7 +562,7 @@ MaxSessionDuration: 1 h
 | Rename / reset | Accepted **fail-safe limitation**: if the trusted workflow is renamed or its counter resets, deploys stop (newer-looking-older runs are superseded) rather than risk an older deploy. Renaming or rebinding the trusted workflow requires the future audited OD-A8 procedure |
 
 Implementation detail of the approved decision:
-1. **Bound source:** each `lockKey` is served by exactly one `deploymentId`; each `deploymentId` is bound to one source (`repositoryRef`, `workflowRef`, `environmentRef`) and one `allowedSender`. Validated at startup (§6.3). The request's `ci.repository` and `ci.workflowRef` must match the resolved source (consistency check; authorization is DD-25).
+1. **Bound source:** each `lockKey` is served by exactly one `deploymentId`; each `deploymentId` is bound to one source (`repositoryRef`, `workflowRef`, `environmentRef`) and one `allowedSender`. Enforced by the onboarding tool at write time (v4.9, §6.3); when the Executor reads a target it can check only that record (its single `allowedDeploymentIds` entry), not other records that might reuse the same `lockKey` (AC2-3). The request's `ci.repository` and `ci.workflowRef` must match the resolved source (consistency check; authorization is DD-25).
 2. **In-source order:** `ci.runNumber`. Newer ⇔ higher `runNumber`; equal (re-run of the same run) ⇒ not older: deploys and the script's idempotent path applies.
 3. **Where:** `highestAccepted` (monotonic, raised by a separate update right after X1) feeds S1; S2 uses `max(lastDeployed, highestDispatched)`, where `highestDispatched` is written atomically with every X9 intent and is never fenced (CS-2). Outcome of the newer dispatch does not matter: once a newer value reached X9, no older one deploys.
 4. **Guard rails:** Environment deployment branch rules = one protected branch, so runs of the source build that branch's head; an older version can be redeployed only through OD-A8.
@@ -588,7 +618,7 @@ Implementation detail of the approved decision:
 
 ### 11.2 Executor permissions (DEV)
 
-`sqs:ReceiveMessage/DeleteMessage/ChangeMessageVisibility/SendMessage` (own queue; `SendMessage` for lock retries); DynamoDB item operations + `Query` on GSI2 of its table; `secretsmanager:GetSecretValue` on the SSH credential, Slack token and identifier references; `DescribeSecret` for existence checks; CloudWatch logs/metrics. **No** S3, Lambda, CodeBuild, ECR, IAM, GitHub.
+`sqs:ReceiveMessage/DeleteMessage/ChangeMessageVisibility/SendMessage` (own queue; `SendMessage` for lock retries); DynamoDB item operations + `Query` on GSI2 of its table; `secretsmanager:GetSecretValue` on the SSH credential and the Slack token (identifier references stay until open point AC2-7 is decided), scoped to the secret prefix so a new target's credential needs no role change; **`dynamodb:GetItem` only on `cicd-registry-<stage>` (no Put/Update/Delete/Query/Scan, AC-02)**; `DescribeSecret` for existence checks; CloudWatch logs/metrics. **No** S3, Lambda, CodeBuild, ECR, IAM, GitHub.
 
 ---
 
@@ -727,7 +757,7 @@ Verdicts: **KEEP** (as is or trivial rename), **REWORK** (same purpose, changed 
 | `domain/supersede-policy`, `domain/window-policy` | NEW | DD-27; §7.7 |
 | `application/definition-service/index` (233) | REWORK | Deployment schema |
 | `…/reference-resolution` (235) | KEEP (+ refs) | Adds `allowedSenderRef`, `source.*Ref`, principal refs |
-| `…/registry-rules` (256) | KEEP (+ one rule) | One `deploymentId` per `lockKey` |
+| `…/registry-rules` (256) | KEEP (+ one rule) — *superseded by AC-02 v4.9 (task R-9)* | One `deploymentId` per `lockKey` |
 | `…/schema-validation` (32) | KEEP | — |
 | `…/semantic-rules` (138) | REWORK | Drop cycles, `needs`, reserved types, interpolation |
 | `application/event-router` (299 + 70) | REWORK → `message-router` | Drop normalizers and orphans; add type routing; keep schema validation |
@@ -773,9 +803,9 @@ Verdicts: **KEEP** (as is or trivial rename), **REWORK** (same purpose, changed 
 | `schemas/pipeline.schema.json` | DELETE | Replaced by `deployment.schema.json` (NEW) |
 | `schemas/event.schema.json` | REWORK | Internal events only (§6.4) |
 | `schemas/deploy-request.schema.json` | NEW | §6.1 |
-| `schemas/targets.schema.json` | KEEP (+ one rule) | §6.3 |
+| `schemas/targets.schema.json` | KEEP (+ one rule) — *superseded by AC-02 v4.9 (task R-9)* | §6.3 |
 | `pipeline-definitions/prms/reporting-dev.yaml` | REWORK → `deployment-definitions/` | Flat definition |
-| `pipeline-definitions/targets/dev.yaml` | KEEP (moved) | — |
+| `pipeline-definitions/targets/dev.yaml` | KEEP (moved) — *superseded by AC-02 v4.9 (task R-9)* | — |
 | `deploy-scripts/deploy-container.sh` | REWORK | `--artifact` by digest, tag rejection (exit 2), idempotent "already running" |
 | `deploy-scripts/test/**` | KEEP (+ cases: tag rejected, digest pull) | — |
 | `deploy-scripts/README.md` | REWORK | CLI change |
