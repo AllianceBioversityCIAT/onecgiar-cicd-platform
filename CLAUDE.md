@@ -32,7 +32,7 @@ There is no `docs/prd.md`, `docs/trd/trd.md` or `docs/ux-ui/design.md` (minimal 
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | Lint |
 | `npm test` | Local unit and integration tests |
-| `npm run validate` | Validates definitions and registry and runs the boundary guards (T-21) |
+| `npm run validate` | Validates definitions and registry and runs the boundary guards (T-21); after AC-02 V1 task R-9, schemas and guards only |
 | `npm run check:local` | Local gate without Docker: typecheck, lint, build, tests, `check:deps` |
 | `npm run inspect:image` | Real image inspection (**requires Docker**; environment-dependent deferred validation, mandatory before deployment) |
 
@@ -42,7 +42,7 @@ There is no `docs/prd.md`, `docs/trd/trd.md` or `docs/ux-ui/design.md` (minimal 
 2. **Closed state machine** (design §7.3, T1–T13). No transition outside the list.
 3. **Correctness through conditional writes** in DynamoDB (DD-03). No in-memory state as source of truth.
 4. **Two lock layers:** distributed DynamoDB lock plus target-side local mutex. Neither replaces the other (DD-09, DD-22).
-5. **`DefinitionSource`** is the core's only path to definitions (DD-19).
+5. **`DefinitionSource`** is the core's only path to definitions (DD-19). **AC-02 V1 (owner, 2026-10-07):** definitions are removed by tasks R-1…R-9; from then on the read-only **`TargetRegistry`** port (`GetItem` only) is the core's only path to target configuration, and the deploy script lives on the target.
 6. **Publication policy** (design §4.1, DD-23): never commit account IDs, hosts, IPs, credential IDs, revealing secret names, Jenkins job names or sensitive values. Use logical references (`<AWS_ACCOUNT_ID>`, `<PRMS_REPORTING_DEV_TARGET>`, …).
 7. **Local-only files:** `JENKINS_REPLACEMENT_AKILI_CONTEXT.md` and `JENKINS_REPLACEMENT_FEASIBILITY_ANALYSIS.md` are in `.gitignore`. Before every commit run `git status` and `git ls-files` and confirm neither appears.
 8. **Open decisions** (OD-Q5, OD-Q7, OD-Q11–Q15, OD-N1) are never resolved by assumption.

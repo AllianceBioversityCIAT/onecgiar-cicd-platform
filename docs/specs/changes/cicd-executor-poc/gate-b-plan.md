@@ -136,18 +136,18 @@ All tagged `Project=ONECGIAR-CICD-Platform`; names derived from a `Stage` parame
 
 ---
 
-## 7. Target parameters the owner supplies (AC-02, 2026-10-07)
+## 7. Target parameters the owner supplies (AC-02 V1, 2026-10-07)
 
 | Parameter | Where it goes | Notes |
 |---|---|---|
-| `deploymentId` | Deployment Definition (bundled) | Semantic id; must be unique; one per `lockKey` |
-| `targetId`, `project`, `environment` | Target record (`cicd-registry-<stage>`) | The caller workflow sends the `targetId` in the request |
+| `targetId`, `project`, `environment` | Target record (`cicd-registry-<stage>`) | The caller workflow sends the `targetId` in the request; it is also the lock key |
 | Host, SSH port, SSH user | Target record, inline | Never in Git; not a secret |
 | Host key (public key lines) | Target record, inline | Obtained out of band and compared with `ssh-keyscan` output |
 | SSH credential | Secrets Manager (referenced by `credentialRef` in the target record) | Private key only (G-1); under the Executor's secret prefix |
-| `lockKey`, containers and ports, window policy + external deployers, migration attestation, `allowedDeploymentIds` | Target record, inline | One deployment per `lockKey` (DD-27) |
-| Deployment script, artifacts/units, runtime secret refs, health, migration commands | Deployment Definition (bundled) | Unchanged |
-| Source binding, `allowedSenderRef`, image repository, Slack channel | Deployment Definition refs | Where their values live: open point AC2-7 |
+| `deployScript` | Target record, inline | Absolute path of the script installed on the server; owned by an administrator, not writable by the deploy user |
+| `deployWindowPolicy` | Target record, inline | `required` while Jenkins jobs share the target |
+| Image repositories, containers, ports, runtime configuration, migrations, health checks | The script's own configuration on the server | Not modeled by the platform in V1 |
+| CI, Executor, Scheduler and Operator role IDs, Slack channel | Platform identifier references | Resolved as today (AC2-7); one CI role shared by the authorized repositories |
 
 ---
 
@@ -192,9 +192,9 @@ Gate C keeps permanent hosting and operational readiness (container image build 
 
 ---
 
-## 10a. AC-02 (owner decision 2026-10-07)
+## 10a. AC-02 V1 (owner decisions 2026-10-07)
 
-B1 Executor startup is **PENDING** until AC-02 tasks R-1…R-6 are implemented (the Executor can then start with zero targets) and the startup prerequisites that remain exist (a real Slack token, AC2-6; the definition references, AC2-7). Deployments wait for the first real target record and its real credential. No sentinel or example secrets are created (owner direction). See `architecture-change-02.md` and tasks §6.0.3.
+B1 Executor startup is **PENDING** until AC-02 V1 tasks R-1…R-6 are implemented (the Executor can then start with no definitions and zero targets) and the startup prerequisites that remain exist (a real Slack token, AC2-6; the platform identifier references, AC2-7). Deployments wait for the first real target record and its real credential. No sentinel or example secrets are created (owner direction). See `architecture-change-02.md` and tasks §6.0.3.
 
 ## 11. Owner clarifications (2026-10-06)
 

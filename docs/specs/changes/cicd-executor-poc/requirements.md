@@ -1,6 +1,6 @@
 # Requirements — CI/CD Executor PoC (PRMS Reporting DEV)
 
-> **In one line:** GitHub Actions builds PRMS Reporting DEV and sends **one** deploy request through SQS. A lightweight Executor must then **authenticate, validate, deduplicate, order, lock and deploy it over SSH** to the target's versioned script, with persistent state and idempotency under at-least-once delivery. **The Executor cannot clone, build, test, orchestrate CI, connect to databases, read application secrets, or contain per-project logic.**
+> **In one line:** GitHub Actions builds PRMS Reporting DEV and sends **one** deploy request through SQS. A lightweight Executor must then **authenticate, validate, deduplicate, order, lock and deploy it over SSH** through the target's deploy script, with persistent state and idempotency under at-least-once delivery. **The Executor cannot clone, build, test, orchestrate CI, connect to databases, read application secrets, or contain per-project logic.**
 
 ---
 
@@ -10,7 +10,7 @@
 |---|---|
 | Spec Path | `changes/cicd-executor-poc` |
 | Phase | Phase 1: Requirements |
-| Version | **v3.8** (owner decision 2026-10-07, AC-02: FR-01 without `targetRef`; FR-02 runtime Target Registry with inline non-secret values and `allowedDeploymentIds`; FR-03 request carries `targetId`; FR-21 target authorization). v3.7 (owner direction, B0 acceptance 2026-10-06: FR-22 "public-safe logs" and NFR-02 — no GitHub secret, role ARN and account ID owner-accepted in CI logs (G-10); RECONCILE_TICK minimal internal contract (G-8); fail-fast definition loading at startup (G-9)). v3.6 (owner direction, Gate B approval 2026-10-06: FR-22 "public-safe logs" follows the DD-24 v4.6 GitHub value classification). v3.5 (Gate A closure editorial sync, no new decision). v3.4 (owner approval 2026-10-06; aligned with `proposal.md` v3.4) |
+| Version | **v4.0** (owner decisions 2026-10-07, AC-02 V1, `architecture-change-02.md`; supersedes the v3.8 draft of the same day): FR-01 deferred (no Deployment Definitions in V1); FR-02 runtime Target Registry with the minimal record; FR-03 request carries `targetId`, no `deploymentId`; FR-12/FR-13 the script lives on the target and the Executor runs it by path; FR-21 one shared CI role, no per-target sender authorization (accepted residual risk); FR-23/FR-24/FR-25 adjusted. §1.3 is normative). v3.7 (owner direction, B0 acceptance 2026-10-06: FR-22 "public-safe logs" and NFR-02 — no GitHub secret, role ARN and account ID owner-accepted in CI logs (G-10); RECONCILE_TICK minimal internal contract (G-8); fail-fast definition loading at startup (G-9)). v3.6 (owner direction, Gate B approval 2026-10-06: FR-22 "public-safe logs" follows the DD-24 v4.6 GitHub value classification). v3.5 (Gate A closure editorial sync, no new decision). v3.4 (owner approval 2026-10-06; aligned with `proposal.md` v3.4) |
 | Depth | **Full** (new infrastructure, trust boundary, concurrency, deployment and migrations) |
 | Type | Change |
 | Approval Mode | `gated` (inherited from the proposal) |
@@ -42,8 +42,12 @@
 | RL-3 | Unparseable messages go to the DLQ; parseable contract-invalid requests are `REJECTED` and acknowledged (FR-04) |
 | RL-4 | Any exit code outside 0/10/20/30/40/50, or a lost session, is `UNKNOWN_TARGET_STATE` (FR-13, FR-16) |
 | RL-5 | Exit 0 covers "already running these digests"; whether a rejected request with an unknown `deploymentId` gets a record or a sequence is a design choice |
-| RL-7 | Exit 2 (script usage error) is **not** a distinct outcome: the Executor cannot distinguish it from bash's own exit 2 (builtin misuse, syntax) that could occur after effects, so it maps to `UNKNOWN_TARGET_STATE` (RL-4 stands). Usage errors are prevented upstream by definition validation and the script's own tests |
+| RL-7 | Exit 2 (script usage error) is **not** a distinct outcome: the Executor cannot distinguish it from bash's own exit 2 (builtin misuse, syntax) that could occur after effects, so it maps to `UNKNOWN_TARGET_STATE` (RL-4 stands). Usage errors are prevented upstream by definition validation and the script's own tests. *V1 (AC-02): by the caller configuration and the script's tests only; an unknown unit ends `UNKNOWN_TARGET_STATE`* |
 | RL-6 | Required reviewers apply to production environments in later waves; the PoC is DEV |
+
+### 1.3 V1 scope and identity mapping (AC-02 V1, owner decisions 2026-10-07; normative)
+
+In V1 there are **no Deployment Definitions**. The request's `targetId` is the deploy identity **and** the lock key: wherever this document says `deploymentId` or `lockKey` (dedupe scope, sequence, `executionId` = `<targetId>-<sequence>`, lock, target mutex, supersede ordering, deploy windows, logs, notifications), read `targetId`. Wherever it says a value comes from "the definition", it comes from: the target record (deploy script path, window policy; FR-02), the platform configuration (the shared CI role, the notification channel, the deploy timeout of 20 minutes), or the target-side script's own configuration (image repositories, containers, ports, runtime configuration, migrations, health checks; FR-13). Design §1.2 holds the same mapping. This section takes precedence over older wording.
 
 **Rule for this specification:** OD-Q5, OD-Q7, OD-Q11–OD-Q15, OD-N1 and OD-A3–OD-A9 are **open decisions** (§9); OD-A1 and OD-A2 were **resolved by the owner on 2026-10-06**. No requirement assumes their answer. Where one conditions a requirement, the dependency is declared and the requirement states the **behavior**, not the mechanism. Premises P-A3, P-A5 and P-A7 stay `UNVERIFIED` (P-A6 was verified at source in JD round 2) and no requirement relies on them alone.
 
@@ -53,11 +57,11 @@
 
 | Question | Answer |
 |---|---|
-| What is being built? | (1) A reusable GitHub Actions workflow that builds, pushes images **by digest** and sends one deploy request. (2) A containerized Executor that consumes those requests from SQS and coordinates **one** SSH deploy per request to a versioned target script |
+| What is being built? | (1) A reusable GitHub Actions workflow that builds, pushes images **by digest** and sends one deploy request. (2) A containerized Executor that consumes those requests from SQS and coordinates **one** SSH deploy per request through the target's deploy script |
 | What for? | To show that a representative Jenkins pipeline can be replaced **without another CI server and without another Jenkins** |
 | With which pipeline? | PRMS Reporting DEV (pattern P1, ~57 pipelines; FA §4, §23) |
 | What makes it correct? | Sender authorization, digest-only artifacts, idempotency under at-least-once delivery, supersede ordering, per-deploy-unit lock + target mutex, persistent state, migration before stopping the old version, previous image retained |
-| What makes it "not Jenkins"? | No CI in the Executor, a flat definition with no expressions, no toolchains or git, no DB or application-secret access (NFR-01) |
+| What makes it "not Jenkins"? | No CI in the Executor, no per-application model (the target's script owns it), no expressions, no toolchains or git, no DB or application-secret access (NFR-01) |
 | What is out of scope? | Non-SSH deploy types (**OD-A3**), non-Docker artifact store (**OD-A4**), operator rollback path (**OD-A8**, unless decided), Jira, retiring Jenkins, historical security debt |
 
 ---
@@ -69,15 +73,16 @@
 | CI | Checkout, install, lint, test, build, image push. Owned by GitHub Actions |
 | Reusable workflow | The GitHub Actions workflow in this platform repo that implements the CI contract (FR-22) |
 | Caller workflow | The workflow file in an application repo that invokes the reusable workflow (OD-A6) |
-| CI role | IAM role assumed by a workflow through OIDC; one per repository + GitHub Environment (FR-25) |
+| CI role | IAM role assumed by a workflow through OIDC. **V1: one role shared by the authorized repositories** (owner decision 2026-10-07; FR-25) |
 | Deploy request | The `DEPLOY_REQUESTED` message (FR-03) |
 | Sender | The AWS identity that put a message on the queue, as asserted by AWS, not by the message body |
 | Executor | Deploy-coordination service: receive → validate → authenticate → resolve → coordinate → deploy → record → notify |
-| Deployment Definition | Flat versioned document mapping a `deploymentId` to an approved script, static parameters and an `allowedSender` reference; the target is chosen by the request and authorized by the Target Registry (FR-01, FR-02) |
-| Target Registry | Runtime table of deploy destinations (`cicd-registry-<stage>`), one record per `targetId` (FR-02, AC-02) |
-| Execution | One processing of one deploy request, identified by `executionId` = `<deploymentId>-<sequence>` |
+| Deployment Definition | Not part of V1 (FR-01, deferred) |
+| Target Registry | Runtime table of deploy destinations (`cicd-registry-<stage>`), one record per `targetId`: where the server is, how to connect securely and which script to run (FR-02, AC-02) |
+| Deploy script | Script installed on the target server at the record's `deployScript` path; owns the application-specific deploy logic (FR-13) |
+| Execution | One processing of one deploy request, identified by `executionId` = `<targetId>-<sequence>` |
 | Artifact identity | An image digest (`sha256:<64-hex>`). Never a tag |
-| Deploy unit / `lockKey` | Containers on a host deployed together and sharing a lock |
+| Deploy unit / `lockKey` | What one target's script deploys, under one lock. **V1: the lock key is the `targetId`** |
 | Supersede | Rule by which an **older** request never replaces a **newer** deployment of the same `lockKey` (FR-23) |
 | Deploy window | Per-target period in which deploys are allowed; required while external deployers (Jenkins) share the target (FR-24) |
 | Target mutex | Kernel file lock taken by the script on the target; second barrier (FR-13) |
@@ -119,9 +124,9 @@
 |---|---|
 | Reusable workflow + PRMS Reporting DEV caller (FR-22) | **Non-SSH deploy types** (S3/CloudFront, Lambda, SAM/CFN) — **OD-A3** |
 | CI trust boundary: OIDC provider, CI role, queue policy, GitHub Environment (FR-25) | **Non-Docker artifact store** — **OD-A4** |
-| Deployment Definitions, Target Registry, request contract with validation | Operator deploy-only / rollback path — OD-A8 (designed only if decided) |
+| Target Registry, request contract with validation (V1: no Deployment Definitions) | Operator deploy-only / rollback path — OD-A8 (designed only if decided) |
 | Sender authorization, dedupe, state, supersede, lock, windows, SSH, reconciler | Lambda or CodeBuild in the normal path (exception mechanisms only, by spec change) |
-| Deploy script contract on the target, including migration | Jira Builds API, Teams, email; SSH → SSM |
+| Deploy script interface on the target; the PRMS Reporting DEV script, including migration | Jira Builds API, Teams, email; SSH → SSM |
 | Slack notifications for the deploy lifecycle | Retiring Jenkins jobs; changing Jenkinsfiles |
 | Coexistence procedure with Jenkins | Historical security debt (parallel track); STAGING or PROD resources |
 
@@ -134,7 +139,7 @@
                      v
         SQS (Standard) + DLQ ──> Executor ──> DynamoDB (state, dedupe, locks, windows)
                      ▲             │ ├──> Slack · CloudWatch · Secrets Manager
-     Scheduler tick ─┘             │ └──> SSH/SFTP (pinned host key)
+     Scheduler tick ─┘             │ └──> SSH (pinned host key)
                                    v
                      <PRMS_REPORTING_DEV_TARGET>: deploy script ──> pull by digest
                                                  ──> migration (DEV DB) ──> swap ──> health
@@ -147,7 +152,7 @@
 | Persona | Needs | Key requirements |
 |---|---|---|
 | Platform operator (DevOps) | Trigger, observe and diagnose deploys without Jenkins | FR-15, FR-17, FR-24, NFR-06 |
-| Deployment author | Add a deployment with configuration only | FR-01, FR-02, FR-22, NFR-08 |
+| Deployment author | Add a target with configuration only: a registry record, its credential secret, the script on the server and a caller workflow | FR-02, FR-22, NFR-08 |
 | Application repo owner / admin | Add the caller workflow; keep branch and Environment rules | FR-22, FR-25 (OD-A6) |
 | PRMS Reporting team | DEV deployed correctly; informed of deploy failures | FR-12, FR-13, FR-14 |
 | Jenkins administrator | Pause and resume, in a controlled way, the jobs that touch the target | FR-18 |
@@ -158,72 +163,49 @@
 
 ## 6. Functional Requirements
 
-### FR-01 — Deployment Definitions
+### FR-01 — Deployment Definitions (deferred; not part of V1)
 
-The system SHALL determine each deployment's behavior exclusively from a versioned, **flat** Deployment Definition validated against a schema. A definition declares: `deploymentId`, environment, the approved deploy script (since v3.8 it names no target: the request's `targetId` selects one and the target record authorizes it, FR-02), static script parameters (logical containers, port references, an image repository reference per artifact unit), (the `lockKey` belongs to the target record, FR-02), timeout, notification channel, and an `allowedSender` **logical reference**. It contains no step graph.
+**V1 (AC-02 V1, owner decision 2026-10-07):** the system SHALL NOT require Deployment Definitions. The Executor does not model containers, application ports, migrations, migration compatibility, health checks or runtime configuration; per-application behavior lives in the target's script (FR-13). Versioned definitions may return in a later change; they are not specified here.
 
-#### Scenario: valid definition
-- GIVEN a definition that satisfies the schema and whose references resolve
-- WHEN an execution for its `deploymentId` is created
-- THEN the execution records the version identifier of the definition used
-- AND the whole execution uses that version, even if the definition changes meanwhile
-
-#### Scenario: invalid definition
-- GIVEN a definition with an unknown field, a missing required field, an unresolvable reference, or a step list
-- WHEN it is validated (in CI or when the Executor starts)
-- THEN it is rejected with an error that names the field and the violated rule
-- BUT it must NOT allow any execution for that `deploymentId`
-- AND IT MUST reject any expression, interpolation, loop or embedded script
-
-#### Scenario: unparsable or incomplete definition file at startup (G-9, owner direction 2026-10-06)
-- GIVEN the Executor starting with a definitions root where any file under `deployment-definitions/` cannot be parsed, lacks a `deploymentId`, duplicates another file's `deploymentId`, or fails validation
-- WHEN the Executor discovers, parses and validates **all** definition files at startup
-- THEN it logs a safe error naming each affected file and the reason (never the file content) and terminates startup with a non-zero exit code
-- BUT it must NOT ignore the file silently and must NOT start with a partially valid definition set (the offline `definitions:check` is a preflight, not a substitute)
-
-#### Scenario: sender reference
-- GIVEN a definition
-- THEN `allowedSender` is a logical reference resolved from trusted configuration
-- BUT it must NOT contain a raw account ID, role ARN or role ID in Git (DD-23)
-
-#### Scenario: environment out of scope
-- GIVEN a definition with an environment other than `dev`
-- WHEN the DEV Executor loads it
-- THEN it rejects it
+#### Scenario: startup without definitions
+- GIVEN the Executor starting with no definition files
+- THEN it starts (subject to the platform configuration checks)
+- AND it never reads application-specific deployment parameters from the image
 
 ### FR-02 — Target Registry
 
-The system SHALL resolve every deploy destination at request time from a runtime Target Registry (one record per `targetId`, AC-02) that declares inline the project, environment, SSH host, port, user, pinned host key, containers and ports, lock key, the deploy-window policy and external deployers (FR-24), the migration-compatibility attestation (FR-13) and the `allowedDeploymentIds`, and that references the SSH credential (`credentialRef`) held in Secrets Manager. Adding or changing a target SHALL NOT require changing, rebuilding or redeploying the Executor.
+The system SHALL resolve every deploy destination at request time from a runtime Target Registry (one record per `targetId`, AC-02) that declares inline only what is needed to locate the server, connect securely and run the authorized script: the target id, project and environment, SSH host, port and user, the pinned host key, the absolute path of the deploy script on the target (`deployScript`) and the deploy-window policy (FR-24), and that references the SSH credential (`credentialRef`) held in Secrets Manager. Adding or changing a target SHALL NOT require changing, rebuilding or redeploying the Executor.
 
 #### Scenario: new target without redeploy
 - GIVEN an administrator registers a valid target record and its credential secret
 - WHEN an authorized request names that `targetId`
 - THEN the Executor resolves and uses it without any code change, rebuild or restart
 
-#### Scenario: unknown, invalid or unauthorized target
-- GIVEN a request whose `targetId` does not exist, whose record is invalid, whose `allowedDeploymentIds` does not contain the request's `deploymentId`, or whose environment differs from the deployment's
+#### Scenario: unknown or invalid target
+- GIVEN a request whose `targetId` does not exist, or whose record is invalid
 - WHEN it is received
-- THEN it is `REJECTED` with the matching reason (`TARGET_UNKNOWN`, `TARGET_INVALID`, `TARGET_NOT_AUTHORIZED`, `TARGET_ENVIRONMENT_MISMATCH`, or `TARGET_INCOMPATIBLE` when a deployed container is missing from the target or a migration lacks the target's attestation)
-- BUT it must NOT open SSH, take a lock or affect any other execution
+- THEN it is `REJECTED` with the matching reason (`TARGET_UNKNOWN`, `TARGET_INVALID`)
+- BUT it must NOT consume a sequence, open SSH, take a lock, read the target's credential or affect any other execution
 
 #### Scenario: record changed or deleted during an execution
 - GIVEN an accepted execution whose target record is edited or deleted before dispatch
-- THEN the execution keeps using the snapshot taken at acceptance (host, host key, `lockKey`)
-- AND the credential is still read only at connect time
+- THEN the execution keeps using the snapshot taken at acceptance (host, port, user, host key, script path, window policy)
+- AND the credential is still read only at connect time, through the snapshot's `credentialRef`
+- AND a redelivery of the accepted request (dedupe item `BOUND`) is a no-op, never a rejection
 
 #### Scenario: missing host key
 - GIVEN a target record without a host key
 - THEN it is invalid even if the credential exists, and no connection is attempted
 
+#### Scenario: deploy script path
+- GIVEN a target record
+- THEN `deployScript` is an absolute path without `..`, arguments, whitespace or shell metacharacters, else the record is invalid
+- AND the script to run always comes from the record, never from the request
+
 #### Scenario: mandatory window policy (Judgment Day round 2, R2-W2)
-- GIVEN a record that omits the external deployers or the window policy, or declares external deployers with a policy that does not require a window
+- GIVEN a record that omits the window policy
 - THEN it is invalid
 - BUT there must NOT be a default value that leaves a shared target unprotected
-
-#### Scenario: port or name conflict and lock key ownership
-- GIVEN a record that would publish a port or container name already used on the same host, or reuse a `lockKey` owned by another deployment
-- WHEN the administrator registers it
-- THEN the onboarding tool refuses it, naming both records
 
 #### Scenario: secrets and write access
 - GIVEN the registry
@@ -232,16 +214,16 @@ The system SHALL resolve every deploy destination at request time from a runtime
 
 ### FR-03 — Deploy request contract and execution identity
 
-The system SHALL accept deployments only through a `DEPLOY_REQUESTED` message that matches a strict schema: `specVersion`, `eventType`, `requestId`, `deploymentId`, `commitSha` (40 hex), `targetId` (since v3.8, FR-02), `artifacts` (artifact unit → image digest), audit-only `ci` metadata, and the ordering fields fixed by OD-A1. It SHALL create at most one execution per `deploymentId` + `requestId` (the dedupe scope), with `executionId` = `<deploymentId>-<sequence>` and a monotonic sequence per deployment.
+The system SHALL accept deployments only through a `DEPLOY_REQUESTED` message that matches a strict schema: `specVersion`, `eventType`, `requestId`, `targetId` (FR-02), `commitSha` (40 hex), `artifacts` (artifact unit → image digest), audit-only `ci` metadata, and the ordering fields fixed by OD-A1. It SHALL create at most one execution per `targetId` + `requestId` (the dedupe scope), with `executionId` = `<targetId>-<sequence>` and a monotonic sequence per target. (V1: there is no `deploymentId`.)
 
 #### Scenario: valid request
-- GIVEN a schema-valid request from an authorized sender (FR-21) for a known `deploymentId`
+- GIVEN a schema-valid request from an authorized sender (FR-21) for a known and valid `targetId`
 - WHEN the Executor receives it
 - THEN an execution is created in `QUEUED` with a new `executionId`
 - AND it records `requestId`, `commitSha`, the digests and the `ci` metadata
 
 #### Scenario: no infrastructure fields
-- GIVEN a request that carries any field not in the schema (host, IP, port, user, command, script, image repository, registry, tag, environment variables)
+- GIVEN a request that carries any field not in the schema (host, IP, port, user, credential, command, script or script path, image repository, registry, tag, environment variables)
 - WHEN it is validated
 - THEN it is `REJECTED` and audited
 - BUT it must NOT be deployed
@@ -249,28 +231,23 @@ The system SHALL accept deployments only through a `DEPLOY_REQUESTED` message th
 #### Scenario: digest only
 - GIVEN a request whose artifact value is a tag, or a digest not of the form `sha256:<64-hex>`
 - THEN it is `REJECTED`
-- AND IT MUST require exactly the artifact units declared by the definition (no missing, no extra)
+- AND the Executor checks the format only; the target's script rejects a unit it does not know (FR-13)
 
 #### Scenario: image repository from trusted configuration
 - GIVEN a valid request
-- THEN the image reference given to the script is `<repository from the definition>@<digest from the request>`
+- THEN the script pulls `<repository from its own trusted configuration>@<digest from the request>`
 - BUT the request must NOT be able to choose the repository or registry
 
 #### Scenario: duplicate request
-- GIVEN a `requestId` already processed for the same `deploymentId`
+- GIVEN a `requestId` already processed for the same `targetId`
 - WHEN it arrives again
 - THEN no other execution is created
 - AND IT MUST NOT consume a new sequence number
 
-#### Scenario: unknown deployment
-- GIVEN a `deploymentId` with no definition
-- THEN the request is `REJECTED`, audited and acknowledged
-- BUT it must NOT create a deployable execution
-
 #### Scenario: CI metadata is audit only
 - GIVEN the `ci` fields (repository, run id, run attempt, workflow ref)
 - THEN they are stored for traceability
-- BUT they must NOT drive authorization or target resolution; the only ordering input is `ci.runNumber`, inside the single bound source (OD-A1 resolved, FR-23)
+- BUT they must NOT drive authorization or target resolution; the only ordering input is `ci.runNumber`, inside the single source of the target (OD-A1 resolved, FR-23)
 
 ### FR-04 — Event reception and validation
 
@@ -384,7 +361,7 @@ The system SHALL prevent two Executor executions from deploying at the same time
 
 ### FR-12 — Deploy via SSH
 
-The system SHALL deploy by executing, over SSH on the target resolved by the registry, the approved and versioned deploy script with arguments built only from the definition and the validated request, and SHALL capture its result.
+The system SHALL deploy by executing, over SSH on the target resolved by the registry, the deploy script installed on that target at the record's `deployScript` path, with a fixed argument vector built only from the validated request and the execution, and SHALL capture its result.
 
 #### Scenario: host key
 - GIVEN a target whose presented host key does not match the registered one
@@ -397,10 +374,11 @@ The system SHALL deploy by executing, over SSH on the target resolved by the reg
 - BUT it must NOT be written to disk, image or logs
 - AND IT MUST support a private key and, only if the entry marks it as temporary, a password
 
-#### Scenario: script version
+#### Scenario: script on the target
 - GIVEN a deploy
-- THEN the script executed is the one from the execution's definition version, delivered for that run, and its checksum is recorded
-- AND remote temporary files carry the `executionId` in their path and are removed at the end
+- THEN the script executed is the one at the `deployScript` path of the execution's target snapshot, and the path and the record version are recorded
+- AND the Executor uploads no file to the target
+- BUT the script's integrity is the target's responsibility: it must be owned by an administrator and not writable by the deploy user (onboarding requirement)
 
 #### Scenario: arguments
 - GIVEN the script arguments
@@ -423,7 +401,7 @@ The system SHALL deploy by executing, over SSH on the target resolved by the reg
 
 ### FR-13 — Deploy script contract (target side)
 
-The deploy script SHALL, in this order: take the target mutex for the `lockKey`; authenticate to the registry and pull the new images **by digest**; materialize the runtime configuration temporarily; run migrations (when enabled) with the new image **while the previous version remains in service**; replace the containers; health-check; clean up. It SHALL retain the previous image and end with a `CICD_RESULT` line.
+Every deploy script SHALL honor the interface (design §6.5): take the target mutex for the `targetId` before any effect; pull images **by digest** from its own trusted repositories only; exit with the codes below and end with a `CICD_RESULT` line; be idempotent for digests already in service. Its internal procedure is the target administrator's responsibility. **The PRMS Reporting DEV script (reference implementation) SHALL additionally**, in this order: materialize the runtime configuration temporarily; run migrations (when enabled) with the new image **while the previous version remains in service**; replace the containers; health-check; clean up, retaining the previous image; the scenarios below on migration, health, previous image and temporary configuration apply to it.
 
 | Code | Meaning | Previous version |
 |---|---|---|
@@ -437,8 +415,8 @@ The deploy script SHALL, in this order: take the target mutex for the `lockKey`;
 
 #### Scenario: immutable artifact references
 - GIVEN the script's artifact arguments
-- THEN each is `<trusted repository>@sha256:<digest>`
-- BUT the script must NOT pull or run anything by tag
+- THEN each is `<unit>=sha256:<digest>` and the script resolves the unit to `<its trusted repository>@sha256:<digest>`
+- BUT the script must NOT pull or run anything by tag, or from a repository named by the request
 
 #### Scenario: second barrier on the target
 - GIVEN a deploy operation in progress on the unit (even if the distributed lock expired)
@@ -446,11 +424,10 @@ The deploy script SHALL, in this order: take the target mutex for the `lockKey`;
 - THEN the second one exits with 50, with no pull, migration or swap
 - BUT it must NOT replace the distributed lock from FR-11
 
-#### Scenario: migration-compatibility precondition
-- GIVEN a target with migrations enabled
-- THEN its target record declares that migrations are backward compatible, and who attests it
-- AND a request that would run a migrating definition on a target without that declaration MUST be `REJECTED (TARGET_INCOMPATIBLE)` (v3.8, AC-02)
-- BUT the platform must NOT present that property as guaranteed: it is the application team's responsibility
+#### Scenario: migration compatibility (V1)
+- GIVEN a script that runs migrations
+- THEN keeping migrations backward compatible with the version in service is the application team's responsibility, recorded in the target's onboarding
+- BUT the platform must NOT present that property as guaranteed, and the Executor does not check it in V1
 
 #### Scenario: failed migration
 - GIVEN version N in service and the migration of N+1 fails
@@ -486,7 +463,7 @@ The system SHALL notify the **deploy lifecycle** from the Executor through a not
 
 #### Scenario: content
 - GIVEN a notification
-- THEN it includes `executionId`, `deploymentId`, commit, the GitHub run link and a link to logs
+- THEN it includes `executionId`, `targetId`, commit, the GitHub run link and a link to logs
 - BUT it must NOT include secret values or real infrastructure identifiers
 
 #### Scenario: CI failures stay in GitHub
@@ -531,7 +508,7 @@ The system SHALL behave as this table indicates. Each row is independently verif
 |---|---|---|
 | F1 | CI fails (lint, test, build, push) | No request is sent; the Executor is not involved |
 | F2 | Unparseable message or persistent processing failure | DLQ after 5 receptions; alarm |
-| F3 | Contract-invalid request or unknown `deploymentId` | `REJECTED`, audited, acknowledged; no deploy |
+| F3 | Contract-invalid request, or unknown or invalid `targetId` | `REJECTED`, audited, acknowledged; no deploy |
 | F4 | Unauthorized sender | `REJECTED`, audited, alarm; no deploy (FR-21) |
 | F5 | Duplicate request | No-op (FR-07) |
 | F6 | Older request per FR-23 | `SUPERSEDED`; no SSH; notification |
@@ -550,12 +527,12 @@ The system SHALL behave as this table indicates. Each row is independently verif
 
 ### FR-17 — Observability and audit
 
-The system SHALL emit structured logs in which every entry related to an execution carries `executionId`, `requestId` and `deploymentId`, and SHALL expose alarms for: messages in the DLQ, oldest message age, executions past their deadline, an inactive Executor, and rejected senders.
+The system SHALL emit structured logs in which every entry related to an execution carries `executionId`, `requestId` and `targetId`, and SHALL expose alarms for: messages in the DLQ, oldest message age, executions past their deadline, an inactive Executor, and rejected senders.
 
 #### Scenario: reconstruction
 - GIVEN an `executionId`
 - WHEN an operator queries DynamoDB, CloudWatch, Slack and the stored GitHub run link
-- THEN they can determine who requested it (sender reference), which commit and digests, which definition and script checksum, how long each phase took, and why it ended as it did, with no access to Jenkins
+- THEN they can determine who requested it (sender reference), which commit and digests, which target record version and script path, how long each phase took, and why it ended as it did, with no access to Jenkins
 
 #### Scenario: redaction
 - GIVEN any Executor log or notification
@@ -579,36 +556,35 @@ The system SHALL operate the PoC's real deploys only within test windows in whic
 
 ### FR-21 — Request authentication and deployment authorization (NEW)
 
-The system SHALL accept each message only from a sender identity authorized for that message type and, for `DEPLOY_REQUESTED`, only from the sender bound to the request's `deploymentId` (`allowedSender`). The sender identity SHALL come from a source the sender cannot forge. The mechanism is SQS `SenderId` role binding (**OD-A2 resolved by the owner, 2026-10-06**; P-A4).
+The system SHALL accept each message only from a sender identity authorized for that message type; for `DEPLOY_REQUESTED` that identity is **the CI role shared by the authorized repositories** (V1, owner decision 2026-10-07). The sender identity SHALL come from a source the sender cannot forge. The mechanism is SQS `SenderId` role binding (**OD-A2 resolved by the owner, 2026-10-06**; P-A4).
 
-**Owner statements (2026-10-06):** authorization uses the AWS-provided sender identity (role ID) and the trusted `allowedSender` binding; caller-controlled session names are never an authorization input; a CI sender is authorized only for the event types and `deploymentId` values explicitly assigned to it.
+**Owner statements (2026-10-06; the third amended for V1 on 2026-10-07):** authorization uses the AWS-provided sender identity (role ID) and the trusted sender binding; caller-controlled session names are never an authorization input; a CI sender is authorized only for the event types explicitly assigned to it. *V1: with one shared CI role there is no per-`deploymentId` or per-target sender assignment.*
 
 #### Scenario: authorized sender
-- GIVEN a request whose sender matches the definition's `allowedSender`
-- THEN it proceeds to validation and dedupe
+- GIVEN a request whose sender is the configured CI role
+- THEN it proceeds to target resolution, validation and dedupe
 
 #### Scenario: unauthorized sender
-- GIVEN a request for `deploymentId` Y sent by the CI role of repository X
+- GIVEN a `DEPLOY_REQUESTED` sent by any role other than the configured CI role
 - WHEN it is received
 - THEN it is `REJECTED`, audited with the sender reference and reason, and an alarm fires
 - BUT it must NOT open SSH, take a lock or affect any other execution
 
-#### Scenario: CI selects another project's target (AC-02)
-- GIVEN the authorized CI role of deployment X sends a request for `deploymentId` X naming a `targetId` whose `allowedDeploymentIds` does not contain X
-- WHEN it is received
-- THEN it is `REJECTED (TARGET_NOT_AUTHORIZED)`, audited and counted
-- BUT it must NOT open SSH, take a lock or read the target's credential
+#### Scenario: CI selects another project's target (OPEN, escalated to the owner)
+- GIVEN an authorized repository's run that names another project's `targetId`
+- THEN the Executor cannot distinguish it from a legitimate request (same role ID; `ci.*` is body-asserted) and processes it
+- AND because the shared role can push to every application repository, this allows an arbitrary image to be deployed on any target, and a higher `runNumber` blocks that target's legitimate source with no reset in the PoC (`architecture-change-02.md` V1-R1)
+- BUT this is **not** accepted by assumption: it is an open point for the owner; while the CI role trusts a single repository (the PoC) there is no exposure, and a second repository is not onboarded before the owner decides
 
 #### Scenario: identity claims in the body
 - GIVEN a request whose `ci.repository` claims to be the bound repository
 - THEN that claim is ignored for authorization
 - AND IT MUST NOT accept any identity asserted only by the message body
 
-#### Scenario: colliding requestId from another deployment (JD round 1, CC-2)
-- GIVEN the authorized CI role of deployment X sends its own request carrying the `requestId` that deployment Y will use
-- WHEN Y's genuine request arrives
-- THEN Y's execution is still created: deduplication is scoped to `deploymentId` + `requestId`
-- AND a request whose `requestId` is not `<ci.runId>-<ci.runAttempt>` is `REJECTED`
+#### Scenario: colliding requestId from another source (JD round 1, CC-2)
+- GIVEN a request whose `requestId` is not `<ci.runId>-<ci.runAttempt>`
+- THEN it is `REJECTED`
+- AND deduplication is scoped to `targetId` + `requestId`; a pre-claim of another target's `requestId` by an authorized repository is part of the open point V1-R1
 
 #### Scenario: other message types
 - GIVEN an operator window event, an internal event or a reconciliation tick
@@ -620,7 +596,7 @@ The reusable workflow SHALL be the only producer of deploy requests in the norma
 
 #### Scenario: CI success
 - GIVEN lint, tests, builds and pushes all succeed
-- THEN exactly one request is sent, with the pushed digests and `requestId` derived from the run and attempt
+- THEN exactly one request is sent, with the caller-configured `targetId`, the pushed digests and `requestId` derived from the run and attempt
 
 #### Scenario: CI failure
 - GIVEN any CI step fails
@@ -662,7 +638,7 @@ The reusable workflow SHALL be the only producer of deploy requests in the norma
 
 ### FR-23 — Supersede ordering (NEW; split from FR-11)
 
-The system SHALL guarantee that **an older build that finishes or is re-run later never replaces a newer deployment of the same `lockKey`**. "Older" and "newer" are defined by `ci.runNumber` **inside the single trusted source** of the deployment (**OD-A1 resolved for the PoC by the owner, 2026-10-06**): exactly one `deploymentId` per `lockKey`, exactly one trusted GitHub source per `deploymentId` (repository + workflow + environment + allowed sender); an equal `runNumber` is the same logical run or a re-run, not older. Multi-source ordering is **out of the PoC**; `runNumber` values are never compared across sources. A renamed or reset workflow makes deploys stop (accepted fail-safe limitation); rebinding requires the future audited OD-A8 procedure.
+The system SHALL guarantee that **an older build that finishes or is re-run later never replaces a newer deployment of the same `lockKey`** (V1: the same `targetId`). "Older" and "newer" are defined by `ci.runNumber` **inside the single trusted source** of the target (**OD-A1 resolved for the PoC by the owner, 2026-10-06**; V1: exactly one trusted GitHub source — repository + workflow + environment — per `targetId`, a configuration rule that the Executor cannot verify with the shared CI role, V1-R2); an equal `runNumber` is the same logical run or a re-run, not older. Multi-source ordering is **out of the PoC**; `runNumber` values are never compared across sources. A renamed or reset workflow makes deploys stop (accepted fail-safe limitation); rebinding requires the future audited OD-A8 procedure.
 
 #### Scenario: late older build
 - GIVEN build B2 (newer) already deployed on the `lockKey`
@@ -679,9 +655,9 @@ The system SHALL guarantee that **an older build that finishes or is re-run late
 - GIVEN an older request waiting for the lock while a newer request for the same `lockKey` has been accepted
 - THEN the older one MUST NOT deploy after the newer one
 
-#### Scenario: two sources on one lockKey
-- GIVEN requests from two different sources (repositories or workflows) for deployments sharing a `lockKey`
-- THEN the definitions are invalid and the Executor does not start (single-source invariant, OD-A1); no ordering across sources is attempted
+#### Scenario: two sources on one target (V1)
+- GIVEN two different sources (repositories or workflows) configured to deploy the same `targetId`
+- THEN the configuration violates the single-source rule; onboarding and the caller configuration must prevent it, because the Executor cannot detect it in V1 (V1-R2); no ordering across sources is attempted
 - BUT the system must NOT fall back to an undocumented rule; where order cannot be established, the documented rule applies and the outcome is audited
 
 #### Scenario: check under the lock
@@ -719,7 +695,9 @@ The system SHALL provide a generic per-target deploy-window capability: on a tar
 
 #### Scenario: valid window
 - GIVEN a window
-- THEN it is valid only if opened by an authorized operator with an owner and a non-empty list of disabled external jobs covering **all** of the target's external deployers
+- THEN it is valid only if opened by an authorized operator with an owner and a non-empty list of disabled external jobs, recorded for audit
+- AND V1: external deployers are not modeled in the registry; that the list covers all of them is attested by the operator (coexistence runbook), not checked by the Executor
+- AND a window cannot be opened for an unknown or invalid target, or for a target whose policy does not require one
 
 #### Scenario: revalidation (Judgment Day round 2, R2-W1)
 - GIVEN an execution that passed the entry check
@@ -735,7 +713,7 @@ The system SHALL provide a generic per-target deploy-window capability: on a tar
 - THEN it closes automatically after at most 8 hours
 
 #### Scenario: no Jenkins logic
-- BUT the core must NOT contain Jenkins-specific logic: external deployers are data, and the policy is retired by changing registry data
+- BUT the core must NOT contain Jenkins-specific logic; the policy is retired by changing registry data
 
 ### FR-25 — CI trust boundary (NEW)
 
@@ -743,7 +721,7 @@ The infrastructure SHALL restrict who can obtain AWS credentials from GitHub and
 
 #### Scenario: trust bound to the pinned reusable workflow and immutable IDs (JD round 2, R2-A1, R2-4)
 - GIVEN the CI role's trust policy
-- THEN it requires, by exact equality, the AWS STS audience, the repository ID, the repository owner ID, the Environment, and the `job_workflow_ref` of the platform reusable workflow pinned at an immutable commit SHA, plus the default environment-form `sub` as a redundant check (all direct IAM condition keys, P-G6)
+- THEN it requires, by exact equality, the AWS STS audience, a repository ID from the authorized list (V1: one role shared by the authorized repositories), the repository owner ID, the Environment, and the `job_workflow_ref` of the platform reusable workflow pinned at an immutable commit SHA, plus the default environment-form `sub` as a redundant check (all direct IAM condition keys, P-G6)
 - BUT it must NOT rely on an environment-only subject, on branch-only subjects, on wildcards, or on the mutable `sub` string format alone (P-A2, P-G2, P-G10)
 - AND IT MUST NOT depend on P-A3 for fork safety
 
@@ -774,13 +752,13 @@ The infrastructure SHALL restrict who can obtain AWS credentials from GitHub and
 - THEN the actions it uses are also pinned by commit SHA (FR-22), so trusted code cannot change through a moved tag
 
 #### Scenario: least privilege
-- GIVEN a CI role
-- THEN it has one repository + environment scope, ECR authentication and push to **its** repositories only, and `sqs:SendMessage` on the deploy queue only
+- GIVEN the CI role
+- THEN its scope is the authorized repositories + environment (V1: one shared role), with ECR authentication and push to the platform's application repositories only, and `sqs:SendMessage` on the deploy queue only
 - BUT it must NOT have SSH, EC2, Secrets Manager, database or infrastructure permissions
 
 #### Scenario: queue policy
 - GIVEN the deploy queue
-- THEN `SendMessage` is allowed only to the configured senders (CI roles, the operator identity, the scheduler, the Executor)
+- THEN `SendMessage` is allowed only to the configured senders (the CI role, the operator identity, the scheduler, the Executor)
 
 #### Scenario: environment rules
 - GIVEN the GitHub Environment used by the push-and-send job
@@ -800,7 +778,7 @@ The infrastructure SHALL restrict who can obtain AWS credentials from GitHub and
 | **NFR-05 Coordination latency** | From a valid request becoming visible in the queue to the script starting, when the lock is free and the window open: ≤ 60 s | p95 over ≥ 10 executions; if the spread exceeds the threshold, it is reported, not taken as evidence |
 | **NFR-06 Operability** | An operator can reconstruct any deploy from persisted state, logs, notifications and the GitHub run link | Runbook exercise |
 | **NFR-07 Cost** | CI on standard GitHub-hosted runners (larger runners only by decision); no new permanent compute for the Executor. Measured durations, GitHub minutes and Executor resources are reported | Measurement report. Zero CI cost depends on P-A5 (OD-A9) |
-| **NFR-08 Extensibility without project code** | Adding a deployment of the same pattern requires only configuration: a definition, a registry entry, a caller workflow using the reusable workflow, and its CI role/trust entry — **no Executor code change**. *PoC simplification: definitions are bundled in the image (DD-19), so publishing one requires rebuilding the image; the source stays behind `DefinitionSource`* | Test: a second mock definition validated with no code change |
+| **NFR-08 Extensibility without project code** | Adding a project or target requires only configuration: a registry record, its credential secret, the deploy script on the server, a caller workflow using the reusable workflow, and the repository added to the shared CI role trust — **no Executor code change, rebuild or redeploy** (AC-02 V1) | Test: a second target record used with no code change or restart |
 | **NFR-09 Environment isolation** | All PoC resources and permissions, including the CI role, are DEV. No access to STAGING or PROD | IAM review (single account, FA §2) |
 | **NFR-10 Non-interference** | The PoC does not modify Jenkinsfiles, application code, `<QUALITY_WORKER_FUNCTION>` or `<LEGACY_CODEBUILD_PROJECT>`, and does not remove existing credentials on hosts. The only application-repo change is the caller workflow and its GitHub Environment, subject to **OD-A6** | Change review |
 
@@ -820,9 +798,9 @@ Name the defect class, then the gate. Gates A–D are the proposal's (§18).
 | **Trust-boundary misconfiguration (OIDC / IAM / queue policy)** | (1) **Static policy check** of the trust and permission documents: exact `sub`, no `pull_request`, no wildcard, scoped ECR and SQS actions. (2) **Negative tests:** `pull_request`, `pull_request_target` and `workflow_run` runs, and a job outside the pinned reusable workflow, cannot assume the CI role or send; a role without binding cannot send. (3) Subject template content and opt-out state checked | (1) A, on the documents in `infra/` (only if they are written as concrete policies; their application is B). (2) **C only** (N-32): needs the real GitHub repo, Environment and AWS account | GitHub Environment branch rules and branch protection: **no automatic gate**; human inspection of repository settings by a repo admin at Gate C, before the first real run |
 | CI workflow violates the contract (sends on failure, sends twice, no digest, deploy logic) | Static validation of the workflow files | A (static); C (first real run, N-32) | Review of the caller in the application repo (OD-A6) |
 | Internal identifiers in public CI logs | Scan of a real run log for hosts, IPs, credential IDs, credentials and secret values (the CI role ARN and account ID are expected, G-10) | **C** (N-32) | Human review of the first runs |
-| Invalid definition or registry accepted | Validation tests with negative cases | A | — |
+| Invalid target record accepted | Validation tests with negative cases | A | — |
 | Type error in contracts | Type-check / build | A | — |
-| Secret leaked into image, definitions or logs | Automated scan | A (image, definitions); C (E2E logs) | Human review of the scan at the E2E HITL |
+| Secret leaked into image, registry or logs | Automated scan | A (image); C (registry review, E2E logs) | Human review of the scan at the E2E HITL |
 | Executor boundary breach (toolchain, git, project logic, CI work) | Image inspection + boundary guards + IAM review | A (guards, image); B (IAM) | Design review on every PR |
 | Deploy script in the wrong order (migrates after stopping) | E2E with a deliberately broken migration | C | Human verification of the service |
 | Ineffective restore after a failed health check | E2E with an image that fails health | C | Human verification |
@@ -847,8 +825,8 @@ None is resolved by assumption. OD-A1 and OD-A2 were resolved by the owner on 20
 | OD-Q14 | Does anyone consume `<JENKINS_EXECUTIONS_TABLE>`? | None in the PoC | Future record compatibility |
 | OD-Q15 | Repo size and GitHub authentication | None in the Executor (no clone) | Recorded until the owner closes it |
 | OD-N1 | CI for this platform repo | Gate D | The owner decides |
-| OD-A1 | Supersede ordering mechanism | FR-03, FR-23 | **RESOLVED (owner, 2026-10-06):** `ci.runNumber` inside a single trusted source per `deploymentId`, one `deploymentId` per `lockKey`; multi-source out of the PoC |
-| OD-A2 | Request authentication mechanism | FR-21, FR-25 | **RESOLVED (owner, 2026-10-06):** `SenderId` role binding to `allowedSender`; session names never authorize |
+| OD-A1 | Supersede ordering mechanism | FR-03, FR-23 | **RESOLVED (owner, 2026-10-06):** `ci.runNumber` inside a single trusted source per `deploymentId`, one `deploymentId` per `lockKey`; multi-source out of the PoC. V1 (2026-10-07): per `targetId`, single source as a configuration rule |
+| OD-A2 | Request authentication mechanism | FR-21, FR-25 | **RESOLVED (owner, 2026-10-06):** `SenderId` role binding to `allowedSender`; session names never authorize. V1 (2026-10-07): one shared CI role, no per-deployment binding |
 | OD-A3 | Who performs non-SSH deploys | Out of scope | Later waves |
 | OD-A4 | Store for non-Docker artifacts | Out of scope | Later waves |
 | OD-A5 | Slack notification for CI failures | FR-14 | Whether the reusable workflow posts to Slack |
@@ -865,7 +843,7 @@ Evidence still missing: Jenkins job names (FR-18); current migration commands an
 
 | ID | Name | Strength | Proposal v3 |
 |---|---|---|---|
-| FR-01 | Deployment Definitions | SHALL | §10.4 |
+| FR-01 | Deployment Definitions | Deferred (V1) | §10.4 |
 | FR-02 | Target Registry | SHALL | §10.4 |
 | FR-03 | Deploy request contract and execution identity | SHALL | §10.3, R-DIGEST |
 | FR-04 | Event reception and validation | SHALL | §10.6 |
