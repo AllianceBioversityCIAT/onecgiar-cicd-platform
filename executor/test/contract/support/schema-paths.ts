@@ -12,6 +12,9 @@ export const schemasDir = path.join(repoRoot, "schemas");
 export const targetsSchemaPath = path.join(schemasDir, "targets.schema.json");
 export const eventSchemaPath = path.join(schemasDir, "event.schema.json");
 
+// AC-02 V1 (R-1): one item of the runtime Target Registry `cicd-registry-<stage>`.
+export const targetRecordSchemaPath = path.join(schemasDir, "target-record.schema.json");
+
 export const targetsDevYamlPath = path.join(repoRoot, "deployment-definitions", "targets", "dev.yaml");
 
 // Model B (AC-01) contracts: deployment definition, deploy request, deployment-definitions/.

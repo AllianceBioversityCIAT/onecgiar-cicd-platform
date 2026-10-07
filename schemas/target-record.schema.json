@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecgiar-cicd-platform/schemas/target-record.schema.json",
+  "title": "Target record (runtime Target Registry, AC-02 V1)",
+  "$comment": "@akili-spec changes/cicd-executor-poc design 5.3, 6.3, DD-23, DD-25; requirements FR-02, FR-21; architecture-change-02 V1. One item of the DynamoDB table cicd-registry-<stage> (TARGET#{targetId} / META), validated without its key attributes (the adapter removes pk and sk before validation, task R-3). Only what is needed to locate the server, connect securely and run the authorized script. Values are inline and non-secret; credentialRef is a Secrets Manager reference name, never a value, and its Executor secret prefix is enforced by the onboarding tool (task R-7). additionalProperties false: any other field (a credential value, a deployment model field, a command) is rejected. Cross-field rules a schema cannot express are not encoded here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "targetId",
+    "project",
+    "environment",
+    "host",
+    "user",
+    "hostKey",
+    "credentialRef",
+    "deployScript",
+    "deployWindowPolicy",
+    "sourceRepositoryId",
+    "schemaVersion",
+    "version",
+    "updatedAt",
+    "updatedBy"
+  ],
+  "properties": {
+    "targetId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+      "$comment": "Semantic id; equals the item key and the request's targetId (design 6.1)."
+    },
+    "project": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+      "$comment": "Semantic id (e.g. prms, star, marlo, clarisa); descriptive only."
+    },
+    "environment": {
+      "const": "dev",
+      "$comment": "dev in the PoC (design 6.3); descriptive, never compared with the request."
+    },
+    "host": {
+      "type": "string",
+      "anyOf": [{ "format": "hostname", "not": { "pattern": "^[0-9.]+$" } }, { "format": "ipv4" }],
+      "minLength": 1,
+      "maxLength": 253,
+      "$comment": "SSH destination; never in Git (DD-23)."
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "default": 22,
+      "$comment": "SSH port; 22 when absent."
+    },
+    "user": {
+      "type": "string",
+      "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
+      "$comment": "SSH user (POSIX user name)."
+    },
+    "hostKey": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "string",
+        "pattern": "^(ssh|ecdsa|sk)-[A-Za-z0-9@.-]+ [A-Za-z0-9+/]{16,}={0,2}( [^\\r\\n]{1,256})?$"
+      },
+      "$comment": "Pinned host key: one or more OpenSSH public-key lines (<type> <base64> [comment]); mandatory and strict, never StrictHostKeyChecking=no (design 6.3, FR-12)."
+    },
+    "credentialRef": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9/_+=.@-]{1,512}$",
+      "$comment": "Secrets Manager secret name of the SSH credential; read only at connect time, kept in memory only. The name charset excludes ARNs (no ':')."
+    },
+    "deployScript": {
+      "type": "string",
+      "pattern": "^/[A-Za-z0-9._/-]{1,255}$",
+      "not": { "pattern": "(^|/)\\.{1,2}(/|$)|/$" },
+      "$comment": "Absolute path of the deploy script installed on the target (design 6.3, 6.5): no '.' or '..' segment, no trailing slash, no arguments, no whitespace or shell metacharacters. Trusted registry configuration, never taken from the request."
+    },
+    "deployWindowPolicy": {
+      "enum": ["required", "not-required"],
+      "$comment": "Mandatory, no default (design 7.7, FR-24)."
+    },
+    "sourceRepositoryId": {
+      "type": "string",
+      "pattern": "^[0-9]{1,20}$",
+      "$comment": "GitHub repository_id of the single repository allowed to deploy this target; compared with the IAM-enforced role session name in the SQS SenderId (option A, DD-25)."
+    },
+    "schemaVersion": { "const": 1 },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "$comment": "Optimistic version for the onboarding tool's conditional writes; recorded in the execution snapshot."
+    },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "updatedBy": { "type": "string", "minLength": 1, "maxLength": 256 }
+  }
+}
