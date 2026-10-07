@@ -825,3 +825,14 @@ Owner-executed: inline policy `AssumeExecutorRoleOnly` (only `sts:AssumeRole` on
 ### B1-F — isolated Executor credentials and identity (2026-10-07): **PASS**
 
 Owner-executed: one access key for `cicd-poc-dev-executor-local` written directly into the Git-ignored `executor/.local/aws/credentials` (owner-only ACL, never echoed); isolated `executor/.local/aws/config` with `[profile cicd-executor]` (`role_arn` = ExecutorRole, `source_profile = cicd-executor-source`, `role_session_name = cicd-executor-workstation`, `duration_seconds = 3600`) and `[profile cicd-executor-source]`. `aws sts get-caller-identity --profile cicd-executor` with only the isolated files returned the assumed ExecutorRole session; the `UserId` role-ID prefix equals the stack output `ExecutorRoleId` (identifiers kept out of Git). Not the administrative user, not the dedicated user directly. Next: B1-G, portable Node 22 toolchain and Executor build (local only).
+
+### B1-G — Executor validated under Node 22 (2026-10-07): **PASS**
+
+| Item | Record |
+|---|---|
+| Runtime | Node **v22.23.3** (owner-installed through NVM; `C:\Program Files\nodejs\node.exe`), npm 10.9.9. A first attempt with v22.11.0 stopped on `EBADENGINE` (dev dependency `eslint-visitor-keys@5.0.1` requires `^22.13.0`); no dependency was changed |
+| `npm ci` | exit 0, 207 packages, **no `EBADENGINE`**. Informational: `eslint@9.39.5` deprecation notice; the install-time audit of the whole tree (development dependencies included) reports 6 vulnerabilities (3 moderate, 1 high, 2 critical) — not the configured production gate, left for the owner (no `npm audit fix`) |
+| Build | `tsc` exit 0; `dist/src/main/index.js` present |
+| `npm run check:local` (PowerShell) | exit 0: typecheck, lint, build, guards 1–8 PASS, tests, **production audit `found 0 vulnerabilities`**, `inspect:image` DEFERRED notice. Vitest there: 1147 passed / 171 skipped — the extra skips are environmental: in PowerShell `bash` resolves to the WSL launcher and `realpath` is absent, so the bash-based adversarial suites skip by their capability probes |
+| Full suite under Git Bash, same Node 22.23.3 | `npx vitest run` exit 0: **51 files passed / 13 skipped; 1243 passed / 75 skipped / 1 todo** — identical to the Node 20.19.5 reference; SR-1 build hardening (23), launcher (116) and target probe (13) suites executed |
+| Closes | The Gate A deferral "Node 22 run of the full local gate" (local evidence was on Node 20.19.5 until now). `inspect:image` (Docker) stays DEFERRED |
