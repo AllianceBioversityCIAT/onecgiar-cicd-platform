@@ -86,7 +86,7 @@ Until step 3 the user can do nothing at all; until step 4 it has no credential.
 
 ```powershell
 $u = "<EXECUTOR_WORKSTATION_USER>"
-aws iam create-user --user-name $u --profile <AWS_PROFILE_ADMIN>
+aws iam create-user --user-name $u --tags Key=Project,Value=ONECGIAR-CICD-Platform --profile <AWS_PROFILE_ADMIN>
 aws iam get-user --user-name $u --query "User.Arn" --output text --profile <AWS_PROFILE_ADMIN>
 ```
 

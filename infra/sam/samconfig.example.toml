@@ -9,6 +9,8 @@ stack_name = "cicd-poc-dev"
 region = "<AWS_REGION>"
 capabilities = "CAPABILITY_IAM"
 confirm_changeset = true
+# Tags the CloudFormation stack itself (canonical platform tag); resources carry the tag explicitly in the template.
+tags = "Project=ONECGIAR-CICD-Platform"
 # resolve_s3 is kept because it is unverified whether `sam deploy` works without a bucket; the
 # template has no local artifacts. It creates one extra CloudFormation stack
 # (aws-sam-cli-managed-default) and a bucket; docs/gate-b/08-teardown.md removes both.

@@ -56,8 +56,10 @@ Open [`../../infra/sam/template.yaml`](../../infra/sam/template.yaml) and your `
 | A4 | `CiRole` permissions | `ecr:GetAuthorizationToken` (accepted `*` exception), push actions on the one repository (your `CiEcrRepositoryArn` when set, otherwise the probe repository created because it is empty; there is no separate switch and no CloudFormation Rule), `sqs:SendMessage` and `sqs:GetQueueUrl` on the deploy queue only |
 | A5 | `DeletionPolicy` | `Delete` on queues, table, log group and the probe repository; `Retain` on the OIDC provider (so teardown never breaks other users of it) |
 | A6 | `ReconcileSchedule` | `State` comes from `ReconcileScheduleState`, which is `DISABLED` |
-| A7 | Tags | `Project: cicd-poc` on taggable resources |
+| A7 | Tags | `Project: ONECGIAR-CICD-Platform` on every taggable resource (15; `ReconcileSchedule` and `DeployQueuePolicy` cannot carry tags) |
 | A8 | Your parameters | No typo in ids, SHA length 40, prefix ends with `/`, principals are in this account |
+
+`Project=ONECGIAR-CICD-Platform` is the canonical tag that identifies AWS resources belonging to this platform (inventory and cost allocation); the stack itself is tagged through samconfig `tags`. The SAM-managed stack `aws-sam-cli-managed-default` is not ours and is not tagged by this. Activating the tag as a cost allocation tag is a separate action in the Billing console (owner).
 
 You are satisfied when A1 to A8 hold. If not, stop and ask Claude to correct the template (B0 returns).
 

@@ -99,7 +99,7 @@ No file under `deployment-definitions/` (the bundled, committed definitions) and
 
 ## 5. SAM resources to be defined (`infra/sam/template.yaml`)
 
-All tagged `Project=cicd-poc`; names derived from a `Stage` parameter (default `dev`).
+All tagged `Project=ONECGIAR-CICD-Platform`; names derived from a `Stage` parameter (default `dev`).
 
 | Logical resource | Type | Notes |
 |---|---|---|

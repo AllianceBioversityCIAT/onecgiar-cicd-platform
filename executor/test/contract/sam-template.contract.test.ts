@@ -547,11 +547,27 @@ describe("tags, deletion policies and ECR", () => {
     "AWS::SQS::Queue", "AWS::DynamoDB::Table", "AWS::Logs::LogGroup", "AWS::ECR::Repository", "AWS::IAM::OIDCProvider",
   ]);
 
-  it("every taggable resource carries Project=cicd-poc", () => {
+  it("every taggable resource carries Project=ONECGIAR-CICD-Platform", () => {
     for (const [name, r] of Object.entries(template.Resources)) {
       if (UNTAGGABLE.has(r.Type)) continue;
-      expect(r.Properties.Tags, name).toContainEqual({ Key: "Project", Value: "cicd-poc" });
+      expect(r.Properties.Tags, name).toContainEqual({ Key: "Project", Value: "ONECGIAR-CICD-Platform" });
     }
+  });
+
+  it("the untaggable set is exactly the Schedule and the QueuePolicy, so a new resource type cannot skip tagging", () => {
+    const skipped = Object.entries(template.Resources).filter(([, r]) => UNTAGGABLE.has(r.Type)).map(([n]) => n);
+    expect(skipped.sort()).toEqual(["DeployQueuePolicy", "ReconcileSchedule"]);
+    expect([...UNTAGGABLE].sort()).toEqual(["AWS::SQS::QueuePolicy", "AWS::Scheduler::Schedule"]);
+  });
+
+  it("no resource still carries the legacy Project=cicd-poc tag", () => {
+    for (const [name, r] of Object.entries(template.Resources)) {
+      expect(r.Properties.Tags ?? [], name).not.toContainEqual({ Key: "Project", Value: "cicd-poc" });
+    }
+  });
+
+  it("the example samconfig tags the stack itself with the canonical Project tag", () => {
+    expect(readFileSync(samConfigExamplePath, "utf8")).toContain('tags = "Project=ONECGIAR-CICD-Platform"');
   });
 
   it("every stateful resource sets DeletionPolicy and UpdateReplacePolicy explicitly", () => {

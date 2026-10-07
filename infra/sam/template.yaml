@@ -116,7 +116,7 @@ Resources:
       SqsManagedSseEnabled: true
       Tags:
         - Key: Project
-          Value: cicd-poc
+          Value: ONECGIAR-CICD-Platform
 
   DeployQueue:
     Type: AWS::SQS::Queue
@@ -132,7 +132,7 @@ Resources:
         maxReceiveCount: 5
       Tags:
         - Key: Project
-          Value: cicd-poc
+          Value: ONECGIAR-CICD-Platform
 
   # Defense in depth behind the consumer's per-type sender binding (DD-25): SendMessage is
   # allowed only to the four platform roles and explicitly denied to every other principal.
@@ -216,7 +216,7 @@ Resources:
         PointInTimeRecoveryEnabled: !Ref EnablePointInTimeRecovery
       Tags:
         - Key: Project
-          Value: cicd-poc
+          Value: ONECGIAR-CICD-Platform
 
   # ---------------------------------------------------------------- OIDC provider (DD-24)
   # An account has one provider per URL. When an existing provider is supplied it is only
@@ -232,7 +232,7 @@ Resources:
         - sts.amazonaws.com
       Tags:
         - Key: Project
-          Value: cicd-poc
+          Value: ONECGIAR-CICD-Platform
 
   # ---------------------------------------------------------------- Roles
   CiRole:
@@ -291,7 +291,7 @@ Resources:
                 Resource: !GetAtt DeployQueue.Arn
       Tags:
         - Key: Project
-          Value: cicd-poc
+          Value: ONECGIAR-CICD-Platform
 
   ExecutorRole:
     Type: AWS::IAM::Role
@@ -355,7 +355,7 @@ Resources:
                     cloudwatch:namespace: CicdExecutor
       Tags:
         - Key: Project
-          Value: cicd-poc
+          Value: ONECGIAR-CICD-Platform
 
   OperatorRole:
     Type: AWS::IAM::Role
@@ -378,7 +378,7 @@ Resources:
                 Resource: !GetAtt DeployQueue.Arn
       Tags:
         - Key: Project
-          Value: cicd-poc
+          Value: ONECGIAR-CICD-Platform
 
   SchedulerRole:
     Type: AWS::IAM::Role
@@ -409,7 +409,7 @@ Resources:
                 Resource: !GetAtt DeployQueue.Arn
       Tags:
         - Key: Project
-          Value: cicd-poc
+          Value: ONECGIAR-CICD-Platform
 
   # ---------------------------------------------------------------- Reconcile schedule (DD-13)
   # Input is the minimal RECONCILE_TICK contract of schemas/event.schema.json: specVersion, eventType,
@@ -443,7 +443,7 @@ Resources:
       RetentionInDays: 30
       Tags:
         - Key: Project
-          Value: cicd-poc
+          Value: ONECGIAR-CICD-Platform
 
   # ---------------------------------------------------------------- Alarms (design §12, FR-17)
   DlqNotEmptyAlarm:
@@ -464,7 +464,7 @@ Resources:
       AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref "AWS::NoValue"]
       Tags:
         - Key: Project
-          Value: cicd-poc
+          Value: ONECGIAR-CICD-Platform
 
   OldestMessageAgeAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -484,7 +484,7 @@ Resources:
       AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref "AWS::NoValue"]
       Tags:
         - Key: Project
-          Value: cicd-poc
+          Value: ONECGIAR-CICD-Platform
 
   # The Executor emits ExecutorHeartbeat with NO dimensions; an alarm that expects a dimension
   # never sees data (design §12 "Liveness").
@@ -504,7 +504,7 @@ Resources:
       AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref "AWS::NoValue"]
       Tags:
         - Key: Project
-          Value: cicd-poc
+          Value: ONECGIAR-CICD-Platform
 
   RejectedSenderAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -524,7 +524,7 @@ Resources:
       AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref "AWS::NoValue"]
       Tags:
         - Key: Project
-          Value: cicd-poc
+          Value: ONECGIAR-CICD-Platform
 
   ExecutionsPastDeadlineAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -541,7 +541,7 @@ Resources:
       AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref "AWS::NoValue"]
       Tags:
         - Key: Project
-          Value: cicd-poc
+          Value: ONECGIAR-CICD-Platform
 
   # ---------------------------------------------------------------- Optional probe ECR repository
   ProbeEcrRepository:
@@ -559,7 +559,7 @@ Resources:
         LifecyclePolicyText: '{"rules":[{"rulePriority":1,"description":"Keep the 100 most recent images (PoC)","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":100},"action":{"type":"expire"}}]}'
       Tags:
         - Key: Project
-          Value: cicd-poc
+          Value: ONECGIAR-CICD-Platform
 
 Outputs:
   DeployQueueUrl:
