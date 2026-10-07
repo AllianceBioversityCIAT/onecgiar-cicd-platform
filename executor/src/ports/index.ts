@@ -15,6 +15,7 @@ export type {
   DefinitionContent,
 } from "./definition-source.js";
 export type { SecretProvider } from "./secret-provider.js";
+export type { TargetRegistry, TargetRecord, TargetLookup } from "./target-registry.js";
 export type {
   DeployTransport,
   DeploySession,
