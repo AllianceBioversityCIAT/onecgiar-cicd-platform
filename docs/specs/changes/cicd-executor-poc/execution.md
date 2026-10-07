@@ -796,3 +796,7 @@ Final Leader evidence: isolated worktree with all changed files: tsc 0, lint cle
 - **SR-2** — `ci.runNumber` poisoning of `highestAccepted` with stolen CI credentials: decision proposal delivered to the owner (DD-27 change).
 - **SR-1 residual 1l (MEDIUM, uncertain)** — a build-container escape would run in the same job that holds `id-token: write`; the robust fix is separate build and push jobs (artifact hand-off with a sha256 check), which adds pinned artifact actions.
 - **SR-6, SR-7, SR-8** — residual or B2 verification, as recorded in the security review.
+
+### B1-B — owner-executed `sam validate --lint` after the security corrections (2026-10-07): **PASS**
+
+Commit 9558289, SAM CLI 1.151.0, `--region us-east-1` → `infra\sam\template.yaml is a valid SAM Template`, exit 0. Owner direction: SR-1 sufficiently mitigated for the PoC (separate build/push jobs deferred to production hardening); SR-2 is a blocker before B2, not before B1. Back to B1-C.
