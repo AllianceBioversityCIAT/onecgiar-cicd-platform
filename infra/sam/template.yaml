@@ -51,6 +51,11 @@ Parameters:
     AllowedPattern: "^[A-Za-z0-9._:/@-]{1,256}$"
     ConstraintDescription: Exact sub value (classic repo:OWNER/REPO:environment:NAME or immutable repo:OWNER@OWNER-ID/REPO@REPO-ID:environment:NAME), no wildcard characters.
     Description: Environment-form sub claim value as observed by the owner (P-G10). Either the classic form or the immutable form that uses @ (repositories created, renamed or transferred after 2026-07-15).
+  GitHubBoundRef:
+    Type: String
+    AllowedPattern: "^refs/heads/[A-Za-z0-9._/-]{1,200}$"
+    ConstraintDescription: Exact branch ref starting with refs/heads/, no wildcard characters.
+    Description: Exact protected branch ref the caller workflow must run on (claim ref), e.g. refs/heads/main. Must equal the GitHub Environment variable CICD_BOUND_REF.
   ExistingGitHubOidcProviderArn:
     Type: String
     Default: ""
@@ -252,6 +257,7 @@ Resources:
                 # form for a SHA-pinned reusable workflow call before relying on this value.
                 token.actions.githubusercontent.com:job_workflow_ref: !Sub "${PlatformWorkflowRepository}/.github/workflows/deploy-request.reusable.yml@${PinnedWorkflowSha}"
                 token.actions.githubusercontent.com:sub: !Ref GitHubOidcSub
+                token.actions.githubusercontent.com:ref: !Ref GitHubBoundRef
       Policies:
         - PolicyName: ci-push-and-request
           PolicyDocument:
@@ -549,6 +555,8 @@ Resources:
       ImageScanningConfiguration:
         ScanOnPush: true
       EmptyOnDelete: true
+      LifecyclePolicy:
+        LifecyclePolicyText: '{"rules":[{"rulePriority":1,"description":"Keep the 100 most recent images (PoC)","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":100},"action":{"type":"expire"}}]}'
       Tags:
         - Key: Project
           Value: cicd-poc

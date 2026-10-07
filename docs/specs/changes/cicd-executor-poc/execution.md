@@ -779,3 +779,20 @@ Method: Leader trace of the actual template and pinned workflow; independent adv
 | SR-8 | MEDIUM (functional, not privilege) | AWS lists `ecr:BatchGetImage` among push permissions; CiRole omits it on purpose; a containerd-based push may fail closed | Verify in B2; add the action only if the push fails | B2 |
 
 Residual by design: whoever can run the caller workflow on the bound ref (push to the protected branch, or repository/organization admin) can deploy an image they built to the DEV target within the deploy-window policy — the same trust that branch already holds today.
+
+### B1-C — owner-authorized security corrections SR-1, SR-3, SR-4, SR-5 (2026-10-07)
+
+| ID | Change | Evidence and review |
+|---|---|---|
+| SR-4 | CiRole trust: 7th exact `StringEquals` key `token.actions.githubusercontent.com:ref` = new parameter `GitHubBoundRef` (no default, `^refs/heads/[A-Za-z0-9._/-]{1,200}$`); must equal `CICD_BOUND_REF` | Falsifiers: condition removed / `Default ""` / wildcard ref → red. Reviewer verified `ref` is an IAM GitHub key and describes the caller run (not caller-controlled) |
+| SR-5 | `ProbeEcrRepository` lifecycle: keep the 100 most recent images (count-based, never empties); supplied repositories untouched | First value 30 raised to 100 after the falsifier showed ~4 runs of headroom. Falsifiers: count changed → red |
+| SR-1 | Reusable workflow builds before OIDC and registry login; build inputs must resolve inside `$GITHUB_WORKSPACE` with no symbolic link on any component, no absolute path, `..`, `:` or control character; `ACTIONS_ID_TOKEN_REQUEST_*` and runtime tokens stripped from `docker build`; fail closed if any `AWS_*` is exported at build time; tag and push after login | Executable adversarial tests (fake docker, real symlinks): 19+ rejection cases. A falsifier-found trailing-newline unit collision in the guard was closed. A test regex damaged by a literal backspace character was repaired. Falsifiers: build after OIDC / token not stripped / symlink check removed / `aws` call before build → red |
+| SR-3 | Dedicated workstation Executor principal documented (IAM user, only `sts:AssumeRole` on ExecutorRole, created by the owner before the deploy, policy after it); launchers require isolated `AWS_CONFIG_FILE`/`AWS_SHARED_CREDENTIALS_FILE` (absolute, under `executor/.local/aws/`, no links, hard-link count 1, not the default `~/.aws`), refuse duplicate env keys, alternative credential sources and non-key fields in the credentials file, require `CICD_EXECUTOR_ROLE_ARN` to equal the profile `role_arn`, strip alternative credential variables and disable IMDS | Three falsifier rounds (links, copies, relative paths, inherited variables, config content, duplicate keys, role pin). Leader falsifiers: metadata flag removed / duplicate-key refusal disabled → red |
+| SR-7 | Owner-executed, later, read-only account resource-policy check (Access Analyzer listing and policy spot checks) documented in `07-verification.md` | Documentation |
+
+Final Leader evidence: isolated worktree with all changed files: tsc 0, lint clean, guards 8/8, vitest 1240 passed / 75 skipped / 1 todo; repository-wide control-character scan clean. Reviewer: **PASS** (attempt 3 for SR-3; attempt 2 for the documentation path defect). The SAM template changed, so `sam validate --lint` must be re-run by the owner (NOT EXECUTED).
+
+**Pending owner decisions (not implemented):**
+- **SR-2** — `ci.runNumber` poisoning of `highestAccepted` with stolen CI credentials: decision proposal delivered to the owner (DD-27 change).
+- **SR-1 residual 1l (MEDIUM, uncertain)** — a build-container escape would run in the same job that holds `id-token: write`; the robust fix is separate build and push jobs (artifact hand-off with a sha256 check), which adds pinned artifact actions.
+- **SR-6, SR-7, SR-8** — residual or B2 verification, as recorded in the security review.

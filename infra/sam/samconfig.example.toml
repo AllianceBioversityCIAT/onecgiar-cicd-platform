@@ -26,6 +26,7 @@ parameter_overrides = [
   "PlatformWorkflowRepository=<GITHUB_ORG>/<PLATFORM_REPO>",
   "PinnedWorkflowSha=<PINNED_COMMIT_SHA_40_HEX>",
   "GitHubOidcSub=<ENVIRONMENT_FORM_SUB>",
+  "GitHubBoundRef=refs/heads/<BOUND_BRANCH>",
   "ExecutorTrustedPrincipalArn=<OWNER_IAM_PRINCIPAL_ARN>",
   "OperatorTrustedPrincipalArn=<OPERATOR_IAM_PRINCIPAL_ARN>",
   "SecretIdPrefix=<SECRET_ID_PREFIX_ENDING_WITH_SLASH>",

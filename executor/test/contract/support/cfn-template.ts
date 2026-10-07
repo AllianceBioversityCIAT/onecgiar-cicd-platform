@@ -14,7 +14,7 @@ export const samConfigExamplePath = path.join(repoRoot, "infra", "sam", "samconf
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export interface CfnTemplate {
-  Parameters: Record<string, { AllowedPattern?: string; AllowedValues?: string[]; Default?: string }>;
+  Parameters: Record<string, { Type?: string; AllowedPattern?: string; AllowedValues?: string[]; Default?: string }>;
   Rules?: Record<string, Json>;
   Conditions: Record<string, Json>;
   Resources: Record<string, CfnResource>;

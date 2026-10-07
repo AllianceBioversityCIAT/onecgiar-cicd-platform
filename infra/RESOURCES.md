@@ -84,6 +84,7 @@ Condition: StringEquals <GITHUB_OIDC_ISSUER>:aud                 = <STS_AUDIENCE
            StringEquals <GITHUB_OIDC_ISSUER>:environment         = <GITHUB_ENVIRONMENT>
            StringEquals <GITHUB_OIDC_ISSUER>:job_workflow_ref    = <GITHUB_ORG>/<PLATFORM_REPO>/.github/workflows/deploy-request.reusable.yml@<PINNED_COMMIT_SHA>
            StringEquals <GITHUB_OIDC_ISSUER>:sub                 = <ENVIRONMENT_FORM_SUB>
+           StringEquals <GITHUB_OIDC_ISSUER>:ref                 = <BOUND_REF>   (SR-4; equals CICD_BOUND_REF)
 MaxSessionDuration: 1 h
 ```
 
@@ -100,6 +101,9 @@ Rules:
 - `event_name` is not an IAM condition key (P-G6); the event and bound-ref allowlist lives in
   the pinned reusable workflow (DD-24 item 2), with the bound ref taken from the admin-only
   Environment variable `CICD_BOUND_REF` (#8).
+- `ref` (SR-4): since 2026-10-07 the bound ref is ALSO an exact IAM condition (stack parameter
+  `GitHubBoundRef`, never caller-controlled); it must equal `CICD_BOUND_REF`. The event allowlist stays
+  in the pinned workflow, because the `ref` of `pull_request_target`/`workflow_run` is the default branch.
 - Not relied upon: environment-only `sub`, branch-based `sub`, P-A3 for fork safety.
 
 ## Alarms (#17)

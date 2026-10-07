@@ -126,7 +126,7 @@ Remove the local data and the profiles:
 Remove-Item -Recurse -Force executor/.local
 ```
 
-This deletes the portable Node 22, the definitions root, `executor.env`, the local samconfig, any secret value files and logs. Remove the `[profile <EXECUTOR_PROFILE_NAME>]` and `[profile <OPERATOR_PROFILE_NAME>]` sections from `~/.aws/config`, and any scratch host-key files. Confirm `git status` shows no changes from this run.
+This deletes the portable Node 22, the definitions root, `executor.env`, the local samconfig, any secret value files and logs. The isolated Executor AWS files under `executor/.local/aws/` go with it; first delete the dedicated Executor principal as in [05](05-run-executor-node22.md) section 3.9 (access key, inline policy, user). Remove the `[profile <OPERATOR_PROFILE_NAME>]` section from `~/.aws/config`, and any scratch host-key files. Confirm `git status` shows no changes from this run.
 
 ## 9. The GitHub OIDC provider
 

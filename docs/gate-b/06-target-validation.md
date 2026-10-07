@@ -47,7 +47,9 @@ Expected output lines include `probe.flock_contention=busy`, `probe.flock_releas
 It reuses the Executor's SSH adapter and secrets provider, so it needs the built `dist` and credentials that may read the secrets (the Executor profile does). Dry run first (no AWS and no SSH call):
 
 ```powershell
-$env:AWS_PROFILE = "<EXECUTOR_PROFILE_NAME>"
+$env:AWS_CONFIG_FILE = (Resolve-Path executor/.local/aws/config).Path
+$env:AWS_SHARED_CREDENTIALS_FILE = (Resolve-Path executor/.local/aws/credentials).Path
+$env:AWS_PROFILE = "cicd-executor"
 & executor/.local/node22/node.exe tools/gate-b/probe/executor-ssh-probe.mjs --connection-ref '<TARGET_CONNECTION>' --host-key-ref '<TARGET_HOST_KEY>' --credential-ref '<TARGET_CREDENTIAL>' --secret-id-prefix '<SECRET_ID_PREFIX>' --region '<AWS_REGION>' --dry-run
 ```
 

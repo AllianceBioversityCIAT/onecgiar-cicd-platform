@@ -93,7 +93,7 @@ Expected: an `assumed-role/<OPERATOR_ROLE_NAME>/...` ARN. Equivalent explicit fo
 | Startup | Executor console ([05](05-run-executor-node22.md)) | `executor started` with the right `deployments` count; no refusal |
 | Heartbeat | Console heartbeat lines; the healthcheck file's timestamp | Updated about every minute. The CloudWatch heartbeat metric has **no data** in this run (EMF not shipped); do not treat the alarm state as a failure |
 | Scheduler-originated `RECONCILE_TICK` consumed | **Checkpoint.** Only when the Executor is running ([05](05-run-executor-node22.md)) and you decide to enable the schedule. In your local `executor/.local/gate-b/samconfig.toml`, change `ReconcileScheduleState=DISABLED` to `ReconcileScheduleState=ENABLED` in `parameter_overrides` (keep every other value), then run the checkpoint D deploy command of [01](01-aws-sam.md) unchanged. The changeset must show only `Modify` on `ReconcileSchedule`; answer `n` otherwise. Wait at least 5 minutes. To stop ticks, set it back to `DISABLED` in the same file and redeploy the same way | Executor console shows the line `RECONCILE_TICK consumed` (with a generated `correlationId`) about every 5 minutes; `aws scheduler get-schedule --name cicd-reconcile-dev --query State --output text` prints `ENABLED`; the DLQ stays empty. G-8 is resolved: the tick carries no `eventId` |
-| Negative: the Executor role cannot read an application secret | `aws secretsmanager get-secret-value --secret-id <APPLICATION_SECRET_NAME> --profile <EXECUTOR_PROFILE_NAME>` and `aws ecr describe-repositories --profile <EXECUTOR_PROFILE_NAME>` | `AccessDeniedException` for both |
+| Negative: the Executor role cannot read an application secret | with `$env:AWS_CONFIG_FILE` / `$env:AWS_SHARED_CREDENTIALS_FILE` set to the isolated files of [05](05-run-executor-node22.md) section 3: `aws secretsmanager get-secret-value --secret-id <APPLICATION_SECRET_NAME> --profile cicd-executor` and `aws ecr describe-repositories --profile cicd-executor` | `AccessDeniedException` for both |
 
 ## B2. GitHub OIDC to SQS to the local Executor
 
@@ -156,6 +156,43 @@ aws cloudwatch describe-alarms --alarm-names cicd-dev-dlq-not-empty --query "Met
 Expected: the DLQ count is 1, and the alarm becomes `ALARM` within a few minutes (evaluation is per minute).
 
 Cleanup: inspect and purge the DLQ message so the alarm clears (`aws sqs purge-queue --queue-url <DLQ_URL>`; purge works once per 60 seconds). Never edit a poison message and redrive it.
+
+## Account resource-policy check (SR-7)
+
+**Owner-executed, later (after the stack exists; not a B1 precondition).** The stack's queue policy and roles are scoped, but other resource policies already in the account (queues, repositories, secrets, roles) can grant access that this stack does not control. This check is read-only and looks for external or wildcard grants. Use your administrator profile.
+
+1. Is an IAM Access Analyzer already enabled for the account?
+
+   ```powershell
+   aws accessanalyzer list-analyzers --region <AWS_REGION> --profile <AWS_PROFILE_ADMIN>
+   ```
+
+2. **Only if** an analyzer of type `ACCOUNT` exists, list its active findings (external access to queues, secrets, roles, repositories):
+
+   ```powershell
+   [System.IO.File]::WriteAllText((Join-Path $PWD "executor/.local/aa-filter.json"), '{"status":{"eq":["ACTIVE"]}}', (New-Object System.Text.UTF8Encoding $false))
+   aws accessanalyzer list-findings --analyzer-arn <ANALYZER_ARN> --filter file://executor/.local/aa-filter.json --region <AWS_REGION> --profile <AWS_PROFILE_ADMIN>
+   ```
+
+   Expected: no active finding that names the stack's queue, the CI role or the Executor role. Record any finding you do not recognize.
+
+   Creating an analyzer is a **mutation** that you may choose to make (external-access analysis has no charge); it is deliberately not part of B1 and is not instructed here. If none exists, use the spot checks below instead.
+
+3. Read-only spot checks (look for `"Principal":"*"`, `"Principal":{"AWS":"*"}` without a restrictive `Condition`, or the CI role ARN in a resource policy it should not have):
+
+   ```powershell
+   aws sqs list-queues --region <AWS_REGION> --profile <AWS_PROFILE_ADMIN>
+   aws sqs get-queue-attributes --queue-url <QUEUE_URL> --attribute-names Policy --region <AWS_REGION> --profile <AWS_PROFILE_ADMIN>
+   aws ecr describe-repositories --query "repositories[].repositoryName" --output text --region <AWS_REGION> --profile <AWS_PROFILE_ADMIN>
+   aws ecr get-repository-policy --repository-name <REPOSITORY_NAME> --region <AWS_REGION> --profile <AWS_PROFILE_ADMIN>
+   ```
+
+   Repeat `get-queue-attributes` for each queue in the list and `get-repository-policy` for each existing repository (`RepositoryPolicyNotFoundException` means the repository has no resource policy, which is fine).
+
+### Documented residual risks (SR-6, SR-7)
+
+- **SR-6:** documented residual risk; it is accepted for the PoC as raised in the Gate B security review and is not remediated here.
+- **SR-7:** documented residual risk. A resource policy elsewhere in the account that grants the CI role (or `*`) access outside this stack is not visible to the stack's own tests; the checks above reduce, but do not eliminate, that risk, and they are a point-in-time observation only.
 
 ## B4. SSH (non-destructive)
 

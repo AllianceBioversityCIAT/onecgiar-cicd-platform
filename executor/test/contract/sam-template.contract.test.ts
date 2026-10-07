@@ -130,6 +130,19 @@ describe("parameters", () => {
     }
   });
 
+  it("GitHubBoundRef is an explicit exact branch ref: no default, no wildcard characters (SR-4)", () => {
+    const param = template.Parameters.GitHubBoundRef!;
+    expect(param.Type).toBe("String");
+    expect("Default" in param).toBe(false);
+    const pattern = new RegExp(param.AllowedPattern!);
+    for (const ok of ["refs/heads/main", "refs/heads/release/1.0"]) {
+      expect(pattern.test(ok), ok).toBe(true);
+    }
+    for (const bad of ["main", "refs/heads/*", "refs/heads/ma?n", "refs/tags/v1", "refs/pull/1/merge", "", "refs/heads/a b"]) {
+      expect(pattern.test(bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it("SecretIdPrefix must end with a slash", () => {
     const pattern = new RegExp(template.Parameters.SecretIdPrefix!.AllowedPattern!);
     expect(pattern.test("cicd-poc/dev/")).toBe(true);
@@ -189,10 +202,14 @@ describe("CiRole OIDC trust (DD-24, FR-25)", () => {
     expect(Object.keys(trustCondition())).toEqual(["StringEquals"]);
   });
 
-  it("binds exactly the six expected claims", () => {
+  it("binds exactly the seven expected claims", () => {
     expect(Object.keys(trustCondition().StringEquals!).sort()).toEqual(
-      ["aud", "environment", "job_workflow_ref", "repository_id", "repository_owner_id", "sub"].map((c) => `${OIDC}:${c}`).sort(),
+      ["aud", "environment", "job_workflow_ref", "ref", "repository_id", "repository_owner_id", "sub"].map((c) => `${OIDC}:${c}`).sort(),
     );
+  });
+
+  it("binds the ref claim to the explicit GitHubBoundRef stack parameter (SR-4)", () => {
+    expect(trustCondition().StringEquals![`${OIDC}:ref`]).toEqual({ Ref: "GitHubBoundRef" });
   });
 
   it("binds each claim to the intended value", () => {
@@ -555,6 +572,26 @@ describe("tags, deletion policies and ECR", () => {
     expect(repo.Properties.ImageTagMutability).toBe("IMMUTABLE");
     expect(repo.Properties.ImageScanningConfiguration).toEqual({ ScanOnPush: true });
     expect(repo.Properties.EmptyOnDelete).toBe(true);
+  });
+
+  it("only the probe repository carries a lifecycle policy, keeping the 100 most recent images (SR-5)", () => {
+    const withPolicy = Object.entries(template.Resources)
+      .filter(([, r]) => JSON.stringify(r.Properties ?? {}).includes("ifecyclePolicy"))
+      .map(([n]) => n);
+    expect(withPolicy).toEqual(["ProbeEcrRepository"]);
+    const lifecycle = template.Resources.ProbeEcrRepository!.Properties.LifecyclePolicy as { LifecyclePolicyText: string };
+    expect(Object.keys(lifecycle)).toEqual(["LifecyclePolicyText"]);
+    expect(typeof lifecycle.LifecyclePolicyText).toBe("string");
+    expect(JSON.parse(lifecycle.LifecyclePolicyText)).toEqual({
+      rules: [
+        {
+          rulePriority: 1,
+          description: "Keep the 100 most recent images (PoC)",
+          selection: { tagStatus: "any", countType: "imageCountMoreThan", countNumber: 100 },
+          action: { type: "expire" },
+        },
+      ],
+    });
   });
 
   it("the CiEcrRepositoryArn output selects the existing ARN when set and the probe ARN otherwise", () => {

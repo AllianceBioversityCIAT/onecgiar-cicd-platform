@@ -195,19 +195,37 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
   });
 
   describe("step ordering (FR-22: one request after every CI step)", () => {
-    it("runs bound-ref, checkout, OIDC, account mask, registry login, build+push, body, send in that order", () => {
-      const kinds = envSteps.map((s) => {
-        if (s.uses?.startsWith("actions/checkout@")) return "checkout";
-        if (s.uses?.startsWith("aws-actions/configure-aws-credentials@")) return "oidc";
-        if (s.uses?.startsWith("aws-actions/amazon-ecr-login@")) return "ecr-login";
-        if (s.run?.includes("BOUND_REF")) return "bound-ref";
-        if (s.run?.includes("aws sqs send-message")) return "send";
-        if (s.run?.includes("sts get-caller-identity")) return "account-mask";
-        if (s.run?.includes("docker push")) return "build-push";
-        if (s.run?.includes("jq -n")) return "body";
-        return "unknown";
-      });
-      expect(kinds).toEqual(["bound-ref", "checkout", "oidc", "account-mask", "ecr-login", "build-push", "body", "send"]);
+    const kindOf = (s: Step): string => {
+      if (s.uses?.startsWith("actions/checkout@")) return "checkout";
+      if (s.uses?.startsWith("aws-actions/configure-aws-credentials@")) return "oidc";
+      if (s.uses?.startsWith("aws-actions/amazon-ecr-login@")) return "ecr-login";
+      if (s.run?.includes("BOUND_REF")) return "bound-ref";
+      if (s.run?.includes("aws sqs send-message")) return "send";
+      if (s.run?.includes("sts get-caller-identity")) return "account-mask";
+      if (s.run?.includes("docker push")) return "push";
+      if (s.run?.includes("docker build")) return "build";
+      if (s.name === "Validate build inputs") return "validate";
+      if (s.run?.includes("jq -n")) return "body";
+      return "unknown";
+    };
+
+    it("runs bound-ref, checkout, validate, build, OIDC, account mask, registry login, push, body, send in that order (SR-1)", () => {
+      expect(envSteps.map(kindOf)).toEqual([
+        "bound-ref", "checkout", "validate", "build", "oidc", "account-mask", "ecr-login", "push", "body", "send",
+      ]);
+    });
+
+    it("builds with the OIDC request variables stripped, locally tagged, and never pushes or logs in at build time (SR-1)", () => {
+      const build = envSteps.find((s) => kindOf(s) === "build")!;
+      expect(build.run).toContain("env -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL");
+      expect(build.run).not.toContain("docker push");
+      expect(build.run).not.toMatch(/docker login|ecr|aws /);
+      expect(build.env?.["REGISTRY"]).toBeUndefined();
+      const buildAt = envSteps.indexOf(build);
+      for (const s of envSteps.slice(0, buildAt)) {
+        expect(s.uses?.startsWith("aws-actions/"), s.name).toBeFalsy();
+        expect(s.run ?? "", s.name).not.toMatch(/\baws\s|docker login/);
+      }
     });
 
     it("has exactly one send step, it is the LAST step and nothing in the workflow uses always()", () => {
@@ -346,6 +364,37 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
         JSON.stringify([{ unit: "a", context: ".", dockerfile: "-f" }]),
       ];
       for (const u of bad) expect(run({ UNITS: u }).status, u).toBe(1);
+    });
+  });
+
+  describe("guard control-character rejection (executed)", () => {
+    const guardScript = guardJob.steps![0]!.run!;
+    const run = (over: Record<string, string>) =>
+      runScript(guardScript, {
+        EVENT_NAME: "push",
+        DEPLOYMENT_ID: "example-deployment",
+        UNITS: JSON.stringify([{ unit: "a", context: "app" }]),
+        ...over,
+      });
+
+    it.skipIf(!canExecute)("still accepts normal input", () => {
+      expect(run({}).status).toBe(0);
+    });
+
+    it.skipIf(!canExecute)("rejects a unit with a trailing newline next to the same unit without it (no collision)", () => {
+      const units = JSON.stringify([{ unit: "a", context: "app" }, { unit: "a\n", context: "app" }]);
+      expect(run({ UNITS: units }).status).toBe(1);
+      expect(run({ UNITS: JSON.stringify([{ unit: "a\n", context: "app" }]) }).status).toBe(1);
+    });
+
+    it.skipIf(!canExecute)("rejects control characters in context, dockerfile and deploymentId", () => {
+      for (const bad of ["app\n", "app\r", "ap\tp", "app\u0000x", "app\u007f"]) {
+        expect(run({ UNITS: JSON.stringify([{ unit: "a", context: bad }]) }).status, JSON.stringify(bad)).toBe(1);
+        expect(run({ UNITS: JSON.stringify([{ unit: "a", context: "app", dockerfile: bad }]) }).status, JSON.stringify(bad)).toBe(1);
+      }
+      for (const id of ["example-deployment\n", "example-deployment\r", "example\n-deployment"]) {
+        expect(run({ DEPLOYMENT_ID: id }).status, JSON.stringify(id)).toBe(1);
+      }
     });
   });
 

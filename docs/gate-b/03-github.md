@@ -15,7 +15,7 @@ anywhere).** No application repository is changed by Claude; you pick the reposi
 | `CICD_AWS_REGION` | Environment variable | `<AWS_REGION>` (your choice) | |
 | `CICD_ECR_REPOSITORY` | Environment variable | Repository **name** only: last segment of stack output `CiEcrRepositoryArn` | No account id |
 | `CICD_DEPLOY_QUEUE_NAME` | Environment variable | Stack output `DeployQueueName` | Name only; the URL is derived |
-| `CICD_BOUND_REF` | Environment variable, **admin-only** | Your choice: the full ref `refs/heads/<BOUND_BRANCH>` | The one ref allowed to deploy; fail closed when empty |
+| `CICD_BOUND_REF` | Environment variable, **admin-only** | Your choice: the full ref `refs/heads/<BOUND_BRANCH>` | The one ref allowed to deploy; fail closed when empty. MUST equal the stack parameter `GitHubBoundRef` ([01](01-aws-sam.md)); a mismatch makes the role assumption fail closed |
 | Account id, registry host, queue URL | **Derived after OIDC**, masked as log hygiene | `sts get-caller-identity`, registry login output, `sqs get-queue-url` | Never stored in GitHub |
 | Environment name, deployment branch rules, branch protection, required reviewers | Repository / Environment **configuration** | You | Not values |
 | `deploymentId`, `environment`, `units` | Caller workflow **inputs** | In the caller file | Non-sensitive |
@@ -136,6 +136,7 @@ Expected: a JSON object. Compare with the stack:
 |---|---|
 | `sub` | Stack parameter `GitHubOidcSub` (P-G10; expected default form `repo:<GITHUB_ORG>/<APP_REPO>:environment:<GITHUB_ENVIRONMENT>`; repositories created, renamed or transferred after 2026-07-15 use the immutable form `repo:<GITHUB_ORG>@<OWNER_ID>/<APP_REPO>@<REPO_ID>:environment:<GITHUB_ENVIRONMENT>`) |
 | `job_workflow_ref` | `<GITHUB_ORG>/<PLATFORM_REPO>/.github/workflows/deploy-request.reusable.yml@<ref form>` where `<ref form>` is what the probe shows for the SHA-pinned call (P-G11). The stack builds the value with the 40-hex SHA. If the probe shows a `refs/...` form instead, **stop** and share it: the template must change, do not guess |
+| `ref` | Stack parameter `GitHubBoundRef`, which must equal `CICD_BOUND_REF` (a mismatch makes the role assumption fail closed) |
 | `repository_id`, `repository_owner_id`, `environment`, `aud` | The matching stack parameters; `aud` is `sts.amazonaws.com` |
 
 The decoder pads the base64 itself and needs a jq with `@base64d` (1.6 or later, preinstalled on the Ubuntu runner). The output reveals repository identifiers: keep it private and share it only sanitized. Claude did not run this; it is a documented diagnostic.

@@ -6,6 +6,7 @@
   { "ParameterKey": "PlatformWorkflowRepository", "ParameterValue": "<GITHUB_ORG>/<PLATFORM_REPO>" },
   { "ParameterKey": "PinnedWorkflowSha", "ParameterValue": "<PINNED_COMMIT_SHA_40_HEX>" },
   { "ParameterKey": "GitHubOidcSub", "ParameterValue": "<ENVIRONMENT_FORM_SUB>" },
+  { "ParameterKey": "GitHubBoundRef", "ParameterValue": "refs/heads/<BOUND_BRANCH>" },
   { "ParameterKey": "ExistingGitHubOidcProviderArn", "ParameterValue": "" },
   { "ParameterKey": "CiEcrRepositoryArn", "ParameterValue": "" },
   { "ParameterKey": "ExecutorTrustedPrincipalArn", "ParameterValue": "<OWNER_IAM_PRINCIPAL_ARN>" },

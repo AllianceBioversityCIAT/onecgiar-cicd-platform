@@ -20,6 +20,15 @@
 # non-secret variable, so the runner prints it unmasked wherever a step references it. Access is
 # controlled by the OIDC trust conditions, not by hiding the ARN. The masks below only reduce
 # noise in later log lines.
+# Step order of the Environment job (SR-1, Gate B security correction): bound ref, checkout,
+# validate build inputs, BUILD (no AWS credentials, no registry login, OIDC request variables
+# stripped from the build process), THEN assume the role through OIDC, mask, registry login,
+# tag + push + capture digests, request body, ONE send. Rationale: a docker build executes
+# caller-controlled instructions and reads a caller-chosen context; the build must never run
+# while AWS session credentials, the registry token or the OIDC request variables exist. The
+# context and Dockerfile must resolve inside the workspace; any symbolic link on the path and any
+# remote context is rejected (fail closed).
+#
 
 # Lint and tests are the caller's own jobs; the caller makes its deploy job `needs:` them,
 # so a failing CI step means this workflow never starts and no request is sent (FR-22).
@@ -76,7 +85,9 @@ jobs:
             push|workflow_dispatch) ;;
             *) echo "::error::event not allowed for deploy requests"; exit 1 ;;
           esac
-          if ! [[ "$DEPLOYMENT_ID" =~ ^[a-z0-9][a-z0-9-]{1,62}$ ]]; then
+          # Control characters (a trailing newline included) are rejected explicitly: jq's dollar anchor
+          # also matches before a final newline, which would let "a" and "a<newline>" both pass and collide.
+          if [[ "$DEPLOYMENT_ID" == *[[:cntrl:]]* ]] || ! [[ "$DEPLOYMENT_ID" =~ ^[a-z0-9][a-z0-9-]{1,62}$ ]]; then
             echo "::error::invalid deploymentId"; exit 1
           fi
           printf '%s' "$UNITS" | jq -e '
@@ -84,12 +95,14 @@ jobs:
             and all(.[];
               type == "object"
               and ((keys - ["unit", "context", "dockerfile"]) | length) == 0
-              and (.unit | type == "string" and test("^[a-z0-9][a-z0-9-]{0,31}$"))
+              and (.unit | type == "string" and test("^[a-z0-9][a-z0-9-]{0,31}$") and (test("[\u0000-\u001f\u007f]") | not))
               and (.context | type == "string" and test("^[A-Za-z0-9_.][A-Za-z0-9_./-]*$")
-                   and (test("(^|/)[.][.](/|$)") | not))
+                   and (test("(^|/)[.][.](/|$)") | not)
+                   and (test("[\u0000-\u001f\u007f]") | not))
               and ((.dockerfile // "Dockerfile") | type == "string"
                    and test("^[A-Za-z0-9_.][A-Za-z0-9_./-]*$")
-                   and (test("(^|/)[.][.](/|$)") | not)))
+                   and (test("(^|/)[.][.](/|$)") | not)
+                   and (test("[\u0000-\u001f\u007f]") | not)))
             and (([.[].unit] | unique | length) == length)' > /dev/null \
             || { echo "::error::invalid units input"; exit 1; }
 
@@ -121,6 +134,71 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Validate build inputs
+        env:
+          UNITS: ${{ inputs.units }}
+        run: |
+          set -euo pipefail
+          # SR-1: defense in depth on top of the guard job. Every context and Dockerfile must be a
+          # plain relative path whose components are real (never symbolic links) and that resolves
+          # inside the workspace. ANY symlink is rejected, even one that points inside the workspace.
+          workspace="$(realpath -e "$GITHUB_WORKSPACE")"
+          reject() { echo "::error::build input rejected for unit ${1}"; exit 1; }
+          check_path() {
+            local unit="$1" kind="$2" p="$3" cur part resolved
+            local -a parts
+            if ! [[ "$p" =~ ^[A-Za-z0-9_.][A-Za-z0-9_./-]*$ ]]; then reject "$unit"; fi
+            case "$p" in /* | *:*) reject "$unit" ;; esac
+            if [[ "$p" =~ (^|/)[.][.](/|$) ]]; then reject "$unit"; fi
+            cur="$GITHUB_WORKSPACE"
+            IFS=/ read -r -a parts <<< "$p"
+            for part in "${parts[@]}"; do
+              if [ -z "$part" ]; then continue; fi
+              cur="$cur/$part"
+              if [ -L "$cur" ]; then reject "$unit"; fi
+              if ! [ -e "$cur" ]; then reject "$unit"; fi
+            done
+            resolved="$(realpath -e "$cur")" || reject "$unit"
+            if [ "$resolved" != "$workspace" ] && [[ "$resolved" != "$workspace"/* ]]; then reject "$unit"; fi
+            if [ "$kind" = dir ] && ! [ -d "$resolved" ]; then reject "$unit"; fi
+            if [ "$kind" = file ] && ! [ -f "$resolved" ]; then reject "$unit"; fi
+          }
+          while IFS= read -r entry; do
+            unit="$(printf '%s' "$entry" | jq -r '.unit')"
+            context="$(printf '%s' "$entry" | jq -r '.context')"
+            dockerfile="$(printf '%s' "$entry" | jq -r '.dockerfile // "Dockerfile"')"
+            # $(...) strips trailing newlines, so control characters are checked on the raw JSON values.
+            printf '%s' "$entry" | jq -e '[.unit, .context, (.dockerfile // "")] | all(.[]; test("[\u0000-\u001f\u007f]") | not)' > /dev/null \
+              || reject "$unit"
+            check_path "$unit" dir "$context"
+            check_path "$unit" file "$dockerfile"
+          done < <(printf '%s' "$UNITS" | jq -c '.[]')
+
+      - name: Build units (no AWS credentials yet)
+        env:
+          UNITS: ${{ inputs.units }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          # SR-1: no cloud credential may exist while caller-controlled build instructions run.
+          if [ -n "$(compgen -e AWS_ || true)" ]; then
+            echo "::error::cloud credentials are present before the build (fail closed)"; exit 1
+          fi
+          local_images="$RUNNER_TEMP/local-images.tsv"
+          : > "$local_images"
+          while IFS= read -r entry; do
+            unit="$(printf '%s' "$entry" | jq -r '.unit')"
+            context="$(printf '%s' "$entry" | jq -r '.context')"
+            dockerfile="$(printf '%s' "$entry" | jq -r '.dockerfile // "Dockerfile"')"
+            local_tag="cicd-local/${unit}:${RUN_ID}-${RUN_ATTEMPT}"
+            # The OIDC request variables and the runtime tokens are stripped from the build process.
+            env -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+              -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_CACHE_URL -u ACTIONS_RESULTS_URL \
+              docker build --file "$dockerfile" --tag "$local_tag" -- "$context"
+            printf '%s\t%s\n' "$unit" "$local_tag" >> "$local_images"
+          done < <(printf '%s' "$UNITS" | jq -c '.[]')
+
       - name: Assume CI role through OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
@@ -141,9 +219,8 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
 
-      - name: Build and push units, capture digests
+      - name: Tag and push units, capture digests
         env:
-          UNITS: ${{ inputs.units }}
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           REPOSITORY: ${{ vars.CICD_ECR_REPOSITORY }}
           RUN_ID: ${{ github.run_id }}
@@ -152,13 +229,10 @@ jobs:
           set -euo pipefail
           artifacts_file="$RUNNER_TEMP/artifacts.json"
           echo '{}' > "$artifacts_file"
-          while IFS= read -r entry; do
-            unit="$(printf '%s' "$entry" | jq -r '.unit')"
-            context="$(printf '%s' "$entry" | jq -r '.context')"
-            dockerfile="$(printf '%s' "$entry" | jq -r '.dockerfile // "Dockerfile"')"
+          while IFS=$'\t' read -r unit local_tag; do
             # The tag is for humans only (never drives a deploy) and cannot collide with integer tags.
             image="${REGISTRY}/${REPOSITORY}:ci-${unit}-${RUN_ID}-${RUN_ATTEMPT}"
-            docker build --file "$dockerfile" --tag "$image" "$context"
+            docker tag "$local_tag" "$image"
             docker push "$image"
             # Digest comes from the local image's RepoDigests entry for the pushed repository
             # (not scraped from push output); it is validated strictly below.
@@ -174,7 +248,7 @@ jobs:
             fi
             jq --arg unit "$unit" --arg digest "$digest" '. + {($unit): $digest}' "$artifacts_file" > "$artifacts_file.tmp"
             mv "$artifacts_file.tmp" "$artifacts_file"
-          done < <(printf '%s' "$UNITS" | jq -c '.[]')
+          done < "$RUNNER_TEMP/local-images.tsv"
 
       - name: Build deploy request body
         env:
