@@ -753,3 +753,10 @@ Leader evidence: isolated worktree tsc 0, lint clean, guards 8/8, vitest 1111 pa
 | Fix | Description text `cicd-poc-<Stage>-probe` (no `Fn::Sub`, no suppression). Contract guards: no `${` outside an `Fn::Sub` template string (E1029); every `Fn::Sub` template string contains `${` (W1020); probe repository name pinned to `!Sub cicd-poc-${Stage}-probe`. ECR selection of 1402982 unchanged |
 | Attempt 1 of the fix | Review **FAIL**: the implementer's falsifier `sed` replace-all also changed the probe `RepositoryName` to `!Sub cicd-poc-<Stage>-probe` (would have triggered W1020 and E3031); not covered by any test. Attempt 2 restored it; the template diff is the line-63 Description only (Leader verified with `git diff -U0`) |
 | Evidence | Isolated worktree tsc 0, lint clean, guards 8/8, vitest 1119 passed / 74 skipped / 1 todo; implementer falsifier (`<Stage>` on the repository name) → 2 red; Leader falsifier (variable-less `!Sub` schedule name) → red. Review: **PASS**, including a static sweep of the whole template against the cfn-lint 1.43.0 rule families (E1019/E1029/W1020/E2001/E2015/W2001/W8001/W1001/W3011/W3037/E3012/E3031) with no further expected finding; schema-dependent low-risk items: OIDC provider without `ThumbprintList`, alarm `Tags`, ECR `EmptyOnDelete`. `sam validate --lint`: NOT EXECUTED by Claude — owner attempt 3 pending |
+
+### B1-B — owner-executed `sam validate --lint`, attempt 3 (2026-10-07): **PASS**
+
+| Item | Record |
+|---|---|
+| Owner result | Commit e8ee25c, SAM CLI 1.151.0 (bundled cfn-lint 1.43.0), `sam validate --lint --template-file infra/sam/template.yaml --region us-east-1` → `D:\executor_component\infra\sam\template.yaml is a valid SAM Template`, exit 0. (An update notice for SAM CLI 1.167.0 was printed; the owner keeps 1.151.0, which validated the template.) |
+| Status | **B1-B complete** (checkpoints B and C of plan §11). Next: B1-C, parameter resolution with owner-executed read-only discovery. No deployment yet |
