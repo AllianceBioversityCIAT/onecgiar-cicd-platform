@@ -85,12 +85,33 @@ describe("template parsing", () => {
   });
 
   it("flags ${...} outside Fn::Sub and accepts it inside (self-test)", () => {
-    const bad = parseCfnYaml("Parameters:\n  P:\n    Description: cicd-${Stage}-x\n") as unknown as Json;
+    const bad = parseCfnYaml("Parameters:\n  Stage:\n    Type: String\n  P:\n    Description: cicd-${Stage}-x\n") as unknown as Json;
     expect(embeddedVarsOutsideSub(bad)).toEqual(["/Parameters/P/Description"]);
+    const pseudo = parseCfnYaml("Resources:\n  R:\n    Properties:\n      A: x-${AWS::Region}\n") as unknown as Json;
+    expect(embeddedVarsOutsideSub(pseudo)).toEqual(["/Resources/R/Properties/A"]);
+    const getAtt = parseCfnYaml("Resources:\n  T:\n    Type: X\n  R:\n    Properties:\n      A: ${T.Arn}\n") as unknown as Json;
+    expect(embeddedVarsOutsideSub(getAtt)).toEqual(["/Resources/R/Properties/A"]);
     const good = parseCfnYaml(
       ["A: !Sub 'x-${Stage}'", "B: !Sub ['x-${Stage}', { Stage: y }]"].join("\n"),
     ) as unknown as Json;
     expect(embeddedVarsOutsideSub(good)).toEqual([]);
+  });
+
+  it("does not flag IAM policy variables or Sub literals, which CloudFormation never substitutes (real E1029 behavior)", () => {
+    const iam = parseCfnYaml(
+      [
+        "Parameters:",
+        "  Stage:",
+        "    Type: String",
+        "Resources:",
+        "  R:",
+        "    Properties:",
+        "      A: ${token.actions.githubusercontent.com:repository_id}",
+        "      B: ${aws:username}",
+        "      C: ${!Literal}",
+      ].join("\n"),
+    ) as unknown as Json;
+    expect(embeddedVarsOutsideSub(iam)).toEqual([]);
   });
 });
 
@@ -202,10 +223,22 @@ describe("CiRole OIDC trust (DD-24, FR-25)", () => {
     expect(Object.keys(trustCondition())).toEqual(["StringEquals"]);
   });
 
-  it("binds exactly the seven expected claims", () => {
+  it("binds exactly the seven expected claims plus the option A session name", () => {
     expect(Object.keys(trustCondition().StringEquals!).sort()).toEqual(
-      ["aud", "environment", "job_workflow_ref", "ref", "repository_id", "repository_owner_id", "sub"].map((c) => `${OIDC}:${c}`).sort(),
+      [
+        ...["aud", "environment", "job_workflow_ref", "ref", "repository_id", "repository_owner_id", "sub"].map((c) => `${OIDC}:${c}`),
+        "sts:RoleSessionName",
+      ].sort(),
     );
+  });
+
+  // AC-02 V1-R1 option A (DD-24, R-2). Static shape only: premises P-R1 (sts:RoleSessionName is
+  // evaluated for AssumeRoleWithWebIdentity) and P-R2 (the GitHub claim resolves as a policy
+  // variable in the trust policy) stay UNVERIFIED until the real B2 positive and negative tests.
+  it("forces the role session name to equal the token's repository_id, as a literal IAM policy variable (option A)", () => {
+    const value = trustCondition().StringEquals!["sts:RoleSessionName"];
+    expect(value).toBe(`\${${OIDC}:repository_id}`);
+    expect(typeof value).toBe("string");
   });
 
   it("binds the ref claim to the explicit GitHubBoundRef stack parameter (SR-4)", () => {
@@ -325,9 +358,14 @@ describe("IAM least privilege", () => {
     expect(sqs[0]!.Resource).toEqual(getAttArn("DeployQueue"));
   });
 
-  it("ExecutorRole DynamoDB: item actions on the table, Query only on the GSI2 index", () => {
+  it("ExecutorRole DynamoDB: item actions on the state table, Query only on GSI2, GetItem only on the registry", () => {
     const statements = rolePolicyStatements(role("ExecutorRole")).filter((s) => asArray(s.Action).some((a) => a.startsWith("dynamodb:")));
-    const items = statements.find((s) => !asArray(s.Action).includes("dynamodb:Query"))!;
+    expect(statements).toHaveLength(3);
+    const registry = statements.filter((s) => key(s.Resource as Json).includes("RegistryTable"));
+    expect(registry).toHaveLength(1);
+    expect(registry[0]!.Action).toBe("dynamodb:GetItem");
+    expect(registry[0]!.Resource).toEqual(getAttArn("RegistryTable"));
+    const items = statements.find((s) => key(s.Resource as Json) === key(getAttArn("ExecutionsTable")))!;
     expect(asArray(items.Action).sort()).toEqual([
       "dynamodb:ConditionCheckItem", "dynamodb:DeleteItem", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem",
     ]);
@@ -335,6 +373,20 @@ describe("IAM least privilege", () => {
     const query = statements.find((s) => asArray(s.Action).includes("dynamodb:Query"))!;
     expect(query.Action).toBe("dynamodb:Query");
     expect(query.Resource).toEqual({ "Fn::Sub": `\${ExecutionsTable.Arn}/index/${GSI2_NAME}` });
+  });
+
+  it("only the ExecutorRole references the registry table, and only for GetItem (AC-02, R-2)", () => {
+    const refs = allStatements().filter(({ statement }) => JSON.stringify(statement).includes("RegistryTable"));
+    expect(refs.map(({ role: r }) => r)).toEqual(["ExecutorRole"]);
+    const registryActions = refs.flatMap(({ statement }) => asArray(statement.Action));
+    expect(registryActions).toEqual(["dynamodb:GetItem"]);
+    for (const forbidden of ["dynamodb:Scan", "dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:BatchWriteItem", "dynamodb:BatchGetItem"]) {
+      expect(registryActions, forbidden).not.toContain(forbidden);
+    }
+  });
+
+  it("the CI role has no DynamoDB action at all", () => {
+    expect(actionsOf(rolePolicyStatements(role("CiRole"))).filter((a) => a.startsWith("dynamodb:"))).toEqual([]);
   });
 
   it("ExecutorRole is assumable only by the configured principal", () => {
@@ -445,6 +497,46 @@ describe("executions table (design §5.1) matches the code", () => {
 
   it("point-in-time recovery follows the parameter", () => {
     expect(props().PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: { Ref: "EnablePointInTimeRecovery" } });
+  });
+});
+
+describe("target registry table (AC-02 V1, design §5.3, R-2)", () => {
+  const table = (): CfnResource => template.Resources.RegistryTable!;
+
+  it("is named cicd-registry-<stage> through Fn::Sub on Stage", () => {
+    expect(table().Type).toBe("AWS::DynamoDB::Table");
+    expect(table().Properties.TableName).toEqual({ "Fn::Sub": "cicd-registry-${Stage}" });
+  });
+
+  it("is on-demand with the pk/sk string key and no index", () => {
+    const p = table().Properties;
+    expect(p.BillingMode).toBe("PAY_PER_REQUEST");
+    expect(p.AttributeDefinitions).toEqual([
+      { AttributeName: "pk", AttributeType: "S" },
+      { AttributeName: "sk", AttributeType: "S" },
+    ]);
+    expect(p.KeySchema).toEqual([
+      { AttributeName: "pk", KeyType: "HASH" },
+      { AttributeName: "sk", KeyType: "RANGE" },
+    ]);
+    expect(p.GlobalSecondaryIndexes).toBeUndefined();
+    expect(p.LocalSecondaryIndexes).toBeUndefined();
+  });
+
+  it("is retained on delete and replace, has PITR always on and no TTL", () => {
+    expect(table().DeletionPolicy).toBe("Retain");
+    expect(table().UpdateReplacePolicy).toBe("Retain");
+    expect(table().Properties.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
+    expect(table().Properties.TimeToLiveSpecification).toBeUndefined();
+  });
+
+  it("is a separate table from the state table and carries the Project tag", () => {
+    expect(table().Properties.TableName).not.toEqual(template.Resources.ExecutionsTable!.Properties.TableName);
+    expect(table().Properties.Tags).toEqual([{ Key: "Project", Value: "ONECGIAR-CICD-Platform" }]);
+  });
+
+  it("exposes its name as the RegistryTableName output", () => {
+    expect(template.Outputs.RegistryTableName!.Value).toEqual({ Ref: "RegistryTable" });
   });
 });
 
@@ -573,10 +665,11 @@ describe("tags, deletion policies and ECR", () => {
   it("every stateful resource sets DeletionPolicy and UpdateReplacePolicy explicitly", () => {
     const stateful = Object.entries(template.Resources).filter(([, r]) => STATEFUL.has(r.Type));
     expect(stateful.map(([n]) => n).sort()).toEqual(
-      ["DeployDlq", "DeployQueue", "ExecutionsTable", "ExecutorLogGroup", "GitHubOidcProvider", "ProbeEcrRepository"].sort(),
+      ["DeployDlq", "DeployQueue", "ExecutionsTable", "ExecutorLogGroup", "GitHubOidcProvider", "ProbeEcrRepository", "RegistryTable"].sort(),
     );
+    const RETAINED = new Set(["GitHubOidcProvider", "RegistryTable"]);
     for (const [name, r] of stateful) {
-      const expected = r.Type === "AWS::IAM::OIDCProvider" ? "Retain" : "Delete";
+      const expected = RETAINED.has(name) ? "Retain" : "Delete";
       expect(r.DeletionPolicy, name).toBe(expected);
       expect(r.UpdateReplacePolicy, name).toBe(expected);
     }
@@ -624,7 +717,7 @@ describe("tags, deletion policies and ECR", () => {
     expect(Object.keys(template.Outputs).sort()).toEqual(
       [
         "CiEcrRepositoryArn", "CiRoleArn", "DeployDlqUrl", "DeployQueueArn", "DeployQueueName", "DeployQueueUrl",
-        "ExecutionsTableName", "ExecutorLogGroupName", "ExecutorRoleArn", "OidcProviderArn", "OperatorRoleArn", "SchedulerRoleArn",
+        "ExecutionsTableName", "ExecutorLogGroupName", "ExecutorRoleArn", "OidcProviderArn", "OperatorRoleArn", "RegistryTableName", "SchedulerRoleArn",
         "CiRoleId", "ExecutorRoleId", "OperatorRoleId", "SchedulerRoleId",
       ].sort(),
     );

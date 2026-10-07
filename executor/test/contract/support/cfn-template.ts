@@ -133,24 +133,45 @@ export function subWithoutVariable(node: Json | undefined, where = ""): string[]
   });
 }
 
+/** Names a `${...}` can resolve to in this template: parameters, resources and AWS pseudo parameters. */
+function resolvableNames(root: Json | undefined): { params: Set<string>; resources: Set<string> } {
+  const keys = (v: Json | undefined): string[] => (isObj(v) ? Object.keys(v) : []);
+  const top = isObj(root) ? root : {};
+  return { params: new Set(keys(top.Parameters)), resources: new Set(keys(top.Resources)) };
+}
+
+const SUB_VARIABLE = /\$\{([A-Za-z0-9_:.]+)\}/g;
+
 /**
- * cfn-lint E1029: every string of the parsed template that contains `${` must be the template
- * string of an `Fn::Sub` (the string form, or the first element of the list form). Returns the
- * JSON-path style locations of the strings that embed `${` outside of one.
+ * cfn-lint E1029, mirrored from the real rule (SubNeeded): a `${name}` outside an `Fn::Sub` is
+ * flagged when `name` is something CloudFormation would substitute — a template parameter, a
+ * resource logical id, a `Resource.Attribute` or an `AWS::` pseudo parameter. Literals
+ * (`${!...}`) and IAM policy variables (e.g. `${aws:username}`,
+ * `${token.actions.githubusercontent.com:repository_id}`) are not CloudFormation variables and are
+ * passed through to IAM verbatim, so they are not flagged. Returns JSON-path style locations.
  */
-export function embeddedVarsOutsideSub(node: Json | undefined, where = ""): string[] {
-  if (typeof node === "string") return node.includes("${") ? [where] : [];
-  if (Array.isArray(node)) return node.flatMap((child, i) => embeddedVarsOutsideSub(child, `${where}[${i}]`));
+export function embeddedVarsOutsideSub(node: Json | undefined, where = "", names = resolvableNames(node)): string[] {
+  if (typeof node === "string") {
+    const flagged = [...node.matchAll(SUB_VARIABLE)].some(([, name]) => {
+      const n = name!;
+      if (n.startsWith("AWS::")) return true;
+      if (names.params.has(n) || names.resources.has(n)) return true;
+      const dot = n.indexOf(".");
+      return dot > 0 && names.resources.has(n.slice(0, dot));
+    });
+    return flagged ? [where] : [];
+  }
+  if (Array.isArray(node)) return node.flatMap((child, i) => embeddedVarsOutsideSub(child, `${where}[${i}]`, names));
   if (!isObj(node)) return [];
   return Object.entries(node).flatMap(([k, v]) => {
     if (k === "Fn::Sub") {
       if (typeof v === "string") return [];
       if (Array.isArray(v)) {
         // First element is the template string; the rest (variable map) is checked normally.
-        return v.flatMap((child, i) => (i === 0 && typeof child === "string" ? [] : embeddedVarsOutsideSub(child, `${where}/${k}[${i}]`)));
+        return v.flatMap((child, i) => (i === 0 && typeof child === "string" ? [] : embeddedVarsOutsideSub(child, `${where}/${k}[${i}]`, names)));
       }
     }
-    return embeddedVarsOutsideSub(v, `${where}/${k}`);
+    return embeddedVarsOutsideSub(v, `${where}/${k}`, names);
   });
 }
 

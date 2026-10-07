@@ -19,6 +19,8 @@ export class ConfigError extends Error {
 
 export interface ExecutorConfig {
   readonly tableName: string;
+  /** Target Registry table (AC-02 V1, design §5.3); read with GetItem only. */
+  readonly registryTableName: string;
   readonly queueUrl: string;
   readonly region: string;
   /** Non-AWS endpoint override (DynamoDB Local / emulators); absent in AWS. */
@@ -56,6 +58,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ExecutorConfig {
   };
 
   const tableName = value("CICD_TABLE_NAME");
+  const registryTableName = value("CICD_REGISTRY_TABLE_NAME");
   const queueUrl = value("CICD_QUEUE_URL");
   const region = value("AWS_REGION");
   const principalRefs: PlatformPrincipalRefs = {
@@ -87,6 +90,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ExecutorConfig {
   const definitionsRoot = env["CICD_DEFINITIONS_ROOT"]?.trim();
   return {
     tableName,
+    registryTableName,
     queueUrl,
     region,
     ...(dynamoEndpoint ? { dynamoEndpoint } : {}),

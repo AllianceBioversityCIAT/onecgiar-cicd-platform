@@ -49,7 +49,7 @@ aws cloudformation delete-stack --stack-name cicd-poc-dev
 aws cloudformation wait stack-delete-complete --stack-name cicd-poc-dev
 ```
 
-Expected: the stack disappears. The queues, DLQ, table (`DeletionPolicy: Delete`), log group, alarms, schedule, roles and the optional probe repository (emptied on delete) are removed. The OIDC provider is **not** removed when this stack created it (`DeletionPolicy: Retain`); see section 9.
+Expected: the stack disappears. The queues, DLQ, state table `cicd-executions-<stage>` (`DeletionPolicy: Delete`), log group, alarms, schedule, roles and the optional probe repository (emptied on delete) are removed. The OIDC provider is **not** removed when this stack created it (`DeletionPolicy: Retain`); see section 9. The Target Registry table `cicd-registry-<stage>` (AC-02, task R-2) is also **retained** (`DeletionPolicy: Retain`): it holds configuration, and deleting it is a separate, deliberate owner action after confirming nothing needs its records. Before re-creating the stack with the same `Stage`, either delete the retained table or import it into the new stack (CloudFormation resource import); otherwise the create fails because `cicd-registry-<stage>` already exists.
 
 **Stop if** the stack ends in `DELETE_FAILED`. List the cause:
 

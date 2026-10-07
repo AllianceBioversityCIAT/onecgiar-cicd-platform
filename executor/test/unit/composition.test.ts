@@ -54,6 +54,12 @@ describe("configuration (design §3.3, DD-16, DD-23)", () => {
     }
   });
 
+  it("requires CICD_REGISTRY_TABLE_NAME and exposes it as registryTableName (AC-02, R-2)", () => {
+    expect(loadConfig(validEnv()).registryTableName).toBe("cicd-registry-test");
+    expect(() => loadConfig(validEnv({ CICD_REGISTRY_TABLE_NAME: undefined }))).toThrowError(/CICD_REGISTRY_TABLE_NAME is required/);
+    expect(() => loadConfig(validEnv({ CICD_REGISTRY_TABLE_NAME: " " }))).toThrowError(/CICD_REGISTRY_TABLE_NAME is required/);
+  });
+
   it("defaults the secret id prefix to empty, accepts a valid one and rejects an invalid one", () => {
     expect(loadConfig(validEnv()).secretIdPrefix).toBe("");
     expect(loadConfig(validEnv({ CICD_SECRET_ID_PREFIX: "cicd-poc/dev/" })).secretIdPrefix).toBe("cicd-poc/dev/");

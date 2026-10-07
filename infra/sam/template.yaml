@@ -1,4 +1,4 @@
-# @akili-spec changes/cicd-executor-poc design DD-17, DD-23, DD-24, DD-25, DD-14, §5.1, §11, §12; gate-b-plan §5, §11, §12; infra/RESOURCES.md
+# @akili-spec changes/cicd-executor-poc design DD-17, DD-23, DD-24, DD-25, DD-14, §5.1, §5.3, §11, §12; gate-b-plan §5, §11, §12; infra/RESOURCES.md; tasks R-2 (AC-02 V1)
 #
 # Gate B / B0 foundation for the DEV stack (OD-Q7 resolved by the owner: SAM / CloudFormation).
 #
@@ -16,7 +16,7 @@
 # logs (to be documented in the runbook).
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: CI/CD Executor PoC - Gate B DEV foundation (queue, state table, OIDC trust, roles, schedule, alarms).
+Description: CI/CD Executor PoC - Gate B DEV foundation (queue, state table, target registry, OIDC trust, roles, schedule, alarms).
 
 Parameters:
   Stage:
@@ -218,6 +218,34 @@ Resources:
         - Key: Project
           Value: ONECGIAR-CICD-Platform
 
+  # ---------------------------------------------------------------- Target Registry (AC-02 V1, design §5.3)
+  # Runtime configuration, not runtime state: one item per target (TARGET#{targetId} / META).
+  # Retained on delete and replace (stack teardown never removes it), PITR always on, no TTL.
+  # The Executor reads it with GetItem only; writes come from the owner's administrative
+  # onboarding principal, never from a role of this stack.
+  RegistryTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub cicd-registry-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+
   # ---------------------------------------------------------------- OIDC provider (DD-24)
   # An account has one provider per URL. When an existing provider is supplied it is only
   # referenced, never managed. Retained on delete/replace because other stacks may rely on it.
@@ -258,6 +286,11 @@ Resources:
                 token.actions.githubusercontent.com:job_workflow_ref: !Sub "${PlatformWorkflowRepository}/.github/workflows/deploy-request.reusable.yml@${PinnedWorkflowSha}"
                 token.actions.githubusercontent.com:sub: !Ref GitHubOidcSub
                 token.actions.githubusercontent.com:ref: !Ref GitHubBoundRef
+                # AC-02 V1-R1 option A (DD-24): the role session name must equal the token's
+                # repository_id, so the SQS SenderId carries the source repository. A literal IAM
+                # policy variable, not a CloudFormation one (no Fn::Sub). Premises P-R1 and P-R2
+                # are UNVERIFIED until the real B2 positive and negative tests; both fail closed.
+                sts:RoleSessionName: "${token.actions.githubusercontent.com:repository_id}"
       Policies:
         - PolicyName: ci-push-and-request
           PolicyDocument:
@@ -329,6 +362,11 @@ Resources:
                 Effect: Allow
                 Action: dynamodb:Query
                 Resource: !Sub "${ExecutionsTable.Arn}/index/GSI2"
+              # AC-02 V1 (R-2): the Target Registry is read with GetItem only; no write, Query or Scan.
+              - Sid: TargetRegistryRead
+                Effect: Allow
+                Action: dynamodb:GetItem
+                Resource: !GetAtt RegistryTable.Arn
               # Only the Executor's own operational secrets live under the prefix (SSH credential,
               # Slack token, identifier references). Application secrets must never be stored
               # under it (NFR-01, DD-23).
@@ -577,6 +615,9 @@ Outputs:
   ExecutionsTableName:
     Description: State table name (Executor configuration step).
     Value: !Ref ExecutionsTable
+  RegistryTableName:
+    Description: Target Registry table name (Executor configuration CICD_REGISTRY_TABLE_NAME; onboarding tool target, AC-02).
+    Value: !Ref RegistryTable
   CiRoleArn:
     Description: CI role ARN (GitHub Environment variable CICD_ROLE_ARN, plan §12; not a secret, G-10).
     Value: !GetAtt CiRole.Arn

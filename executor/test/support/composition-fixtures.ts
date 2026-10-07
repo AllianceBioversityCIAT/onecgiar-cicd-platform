@@ -49,6 +49,7 @@ export function fakeSecrets(): FakeSecretProvider {
 export function validEnv(over: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
   return {
     CICD_TABLE_NAME: "cicd-executor-test",
+    CICD_REGISTRY_TABLE_NAME: "cicd-registry-test",
     CICD_QUEUE_URL: "https://queue.example.invalid/<AWS_ACCOUNT_ID>/events",
     AWS_REGION: "us-east-1",
     CICD_EXECUTOR_PRINCIPAL_REF: "<EXECUTOR_PRINCIPAL_REF>",
