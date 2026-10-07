@@ -119,6 +119,41 @@ function emptinessOfCondition(template: CfnTemplate, cond: Json | undefined, par
   return undefined;
 }
 
+/** cfn-lint W1020: an `Fn::Sub` template string must contain at least one `${...}`. */
+export function subWithoutVariable(node: Json | undefined, where = ""): string[] {
+  if (Array.isArray(node)) return node.flatMap((child, i) => subWithoutVariable(child, `${where}[${i}]`));
+  if (!isObj(node)) return [];
+  return Object.entries(node).flatMap(([k, v]) => {
+    if (k === "Fn::Sub") {
+      const tpl = Array.isArray(v) ? v[0] : v;
+      const here = typeof tpl === "string" && !tpl.includes("${") ? [`${where}/${k}`] : [];
+      return [...here, ...(Array.isArray(v) ? v.slice(1) : []).flatMap((c, i) => subWithoutVariable(c, `${where}/${k}[${i + 1}]`))];
+    }
+    return subWithoutVariable(v, `${where}/${k}`);
+  });
+}
+
+/**
+ * cfn-lint E1029: every string of the parsed template that contains `${` must be the template
+ * string of an `Fn::Sub` (the string form, or the first element of the list form). Returns the
+ * JSON-path style locations of the strings that embed `${` outside of one.
+ */
+export function embeddedVarsOutsideSub(node: Json | undefined, where = ""): string[] {
+  if (typeof node === "string") return node.includes("${") ? [where] : [];
+  if (Array.isArray(node)) return node.flatMap((child, i) => embeddedVarsOutsideSub(child, `${where}[${i}]`));
+  if (!isObj(node)) return [];
+  return Object.entries(node).flatMap(([k, v]) => {
+    if (k === "Fn::Sub") {
+      if (typeof v === "string") return [];
+      if (Array.isArray(v)) {
+        // First element is the template string; the rest (variable map) is checked normally.
+        return v.flatMap((child, i) => (i === 0 && typeof child === "string" ? [] : embeddedVarsOutsideSub(child, `${where}/${k}[${i}]`)));
+      }
+    }
+    return embeddedVarsOutsideSub(v, `${where}/${k}`);
+  });
+}
+
 /**
  * Finds every `{ Ref: <param> }` of a parameter whose Default is "" that is NOT guarded: a
  * guarded Ref sits in the branch of an `Fn::If` whose condition tests that same parameter for

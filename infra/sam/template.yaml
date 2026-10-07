@@ -60,7 +60,7 @@ Parameters:
     Type: String
     Default: ""
     AllowedPattern: "^$|^arn:aws[a-z-]*:ecr:[a-z0-9-]+:[0-9]{12}:repository/[a-z0-9._/-]+$"
-    Description: ARN of an existing ECR repository the CI role may push to. Empty creates the probe repository cicd-poc-${Stage}-probe and uses it.
+    Description: ARN of an existing ECR repository the CI role may push to. Empty creates the probe repository cicd-poc-<Stage>-probe and uses it.
   # Both trusted principals must belong to this stack's own account (documented, not enforced).
   ExecutorTrustedPrincipalArn:
     Type: String

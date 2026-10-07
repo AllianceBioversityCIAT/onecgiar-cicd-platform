@@ -12,6 +12,7 @@ import { buildCreateTableInput, GSI2_NAME, TTL_ATTR } from "../../src/adapters/d
 import { createAjv, readJsonSchema } from "./support/ajv-factory.js";
 import {
   asArray,
+  embeddedVarsOutsideSub,
   loadSamTemplate,
   parseCfnYaml,
   resourcesOfType,
@@ -21,6 +22,7 @@ import {
   samConfigExamplePath,
   samParametersExamplePath,
   samTemplatePath,
+  subWithoutVariable,
   type CfnResource,
   type CfnTemplate,
   type Json,
@@ -63,6 +65,32 @@ describe("template parsing", () => {
 
   it("declares the SAM transform", () => {
     expect(template.Transform).toBe("AWS::Serverless-2016-10-31");
+  });
+
+  it("embeds ${...} only inside Fn::Sub (cfn-lint E1029)", () => {
+    expect(embeddedVarsOutsideSub(template as unknown as Json)).toEqual([]);
+  });
+
+  it("has no Fn::Sub without a variable (cfn-lint W1020)", () => {
+    expect(subWithoutVariable(template as unknown as Json)).toEqual([]);
+  });
+
+  it("flags a variable-less Fn::Sub and accepts one with a variable (self-test)", () => {
+    expect(subWithoutVariable(parseCfnYaml('A: !Sub "plain"') as unknown as Json)).toEqual(["/A/Fn::Sub"]);
+    expect(subWithoutVariable(parseCfnYaml('A: !Sub "x-${Stage}"') as unknown as Json)).toEqual([]);
+  });
+
+  it("names the probe ECR repository through Fn::Sub on Stage", () => {
+    expect(template.Resources.ProbeEcrRepository!.Properties.RepositoryName).toEqual({ "Fn::Sub": "cicd-poc-${Stage}-probe" });
+  });
+
+  it("flags ${...} outside Fn::Sub and accepts it inside (self-test)", () => {
+    const bad = parseCfnYaml("Parameters:\n  P:\n    Description: cicd-${Stage}-x\n") as unknown as Json;
+    expect(embeddedVarsOutsideSub(bad)).toEqual(["/Parameters/P/Description"]);
+    const good = parseCfnYaml(
+      ["A: !Sub 'x-${Stage}'", "B: !Sub ['x-${Stage}', { Stage: y }]"].join("\n"),
+    ) as unknown as Json;
+    expect(embeddedVarsOutsideSub(good)).toEqual([]);
   });
 });
 
