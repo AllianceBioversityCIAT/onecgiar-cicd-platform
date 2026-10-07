@@ -10,7 +10,7 @@
 |---|---|
 | Spec Path | `changes/cicd-executor-poc` |
 | Phase | Phase 1: Requirements |
-| Version | **v4.0** (owner decisions 2026-10-07, AC-02 V1, `architecture-change-02.md`; supersedes the v3.8 draft of the same day): FR-01 deferred (no Deployment Definitions in V1); FR-02 runtime Target Registry with the minimal record; FR-03 request carries `targetId`, no `deploymentId`; FR-12/FR-13 the script lives on the target and the Executor runs it by path; FR-21 one shared CI role, no per-target sender authorization (accepted residual risk); FR-23/FR-24/FR-25 adjusted. §1.3 is normative). v3.7 (owner direction, B0 acceptance 2026-10-06: FR-22 "public-safe logs" and NFR-02 — no GitHub secret, role ARN and account ID owner-accepted in CI logs (G-10); RECONCILE_TICK minimal internal contract (G-8); fail-fast definition loading at startup (G-9)). v3.6 (owner direction, Gate B approval 2026-10-06: FR-22 "public-safe logs" follows the DD-24 v4.6 GitHub value classification). v3.5 (Gate A closure editorial sync, no new decision). v3.4 (owner approval 2026-10-06; aligned with `proposal.md` v3.4) |
+| Version | **v4.0** (owner decisions 2026-10-07, AC-02 V1, `architecture-change-02.md`; supersedes the v3.8 draft of the same day; V1-R1 option A added the same day — FR-02 `sourceRepositoryId`, FR-21 source authorization, FR-25 session-name condition, premises P-R1/P-R2 pending B2): FR-01 deferred (no Deployment Definitions in V1); FR-02 runtime Target Registry with the minimal record; FR-03 request carries `targetId`, no `deploymentId`; FR-12/FR-13 the script lives on the target and the Executor runs it by path; FR-21 one shared CI role, source repository bound per target (option A, conditional on B2); FR-23/FR-24/FR-25 adjusted. §1.3 is normative). v3.7 (owner direction, B0 acceptance 2026-10-06: FR-22 "public-safe logs" and NFR-02 — no GitHub secret, role ARN and account ID owner-accepted in CI logs (G-10); RECONCILE_TICK minimal internal contract (G-8); fail-fast definition loading at startup (G-9)). v3.6 (owner direction, Gate B approval 2026-10-06: FR-22 "public-safe logs" follows the DD-24 v4.6 GitHub value classification). v3.5 (Gate A closure editorial sync, no new decision). v3.4 (owner approval 2026-10-06; aligned with `proposal.md` v3.4) |
 | Depth | **Full** (new infrastructure, trust boundary, concurrency, deployment and migrations) |
 | Type | Change |
 | Approval Mode | `gated` (inherited from the proposal) |
@@ -174,7 +174,7 @@ In V1 there are **no Deployment Definitions**. The request's `targetId` is the d
 
 ### FR-02 — Target Registry
 
-The system SHALL resolve every deploy destination at request time from a runtime Target Registry (one record per `targetId`, AC-02) that declares inline only what is needed to locate the server, connect securely and run the authorized script: the target id, project and environment, SSH host, port and user, the pinned host key, the absolute path of the deploy script on the target (`deployScript`) and the deploy-window policy (FR-24), and that references the SSH credential (`credentialRef`) held in Secrets Manager. Adding or changing a target SHALL NOT require changing, rebuilding or redeploying the Executor.
+The system SHALL resolve every deploy destination at request time from a runtime Target Registry (one record per `targetId`, AC-02) that declares inline only what is needed to locate the server, connect securely and run the authorized script: the target id, project and environment, SSH host, port and user, the pinned host key, the absolute path of the deploy script on the target (`deployScript`), the deploy-window policy (FR-24) and the GitHub `repository_id` of the single repository allowed to deploy it (`sourceRepositoryId`, FR-21), and that references the SSH credential (`credentialRef`) held in Secrets Manager. Adding or changing a target SHALL NOT require changing, rebuilding or redeploying the Executor.
 
 #### Scenario: new target without redeploy
 - GIVEN an administrator registers a valid target record and its credential secret
@@ -184,7 +184,7 @@ The system SHALL resolve every deploy destination at request time from a runtime
 #### Scenario: unknown or invalid target
 - GIVEN a request whose `targetId` does not exist, or whose record is invalid
 - WHEN it is received
-- THEN it is `REJECTED` with the matching reason (`TARGET_UNKNOWN`, `TARGET_INVALID`)
+- THEN it is `REJECTED` with the matching reason (`TARGET_UNKNOWN`, `TARGET_INVALID`), unless the same request is already accepted (dedupe item `BOUND`: no-op)
 - BUT it must NOT consume a sequence, open SSH, take a lock, read the target's credential or affect any other execution
 
 #### Scenario: record changed or deleted during an execution
@@ -556,13 +556,13 @@ The system SHALL operate the PoC's real deploys only within test windows in whic
 
 ### FR-21 — Request authentication and deployment authorization (NEW)
 
-The system SHALL accept each message only from a sender identity authorized for that message type; for `DEPLOY_REQUESTED` that identity is **the CI role shared by the authorized repositories** (V1, owner decision 2026-10-07). The sender identity SHALL come from a source the sender cannot forge. The mechanism is SQS `SenderId` role binding (**OD-A2 resolved by the owner, 2026-10-06**; P-A4).
+The system SHALL accept each message only from a sender identity authorized for that message type; for `DEPLOY_REQUESTED` that identity is **the CI role shared by the authorized repositories** (V1, owner decision 2026-10-07), and the request SHALL come from the repository bound to the named target (`sourceRepositoryId`), identified by a role session name that IAM forces to equal the GitHub `repository_id` (option A, owner decision 2026-10-07, conditional on the B2 validation of premises P-R1 and P-R2; design DD-24, DD-25). The sender identity SHALL come from a source the sender cannot forge. The mechanism is SQS `SenderId` role binding (**OD-A2 resolved by the owner, 2026-10-06**; P-A4).
 
-**Owner statements (2026-10-06; the third amended for V1 on 2026-10-07):** authorization uses the AWS-provided sender identity (role ID) and the trusted sender binding; caller-controlled session names are never an authorization input; a CI sender is authorized only for the event types explicitly assigned to it. *V1: with one shared CI role there is no per-`deploymentId` or per-target sender assignment.*
+**Owner statements (2026-10-06; the second and third amended for V1 on 2026-10-07):** authorization uses the AWS-provided sender identity (role ID) and the trusted sender binding; caller-controlled session names are never an authorization input (*V1: a session name enforced by the trust policy to equal the `repository_id` is not caller-controlled and is an authorization input*); a CI sender is authorized only for the event types explicitly assigned to it and, in V1, only for the targets whose `sourceRepositoryId` is its repository.
 
 #### Scenario: authorized sender
 - GIVEN a request whose sender is the configured CI role
-- THEN it proceeds to target resolution, validation and dedupe
+- THEN it proceeds to target resolution, validation, source authorization (option A) and only then dedupe
 
 #### Scenario: unauthorized sender
 - GIVEN a `DEPLOY_REQUESTED` sent by any role other than the configured CI role
@@ -570,11 +570,17 @@ The system SHALL accept each message only from a sender identity authorized for 
 - THEN it is `REJECTED`, audited with the sender reference and reason, and an alarm fires
 - BUT it must NOT open SSH, take a lock or affect any other execution
 
-#### Scenario: CI selects another project's target (OPEN, escalated to the owner)
-- GIVEN an authorized repository's run that names another project's `targetId`
-- THEN the Executor cannot distinguish it from a legitimate request (same role ID; `ci.*` is body-asserted) and processes it
-- AND because the shared role can push to every application repository, this allows an arbitrary image to be deployed on any target, and a higher `runNumber` blocks that target's legitimate source with no reset in the PoC (`architecture-change-02.md` V1-R1)
-- BUT this is **not** accepted by assumption: it is an open point for the owner; while the CI role trusts a single repository (the PoC) there is no exposure, and a second repository is not onboarded before the owner decides
+#### Scenario: CI selects another project's target (option A)
+- GIVEN an authorized repository's run whose IAM-enforced session name (its `repository_id`) differs from the named target's `sourceRepositoryId`
+- WHEN it is received
+- THEN it is `REJECTED (TARGET_NOT_AUTHORIZED)`, audited under the message identity and counted
+- BUT it must NOT create or read a dedupe claim, consume a sequence, update `highestAccepted` or `highestDispatched`, take a lock, touch a window, open SSH or read the target's credential, so the target's operational state is unchanged (a higher `runNumber` or a colliding `requestId` cannot block the legitimate source)
+
+#### Scenario: session name not enforced (premises P-R1, P-R2; validated in B2)
+- GIVEN the CI role trust policy with the session-name condition
+- WHEN the real reusable workflow assumes the role with the session name equal to its `repository_id`, and again with any other session name
+- THEN the first assumption succeeds, and the real SQS `SenderId` of the request it sends carries the `repository_id` as session suffix, while the second is denied by STS
+- AND no second repository is added to the trust policy before both results are observed; if either fails, option A is discarded and option B (SR-2) is evaluated
 
 #### Scenario: identity claims in the body
 - GIVEN a request whose `ci.repository` claims to be the bound repository
@@ -584,7 +590,7 @@ The system SHALL accept each message only from a sender identity authorized for 
 #### Scenario: colliding requestId from another source (JD round 1, CC-2)
 - GIVEN a request whose `requestId` is not `<ci.runId>-<ci.runAttempt>`
 - THEN it is `REJECTED`
-- AND deduplication is scoped to `targetId` + `requestId`; a pre-claim of another target's `requestId` by an authorized repository is part of the open point V1-R1
+- AND deduplication is scoped to `targetId` + `requestId`; a repository not bound to the target is rejected before any dedupe claim (option A), so it cannot pre-claim that target's `requestId`
 
 #### Scenario: other message types
 - GIVEN an operator window event, an internal event or a reconciliation tick
@@ -638,7 +644,7 @@ The reusable workflow SHALL be the only producer of deploy requests in the norma
 
 ### FR-23 — Supersede ordering (NEW; split from FR-11)
 
-The system SHALL guarantee that **an older build that finishes or is re-run later never replaces a newer deployment of the same `lockKey`** (V1: the same `targetId`). "Older" and "newer" are defined by `ci.runNumber` **inside the single trusted source** of the target (**OD-A1 resolved for the PoC by the owner, 2026-10-06**; V1: exactly one trusted GitHub source — repository + workflow + environment — per `targetId`, a configuration rule that the Executor cannot verify with the shared CI role, V1-R2); an equal `runNumber` is the same logical run or a re-run, not older. Multi-source ordering is **out of the PoC**; `runNumber` values are never compared across sources. A renamed or reset workflow makes deploys stop (accepted fail-safe limitation); rebinding requires the future audited OD-A8 procedure.
+The system SHALL guarantee that **an older build that finishes or is re-run later never replaces a newer deployment of the same `lockKey`** (V1: the same `targetId`). "Older" and "newer" are defined by `ci.runNumber` **inside the single trusted source** of the target (**OD-A1 resolved for the PoC by the owner, 2026-10-06**; V1: exactly one trusted GitHub source — repository + workflow + environment — per `targetId`; the repository is enforced through `sourceRepositoryId` (option A, FR-21) and a single caller workflow within it is a configuration rule, V1-R2); an equal `runNumber` is the same logical run or a re-run, not older. Multi-source ordering is **out of the PoC**; `runNumber` values are never compared across sources. A renamed or reset workflow makes deploys stop (accepted fail-safe limitation); rebinding requires the future audited OD-A8 procedure.
 
 #### Scenario: late older build
 - GIVEN build B2 (newer) already deployed on the `lockKey`
@@ -656,8 +662,9 @@ The system SHALL guarantee that **an older build that finishes or is re-run late
 - THEN the older one MUST NOT deploy after the newer one
 
 #### Scenario: two sources on one target (V1)
-- GIVEN two different sources (repositories or workflows) configured to deploy the same `targetId`
-- THEN the configuration violates the single-source rule; onboarding and the caller configuration must prevent it, because the Executor cannot detect it in V1 (V1-R2); no ordering across sources is attempted
+- GIVEN two different sources configured to deploy the same `targetId`
+- THEN a request from a repository other than `sourceRepositoryId` is `REJECTED (TARGET_NOT_AUTHORIZED)` before any ordering state is written (option A, FR-21)
+- AND two caller workflows in the same repository violate the single-source rule, which onboarding and the caller configuration must prevent because the Executor cannot detect it (V1-R2); no ordering across sources is attempted
 - BUT the system must NOT fall back to an undocumented rule; where order cannot be established, the documented rule applies and the outcome is audited
 
 #### Scenario: check under the lock
@@ -721,7 +728,7 @@ The infrastructure SHALL restrict who can obtain AWS credentials from GitHub and
 
 #### Scenario: trust bound to the pinned reusable workflow and immutable IDs (JD round 2, R2-A1, R2-4)
 - GIVEN the CI role's trust policy
-- THEN it requires, by exact equality, the AWS STS audience, a repository ID from the authorized list (V1: one role shared by the authorized repositories), the repository owner ID, the Environment, and the `job_workflow_ref` of the platform reusable workflow pinned at an immutable commit SHA, plus the default environment-form `sub` as a redundant check (all direct IAM condition keys, P-G6)
+- THEN it requires, by exact equality, the AWS STS audience, a repository ID from the authorized list (V1: one role shared by the authorized repositories), a role session name equal to the token's `repository_id` (V1 option A, P-R1/P-R2 pending B2), the repository owner ID, the Environment, and the `job_workflow_ref` of the platform reusable workflow pinned at an immutable commit SHA, plus the default environment-form `sub` as a redundant check (all direct IAM condition keys, P-G6)
 - BUT it must NOT rely on an environment-only subject, on branch-only subjects, on wildcards, or on the mutable `sub` string format alone (P-A2, P-G2, P-G10)
 - AND IT MUST NOT depend on P-A3 for fork safety
 
