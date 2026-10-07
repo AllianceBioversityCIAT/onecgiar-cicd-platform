@@ -8,7 +8,6 @@
   { "ParameterKey": "GitHubOidcSub", "ParameterValue": "<ENVIRONMENT_FORM_SUB>" },
   { "ParameterKey": "ExistingGitHubOidcProviderArn", "ParameterValue": "" },
   { "ParameterKey": "CiEcrRepositoryArn", "ParameterValue": "" },
-  { "ParameterKey": "CreateProbeEcrRepository", "ParameterValue": "true" },
   { "ParameterKey": "ExecutorTrustedPrincipalArn", "ParameterValue": "<OWNER_IAM_PRINCIPAL_ARN>" },
   { "ParameterKey": "OperatorTrustedPrincipalArn", "ParameterValue": "<OPERATOR_IAM_PRINCIPAL_ARN>" },
   { "ParameterKey": "SecretIdPrefix", "ParameterValue": "<SECRET_ID_PREFIX_ENDING_WITH_SLASH>" },

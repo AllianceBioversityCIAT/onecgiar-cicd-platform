@@ -113,7 +113,7 @@ All tagged `Project=cicd-poc`; names derived from a `Stage` parameter (default `
 | `SchedulerRole` + `ReconcileSchedule` | `AWS::IAM::Role` + `AWS::Scheduler::Schedule` | `RECONCILE_TICK` every 5 min to `DeployQueue`; created **disabled** by default (parameter) so the owner enables it deliberately |
 | `ExecutorLogGroup` | `AWS::Logs::LogGroup` | 30-day retention |
 | Alarms | `AWS::CloudWatch::Alarm` ×5 | DLQ > 0; oldest message > 10 min; heartbeat missing; `RejectedRequests{reason=UNAUTHORIZED_SENDER}` > 0; `ExecutionsPastDeadline` > 0. Optional SNS topic ARN parameter for notifications |
-| ECR | **Not created by default**; parameter `CiEcrRepositoryArn` points at an owner-chosen repository; optional `CreateProbeEcrRepository` condition creates an immutable-tag repository |
+| ECR | Parameter `CiEcrRepositoryArn` points at an existing owner-chosen repository; when it is left empty the stack creates the immutable-tag probe repository `cicd-poc-<Stage>-probe` and uses it. One parameter decides (B1 lint fix, 2026-10-07: the former `CreateProbeEcrRepository` flag let an empty ARN reach an ARN-typed policy resource, cfn-lint W1030) |
 | Outputs | — | Queue URL, DLQ URL, table name, role ARNs, OIDC provider ARN — consumed by the documentation's configuration steps |
 
 **Not in the template:** Secrets Manager secret values. The owner creates them with documented commands, so values never pass through CloudFormation.

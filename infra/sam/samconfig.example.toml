@@ -15,7 +15,7 @@ confirm_changeset = true
 resolve_s3 = true
 # Empty-valued parameters are omitted because their defaults are already empty. Add
 #   "ExistingGitHubOidcProviderArn=<EXISTING_OIDC_PROVIDER_ARN>"  (if the account already has the GitHub OIDC provider)
-#   "CiEcrRepositoryArn=<ECR_REPOSITORY_ARN>"  (instead of CreateProbeEcrRepository=true)
+#   "CiEcrRepositoryArn=<ECR_REPOSITORY_ARN>"  (omit it to create and use the probe repository cicd-poc-${Stage}-probe)
 #   "AlarmTopicArn=<SNS_TOPIC_ARN>"  (optional)
 # when you need them.
 parameter_overrides = [
@@ -26,7 +26,6 @@ parameter_overrides = [
   "PlatformWorkflowRepository=<GITHUB_ORG>/<PLATFORM_REPO>",
   "PinnedWorkflowSha=<PINNED_COMMIT_SHA_40_HEX>",
   "GitHubOidcSub=<ENVIRONMENT_FORM_SUB>",
-  "CreateProbeEcrRepository=true",
   "ExecutorTrustedPrincipalArn=<OWNER_IAM_PRINCIPAL_ARN>",
   "OperatorTrustedPrincipalArn=<OPERATOR_IAM_PRINCIPAL_ARN>",
   "SecretIdPrefix=<SECRET_ID_PREFIX_ENDING_WITH_SLASH>",

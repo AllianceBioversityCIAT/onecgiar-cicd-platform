@@ -92,3 +92,68 @@ export function rolePolicyStatements(role: CfnResource): PolicyStatement[] {
 export function roleTrustStatements(role: CfnResource): PolicyStatement[] {
   return (role.Properties.AssumeRolePolicyDocument as unknown as { Statement: PolicyStatement[] }).Statement;
 }
+
+const isObj = (v: Json | undefined): v is { [key: string]: Json } => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/**
+ * Which side of `Equals [Ref param, ""]` a condition puts the parameter on: "empty" when the
+ * condition is true for an empty value, "non-empty" when it is true for a non-empty one, or
+ * undefined when the condition (resolved through the Conditions section) does not test that
+ * parameter against "" directly.
+ */
+function emptinessOfCondition(template: CfnTemplate, cond: Json | undefined, param: string): "empty" | "non-empty" | undefined {
+  if (typeof cond === "string") return emptinessOfCondition(template, template.Conditions[cond], param);
+  if (isObj(cond) && typeof cond.Condition === "string") return emptinessOfCondition(template, template.Conditions[cond.Condition], param);
+  if (!isObj(cond)) return undefined;
+  const eq = cond["Fn::Equals"];
+  if (Array.isArray(eq) && eq.length === 2) {
+    const [a, b] = eq;
+    const isParam = isObj(a) && a.Ref === param;
+    if (isParam && b === "") return "empty";
+  }
+  const not = cond["Fn::Not"];
+  if (Array.isArray(not) && not.length === 1) {
+    const inner = emptinessOfCondition(template, not[0], param);
+    if (inner) return inner === "empty" ? "non-empty" : "empty";
+  }
+  return undefined;
+}
+
+/**
+ * Finds every `{ Ref: <param> }` of a parameter whose Default is "" that is NOT guarded: a
+ * guarded Ref sits in the branch of an `Fn::If` whose condition tests that same parameter for
+ * "" and where the parameter is non-empty. cfn-lint (W1030) otherwise resolves the Ref to the
+ * empty default and validates it against the property's format. Returns JSON-path style
+ * locations of the unguarded occurrences.
+ */
+export function unguardedEmptyDefaultRefs(template: CfnTemplate): string[] {
+  const sentinels = Object.entries(template.Parameters).filter(([, p]) => p.Default === "").map(([n]) => n);
+  const offenders: string[] = [];
+  const walk = (node: Json | undefined, where: string, safe: ReadonlySet<string>): void => {
+    if (Array.isArray(node)) {
+      node.forEach((child, i) => walk(child, `${where}[${i}]`, safe));
+      return;
+    }
+    if (!isObj(node)) return;
+    if (typeof node.Ref === "string" && sentinels.includes(node.Ref) && !safe.has(node.Ref)) {
+      offenders.push(`${where}: Ref ${node.Ref}`);
+    }
+    const branches = node["Fn::If"];
+    if (Array.isArray(branches) && branches.length === 3) {
+      walk(branches[0], `${where}/Fn::If[0]`, safe);
+      [1, 2].forEach((idx) => {
+        const extra = new Set(safe);
+        for (const param of sentinels) {
+          const side = emptinessOfCondition(template, branches[0], param);
+          if ((side === "non-empty" && idx === 1) || (side === "empty" && idx === 2)) extra.add(param);
+        }
+        walk(branches[idx], `${where}/Fn::If[${idx}]`, extra);
+      });
+      return;
+    }
+    for (const [k, v] of Object.entries(node)) walk(v, `${where}/${k}`, safe);
+  };
+  for (const [id, r] of Object.entries(template.Resources)) walk(r as unknown as Json, `Resources/${id}`, new Set());
+  for (const [id, o] of Object.entries(template.Outputs ?? {})) walk(o as unknown as Json, `Outputs/${id}`, new Set());
+  return offenders;
+}

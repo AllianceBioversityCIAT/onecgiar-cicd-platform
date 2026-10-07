@@ -16,6 +16,7 @@ import {
   parseCfnYaml,
   resourcesOfType,
   rolePolicyStatements,
+  unguardedEmptyDefaultRefs,
   roleTrustStatements,
   samConfigExamplePath,
   samParametersExamplePath,
@@ -107,16 +108,39 @@ describe("parameters", () => {
     expect(pattern.test("cicd-poc/dev")).toBe(false);
   });
 
-  it("a rule fails the stack when no ECR repository is selected", () => {
-    const rule = template.Rules?.EcrRepositorySelected as unknown as { Assertions: { Assert: Json }[] };
-    expect(key(rule.Assertions[0]!.Assert)).toBe(
-      key({
-        "Fn::Or": [
-          { "Fn::Not": [{ "Fn::Equals": [{ Ref: "CiEcrRepositoryArn" }, ""] }] },
-          { "Fn::Equals": [{ Ref: "CreateProbeEcrRepository" }, "true"] },
-        ],
-      }),
+  it("the ECR selection is driven by CiEcrRepositoryArn itself: no switch parameter and no Rules", () => {
+    expect(template.Parameters.CreateProbeEcrRepository).toBeUndefined();
+    expect(template.Rules).toBeUndefined();
+    expect(template.Parameters.CiEcrRepositoryArn!.Default).toBe("");
+    expect(key(template.Conditions.CreateProbeRepository!)).toBe(key({ "Fn::Equals": [{ Ref: "CiEcrRepositoryArn" }, ""] }));
+    expect(key(template.Conditions.UseExistingEcrRepository!)).toBe(
+      key({ "Fn::Not": [{ "Fn::Equals": [{ Ref: "CiEcrRepositoryArn" }, ""] }] }),
     );
+  });
+
+  it("every Ref to a parameter whose default is empty sits in the non-empty branch of an If testing that same parameter (W1030)", () => {
+    expect(unguardedEmptyDefaultRefs(template)).toEqual([]);
+  });
+
+  it("the guard walker flags an empty-default Ref chosen by another parameter's condition or placed outside any If", () => {
+    const bad: CfnTemplate = {
+      Parameters: { Switch: { Default: "false" }, Arn: { Default: "" }, Topic: { Default: "" } },
+      Conditions: {
+        OtherSwitch: { "Fn::Equals": [{ Ref: "Switch" }, "true"] },
+        ArnEmpty: { "Fn::Equals": [{ Ref: "Arn" }, ""] },
+      },
+      Outputs: {},
+      Resources: {},
+    };
+    bad.Resources.Probe = {
+      Type: "X",
+      Properties: {
+        Old: { "Fn::If": ["OtherSwitch", "a", { Ref: "Arn" }] },
+        Bare: [{ Ref: "Topic" }],
+        Reversed: { "Fn::If": ["ArnEmpty", { Ref: "Arn" }, "a"] },
+      },
+    };
+    expect(unguardedEmptyDefaultRefs(bad)).toHaveLength(3);
   });
 
   it("the schedule is disabled and PITR is off by default", () => {
@@ -284,7 +308,7 @@ describe("IAM least privilege", () => {
       {
         actions: ["ecr:BatchCheckLayerAvailability", "ecr:CompleteLayerUpload", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:UploadLayerPart"],
         resource: key({
-          "Fn::If": ["CreateProbeRepository", { "Fn::GetAtt": ["ProbeEcrRepository", "Arn"] }, { Ref: "CiEcrRepositoryArn" }],
+          "Fn::If": ["UseExistingEcrRepository", { Ref: "CiEcrRepositoryArn" }, { "Fn::GetAtt": ["ProbeEcrRepository", "Arn"] }],
         }),
       },
       { actions: ["sqs:GetQueueUrl", "sqs:SendMessage"], resource: key(getAttArn("DeployQueue")) },
@@ -503,6 +527,12 @@ describe("tags, deletion policies and ECR", () => {
     expect(repo.Properties.ImageTagMutability).toBe("IMMUTABLE");
     expect(repo.Properties.ImageScanningConfiguration).toEqual({ ScanOnPush: true });
     expect(repo.Properties.EmptyOnDelete).toBe(true);
+  });
+
+  it("the CiEcrRepositoryArn output selects the existing ARN when set and the probe ARN otherwise", () => {
+    expect(key(template.Outputs.CiEcrRepositoryArn!.Value)).toBe(
+      key({ "Fn::If": ["UseExistingEcrRepository", { Ref: "CiEcrRepositoryArn" }, { "Fn::GetAtt": ["ProbeEcrRepository", "Arn"] }] }),
+    );
   });
 
   it("log group retention is 30 days", () => {
