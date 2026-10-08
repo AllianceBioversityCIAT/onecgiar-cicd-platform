@@ -1,305 +1,42 @@
-# @akili-spec changes/cicd-executor-poc requirements FR-22, FR-25; design DD-24, DD-26, DD-29, 6.1
-#
-# Trusted reusable workflow (CI contract). It builds and pushes images, captures
-# their DIGESTS and sends exactly ONE DEPLOY_REQUESTED message. It holds no deploy
-# logic, no SSH credentials and never selects a host, script or command (NFR-01).
-#
-# Trust model (DD-24): the CI role trust policy pins this file via `job_workflow_ref`
-# at an immutable commit SHA. Event allowlist = `guard` job; bound-ref check = FIRST
-# step of the Environment job, read ONLY from the administrator-only Environment
-# variable CICD_BOUND_REF (fail closed when empty).
-#
-# Values (gate-b-plan section 12; AWS auth is GitHub OIDC only: no static access keys and
-# NO secrets at all; owner decision 2026-10-06):
-#   Environment secrets: none (0).
-#   Environment variables (5): CICD_ROLE_ARN, CICD_BOUND_REF (admin-only), CICD_AWS_REGION,
-#     CICD_ECR_REPOSITORY (repository name only), CICD_DEPLOY_QUEUE_NAME (queue name only)
-#   Derived after OIDC: the account ID (sts get-caller-identity), the registry (output of the
-#     registry login step) and the queue URL (sqs get-queue-url).
-# Masking is log hygiene, NOT confidentiality: the role ARN (which embeds the account ID) is a
-# non-secret variable, so the runner prints it unmasked wherever a step references it. Access is
-# controlled by the OIDC trust conditions, not by hiding the ARN. The masks below only reduce
-# noise in later log lines.
-# Step order of the Environment job (SR-1, Gate B security correction): bound ref, checkout,
-# validate build inputs, BUILD (no AWS credentials, no registry login, OIDC request variables
-# stripped from the build process), THEN assume the role through OIDC, mask, registry login,
-# tag + push + capture digests, request body, ONE send. Rationale: a docker build executes
-# caller-controlled instructions and reads a caller-chosen context; the build must never run
-# while AWS session credentials, the registry token or the OIDC request variables exist. The
-# context and Dockerfile must resolve inside the workspace; any symbolic link on the path and any
-# remote context is rejected (fail closed).
-#
+# THROWAWAY B2 SESSION-NAME PROBE (docs/gate-b/03-github.md section 7). Never merge this branch.
+# It replaces the reusable workflow at the same path so the CI role trust, pinned to this commit,
+# admits it. It records the OIDC claims (P-G10, P-G11) and calls AssumeRoleWithWebIdentity with
+# three session names (P-R1, P-R2). It pushes no image, sends no SQS message and reads no secret.
+# The token is masked; the assumed credentials are discarded.
 
-# Lint and tests are the caller's own jobs; the caller makes its deploy job `needs:` them,
-# so a failing CI step means this workflow never starts and no request is sent (FR-22).
-#
-# Action pinning (owner rule, DD-29 / guard 7): every `uses:` is a full commit SHA.
-# Resolved on 2026-10-06 from the official repositories through the GitHub API
-# (git/ref/tags/<tag>; annotated tags dereferenced via git/tags/<sha>):
-#   actions/checkout                      v7.0.1  3d3c42e5aac5ba805825da76410c181273ba90b1
-#     https://api.github.com/repos/actions/checkout/git/ref/tags/v7.0.1  (lightweight tag)
-#   aws-actions/configure-aws-credentials v6.3.0  e1253824e5c10ff9df46874f81ed3ec929e19cfd
-#     https://api.github.com/repos/aws-actions/configure-aws-credentials/git/ref/tags/v6.3.0  (lightweight tag)
-#   aws-actions/amazon-ecr-login          v2.1.7  03f1aad4c6c7ffd436567f42f9384779290529bd
-#     https://api.github.com/repos/aws-actions/amazon-ecr-login/git/ref/tags/v2.1.7
-#     -> annotated tag aded0d72..., dereferenced via .../git/tags/aded0d722166a37980e030aa969dda0bfe6b6947
-# Image build and push use the preinstalled `docker` CLI in `run:` steps (no third-party
-# build action), which keeps the trusted third-party surface minimal.
-name: deploy-request
-
+name: b2-session-probe
 on:
   workflow_call:
     inputs:
-      targetId:
-        description: Target Registry identifier of the target this repository deploys (AC-02 V1; authorized by the target record).
-        type: string
-        required: true
-      environment:
-        description: GitHub Environment that binds the push-and-send job.
-        type: string
-        required: true
-      units:
-        description: >-
-          JSON array of build units, each {"unit": "<unit id>", "context": "<relative build context>",
-          "dockerfile": "<optional path relative to the repository root>"}. 1 to 8 units.
-        type: string
-        required: true
-
+      targetId: { type: string, required: true }
+      environment: { type: string, required: true }
+      units: { type: string, required: true }
 permissions: {}
-
 jobs:
-  guard:
-    name: guard
+  probe:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions: {}
-    steps:
-      - name: Enforce event allowlist and validate inputs
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          TARGET_ID: ${{ inputs.targetId }}
-          UNITS: ${{ inputs.units }}
-        run: |
-          set -euo pipefail
-          case "$EVENT_NAME" in
-            push|workflow_dispatch) ;;
-            *) echo "::error::event not allowed for deploy requests"; exit 1 ;;
-          esac
-          # Control characters (a trailing newline included) are rejected explicitly: jq's dollar anchor
-          # also matches before a final newline, which would let "a" and "a<newline>" both pass and collide.
-          if [[ "$TARGET_ID" == *[[:cntrl:]]* ]] || ! [[ "$TARGET_ID" =~ ^[a-z0-9][a-z0-9-]{1,62}$ ]]; then
-            echo "::error::invalid targetId"; exit 1
-          fi
-          printf '%s' "$UNITS" | jq -e '
-            type == "array" and length >= 1 and length <= 8
-            and all(.[];
-              type == "object"
-              and ((keys - ["unit", "context", "dockerfile"]) | length) == 0
-              and (.unit | type == "string" and test("^[a-z0-9][a-z0-9-]{0,31}$") and (test("[\u0000-\u001f\u007f]") | not))
-              and (.context | type == "string" and test("^[A-Za-z0-9_.][A-Za-z0-9_./-]*$")
-                   and (test("(^|/)[.][.](/|$)") | not)
-                   and (test("[\u0000-\u001f\u007f]") | not))
-              and ((.dockerfile // "Dockerfile") | type == "string"
-                   and test("^[A-Za-z0-9_.][A-Za-z0-9_./-]*$")
-                   and (test("(^|/)[.][.](/|$)") | not)
-                   and (test("[\u0000-\u001f\u007f]") | not)))
-            and (([.[].unit] | unique | length) == length)' > /dev/null \
-            || { echo "::error::invalid units input"; exit 1; }
-
-  push-and-send:
-    name: push-and-send
-    needs: guard
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
     environment: ${{ inputs.environment }}
     permissions:
       id-token: write
-      contents: read
     steps:
-      - name: Enforce bound ref
+      - name: Claims, then one session name that must work and two that must be denied
         env:
-          BOUND_REF: ${{ vars.CICD_BOUND_REF }}
-          CURRENT_REF: ${{ github.ref }}
+          ROLE_ARN: ${{ vars.CICD_ROLE_ARN }}
+          AWS_REGION: ${{ vars.CICD_AWS_REGION }}
+          REPOSITORY_ID: ${{ github.repository_id }}
         run: |
           set -euo pipefail
-          if [ -z "${BOUND_REF:-}" ]; then
-            echo "::error::bound ref is not configured (fail closed)"; exit 1
-          fi
-          if [ "$CURRENT_REF" != "$BOUND_REF" ]; then
-            echo "::error::ref is not the bound ref"; exit 1
-          fi
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Validate build inputs
-        env:
-          UNITS: ${{ inputs.units }}
-        run: |
-          set -euo pipefail
-          # SR-1: defense in depth on top of the guard job. Every context and Dockerfile must be a
-          # plain relative path whose components are real (never symbolic links) and that resolves
-          # inside the workspace. ANY symlink is rejected, even one that points inside the workspace.
-          workspace="$(realpath -e "$GITHUB_WORKSPACE")"
-          reject() { echo "::error::build input rejected for unit ${1}"; exit 1; }
-          check_path() {
-            local unit="$1" kind="$2" p="$3" cur part resolved
-            local -a parts
-            if ! [[ "$p" =~ ^[A-Za-z0-9_.][A-Za-z0-9_./-]*$ ]]; then reject "$unit"; fi
-            case "$p" in /* | *:*) reject "$unit" ;; esac
-            if [[ "$p" =~ (^|/)[.][.](/|$) ]]; then reject "$unit"; fi
-            cur="$GITHUB_WORKSPACE"
-            IFS=/ read -r -a parts <<< "$p"
-            for part in "${parts[@]}"; do
-              if [ -z "$part" ]; then continue; fi
-              cur="$cur/$part"
-              if [ -L "$cur" ]; then reject "$unit"; fi
-              if ! [ -e "$cur" ]; then reject "$unit"; fi
-            done
-            resolved="$(realpath -e "$cur")" || reject "$unit"
-            if [ "$resolved" != "$workspace" ] && [[ "$resolved" != "$workspace"/* ]]; then reject "$unit"; fi
-            if [ "$kind" = dir ] && ! [ -d "$resolved" ]; then reject "$unit"; fi
-            if [ "$kind" = file ] && ! [ -f "$resolved" ]; then reject "$unit"; fi
-          }
-          while IFS= read -r entry; do
-            unit="$(printf '%s' "$entry" | jq -r '.unit')"
-            context="$(printf '%s' "$entry" | jq -r '.context')"
-            dockerfile="$(printf '%s' "$entry" | jq -r '.dockerfile // "Dockerfile"')"
-            # $(...) strips trailing newlines, so control characters are checked on the raw JSON values.
-            printf '%s' "$entry" | jq -e '[.unit, .context, (.dockerfile // "")] | all(.[]; test("[\u0000-\u001f\u007f]") | not)' > /dev/null \
-              || reject "$unit"
-            check_path "$unit" dir "$context"
-            check_path "$unit" file "$dockerfile"
-          done < <(printf '%s' "$UNITS" | jq -c '.[]')
-
-      - name: Build units (no AWS credentials yet)
-        env:
-          UNITS: ${{ inputs.units }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          # SR-1: no cloud credential may exist while caller-controlled build instructions run.
-          if [ -n "$(compgen -e AWS_ || true)" ]; then
-            echo "::error::cloud credentials are present before the build (fail closed)"; exit 1
-          fi
-          local_images="$RUNNER_TEMP/local-images.tsv"
-          : > "$local_images"
-          while IFS= read -r entry; do
-            unit="$(printf '%s' "$entry" | jq -r '.unit')"
-            context="$(printf '%s' "$entry" | jq -r '.context')"
-            dockerfile="$(printf '%s' "$entry" | jq -r '.dockerfile // "Dockerfile"')"
-            local_tag="cicd-local/${unit}:${RUN_ID}-${RUN_ATTEMPT}"
-            # The OIDC request variables and the runtime tokens are stripped from the build process.
-            env -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
-              -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_CACHE_URL -u ACTIONS_RESULTS_URL \
-              docker build --file "$dockerfile" --tag "$local_tag" -- "$context"
-            printf '%s\t%s\n' "$unit" "$local_tag" >> "$local_images"
-          done < <(printf '%s' "$UNITS" | jq -c '.[]')
-
-      - name: Assume CI role through OIDC
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          role-to-assume: ${{ vars.CICD_ROLE_ARN }}
-          aws-region: ${{ vars.CICD_AWS_REGION }}
-          mask-aws-account-id: true
-
-      - name: Derive and mask the account ID (log hygiene only)
-        run: |
-          set -euo pipefail
-          account_id="$(aws sts get-caller-identity --query Account --output text)"
-          if [ -z "$account_id" ]; then
-            echo "::error::could not derive the account ID (fail closed)"; exit 1
-          fi
-          echo "::add-mask::$account_id"
-
-      - name: Log in to the registry
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
-
-      - name: Tag and push units, capture digests
-        env:
-          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
-          REPOSITORY: ${{ vars.CICD_ECR_REPOSITORY }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          artifacts_file="$RUNNER_TEMP/artifacts.json"
-          echo '{}' > "$artifacts_file"
-          while IFS=$'\t' read -r unit local_tag; do
-            # The tag is for humans only (never drives a deploy) and cannot collide with integer tags.
-            image="${REGISTRY}/${REPOSITORY}:ci-${unit}-${RUN_ID}-${RUN_ATTEMPT}"
-            docker tag "$local_tag" "$image"
-            docker push "$image"
-            # Digest comes from the local image's RepoDigests entry for the pushed repository
-            # (not scraped from push output); it is validated strictly below.
-            prefix="${REGISTRY}/${REPOSITORY}@"
-            digest=""
-            while IFS= read -r line; do
-              case "$line" in
-                "$prefix"*) digest="${line#"$prefix"}"; break ;;
-              esac
-            done < <(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image")
-            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-              echo "::error::could not capture a digest for unit ${unit}"; exit 1
+          token="$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)"
+          echo "::add-mask::$token"
+          printf '%s' "$token" | jq -R 'split(".")[1] | gsub("-";"+") | gsub("_";"/") | . + ("=" * ((4 - length % 4) % 4)) | @base64d | fromjson | {aud,sub,repository_id,repository_owner_id,environment,job_workflow_ref,event_name,ref}'
+          attempt() {
+            if aws sts assume-role-with-web-identity --role-arn "$ROLE_ARN" --role-session-name "$1" \
+                 --web-identity-token "$token" --query AssumedRoleUser.AssumedRoleId --output text > /dev/null 2> "$RUNNER_TEMP/err"; then
+              echo "$2: ALLOWED"
+            else
+              echo "$2: DENIED $(grep -oE '\(([A-Za-z]+)\)' "$RUNNER_TEMP/err" | head -1)"
             fi
-            jq --arg unit "$unit" --arg digest "$digest" '. + {($unit): $digest}' "$artifacts_file" > "$artifacts_file.tmp"
-            mv "$artifacts_file.tmp" "$artifacts_file"
-          done < "$RUNNER_TEMP/local-images.tsv"
-
-      - name: Build deploy request body
-        env:
-          TARGET_ID: ${{ inputs.targetId }}
-          COMMIT_SHA: ${{ github.sha }}
-          REPOSITORY_SLUG: ${{ github.repository }}
-          WORKFLOW_REF: ${{ github.workflow_ref }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-          RUN_NUMBER: ${{ github.run_number }}
-        run: |
-          set -euo pipefail
-          artifacts_file="${ARTIFACTS_FILE:-$RUNNER_TEMP/artifacts.json}"
-          body_file="${BODY_FILE:-$RUNNER_TEMP/deploy-request.json}"
-          jq -n \
-            --arg targetId "$TARGET_ID" \
-            --arg requestId "${RUN_ID}-${RUN_ATTEMPT}" \
-            --arg commitSha "$COMMIT_SHA" \
-            --arg repository "$REPOSITORY_SLUG" \
-            --arg workflowRef "$WORKFLOW_REF" \
-            --arg runId "$RUN_ID" \
-            --argjson runAttempt "$RUN_ATTEMPT" \
-            --argjson runNumber "$RUN_NUMBER" \
-            --slurpfile artifacts "$artifacts_file" \
-            '{
-              specVersion: 1,
-              eventType: "DEPLOY_REQUESTED",
-              requestId: $requestId,
-              targetId: $targetId,
-              commitSha: $commitSha,
-              artifacts: $artifacts[0],
-              ci: {
-                repository: $repository,
-                workflowRef: $workflowRef,
-                runId: $runId,
-                runAttempt: $runAttempt,
-                runNumber: $runNumber
-              }
-            }' > "$body_file"
-
-      - name: Send deploy request
-        env:
-          QUEUE_NAME: ${{ vars.CICD_DEPLOY_QUEUE_NAME }}
-        run: |
-          set -euo pipefail
-          queue_url="$(aws sqs get-queue-url --queue-name "$QUEUE_NAME" --query QueueUrl --output text)"
-          if [ -z "$queue_url" ] || [ "$queue_url" = "None" ]; then
-            echo "::error::could not derive the queue URL (fail closed)"; exit 1
-          fi
-          echo "::add-mask::$queue_url"
-          aws sqs send-message \
-            --queue-url "$queue_url" \
-            --message-body "file://$RUNNER_TEMP/deploy-request.json" \
-            --output text --query MessageId > /dev/null
+          }
+          attempt "$REPOSITORY_ID" "session = repository_id"
+          attempt "wrong-session" "session = wrong-session"
+          attempt "$((REPOSITORY_ID + 1))" "session = another numeric id"
