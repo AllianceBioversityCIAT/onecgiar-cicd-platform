@@ -966,15 +966,16 @@ Executed by the owner (AWS, GitHub, Slack); prepared, checked and pushed (only t
 
 **What this proves.** The R-8 reusable workflow ran for real under the trust pinned to `7f148ce`; the CI role sent one `DEPLOY_REQUESTED`; SQS delivered it to the Executor running against AWS; the router authorized the CI sender (the `SenderId` session suffix was numeric, otherwise the reason would be `UNAUTHORIZED_SENDER`), validated the body against the schema, read the Target Registry and rejected the unknown target with a rejection record keyed by the SQS message id; the platform Slack notification works with the real bot token. Result: **PASS** for the L9 objective (controlled `TARGET_UNKNOWN` rejection).
 
-**Not verified yet (no evidence collected for them; record before closing B2):**
+**Additional L9 verifications (owner, read-only, 2026-10-08).**
 
-| Check | How |
-|---|---|
-| No dedupe claim for the rejected request | `get-item` `DEDUPE#b2-probe#37840910980-1` / `DEDUPE` returns nothing |
-| No target state | `DEPLOYMENT#b2-probe` / `SEQ`, `TARGET#b2-probe` / `STATE`, `LOCK#b2-probe` / `LOCK` and `WINDOW#b2-probe` / `WINDOW` return nothing; no `EXEC#` item for `37840910980-1` |
-| No SSH | Structurally impossible for this request (no target record, so no execution, coordinator or transport call); not yet confirmed explicitly from the Executor console (no connection or deploy line) and the absence of any `EXEC#` item |
-| Queue state afterwards | Deploy queue and DLQ back to 0 messages |
-| ECR | Exactly one image tagged `ci-probe-37840910980-1` in the probe repository |
-| `senderRef` on the rejection item | Equals the CI role id (stack output `CiRoleId`), without the session suffix |
+| Check | Status | Evidence or basis |
+|---|---|---|
+| No dedupe claim for the rejected request | **VERIFIED** | Consistent `get-item` of `DEDUPE#b2-probe#37840910980-1` / `DEDUPE` returned `null` |
+| No execution item | **VERIFIED** | The only `EXEC#` item is the notification mark `EVT#REJECTED` (pk `EXEC#REJECT#…`, the Slack de-duplication mark of the rejection, not an execution); no other execution record exists |
+| Queue state afterwards | **VERIFIED** | `cicd-events-dev`: 0 visible, 0 in flight; `cicd-events-dev-dlq`: 0 visible, 0 in flight; `RedrivePolicy` `maxReceiveCount` = 5 |
+| No SSH | **INFERRED, strongly** | No target record, no execution item and no lock: the coordinator and the SSH transport are only reached from an execution. Not yet confirmed from the Executor console (absence of any connection or deploy line) |
+| No target state | **PENDING** | `DEPLOYMENT#b2-probe` / `SEQ`, `TARGET#b2-probe` / `STATE`, `LOCK#b2-probe` / `LOCK`, `WINDOW#b2-probe` / `WINDOW` not read individually (implied by the absence of any execution, not observed) |
+| ECR | **PENDING** | Exactly one image tagged `ci-probe-37840910980-1` in the probe repository |
+| `senderRef` on the rejection item | **PENDING** | Equals the CI role id (stack output `CiRoleId`), without the session suffix |
 
 **Still pending for B2:** P-A4 in full (the `SenderId` suffix equals the record's `sourceRepositoryId`) needs stage 2 with a registered target (`deployWindowPolicy: required`, ending `FAILED (DEPLOY_WINDOW_CLOSED)` with no lock or SSH) and the `TARGET_NOT_AUTHORIZED` negative; then the untrusted-trigger and wrong-sender negatives (L10–L12). No target is registered, no window exists, and no second repository is added to the trust.
