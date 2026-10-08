@@ -18,7 +18,7 @@ anywhere).** No application repository is changed by Claude; you pick the reposi
 | `CICD_BOUND_REF` | Environment variable, **admin-only** | Your choice: the full ref `refs/heads/<BOUND_BRANCH>` | The one ref allowed to deploy; fail closed when empty. MUST equal the stack parameter `GitHubBoundRef` ([01](01-aws-sam.md)); a mismatch makes the role assumption fail closed |
 | Account id, registry host, queue URL | **Derived after OIDC**, masked as log hygiene | `sts get-caller-identity`, registry login output, `sqs get-queue-url` | Never stored in GitHub |
 | Environment name, deployment branch rules, branch protection, required reviewers | Repository / Environment **configuration** | You | Not values |
-| `deploymentId`, `environment`, `units` | Caller workflow **inputs** | In the caller file | Non-sensitive |
+| `targetId`, `environment`, `units` | Caller workflow **inputs** | In the caller file | Non-sensitive. The AWS role session name is **not** an input: the reusable workflow derives it from `github.repository_id` (R-8) |
 
 ## 1. Read the numeric ids (read-only, needed by the stack)
 
@@ -95,26 +95,28 @@ Expected: neither list contains `CICD_BOUND_REF`.
 ## 6. Add the caller workflow
 
 1. Copy [`github/caller-workflow.example.yml`](github/caller-workflow.example.yml) to `.github/workflows/<WORKFLOW_FILE>.yml` on `<BOUND_BRANCH>` of `<GITHUB_ORG>/<APP_REPO>`.
-2. Replace every placeholder named in the file header: `<GITHUB_ORG>/<PLATFORM_REPO>`, `<PINNED_COMMIT_SHA>`, `<BOUND_BRANCH>`, `<OWNER_DEPLOYMENT_ID>`, `<GITHUB_ENVIRONMENT>`, the units, and the lint/test step.
-3. `<PINNED_COMMIT_SHA>` must be a full 40-hex commit SHA, never a tag or branch, and **must equal** the stack parameter `PinnedWorkflowSha`. Moving the pin means changing the stack (and the trust policy) in the same change.
+2. Replace every placeholder named in the file header: `<GITHUB_ORG>/<PLATFORM_REPO>`, `<PINNED_COMMIT_SHA>`, `<BOUND_BRANCH>`, `<OWNER_TARGET_ID>`, `<GITHUB_ENVIRONMENT>`, the units, and the lint/test step. Do not add `role-session-name` or any AWS step to the caller.
+3. `<PINNED_COMMIT_SHA>` must be a full 40-hex commit SHA, never a tag or branch, and **must equal** the stack parameter `PinnedWorkflowSha`. Moving the pin means changing the stack (and the trust policy) in the same change. For the real run it is the platform commit that contains task R-8 (`role-session-name: ${{ github.repository_id }}`); during the section 7 probe it is the probe commit.
 4. The caller passes no secrets (no `secrets:` key, no `secrets: inherit`).
 
 Expected: `workflow_dispatch` is available on the Actions tab for this workflow.
 
-## 7. P-G11 and P-G10: record the real claims
+## 7. Session-name probe: P-R1, P-R2, P-G10, P-G11 (before the first real request)
 
-The CI role trust compares exact strings. If a claim differs, `AssumeRoleWithWebIdentity` is denied, and **the failure is silent**: the workflow step only reports a generic "not authorized", and no condition is named. Recording the real claims first avoids chasing it.
+The CI role trust compares exact strings and, with option A, requires the role session name to equal the token's `repository_id`. A denied `AssumeRoleWithWebIdentity` is **silent** (a generic "not authorized", no condition named), so this probe records the real claims and tests the session-name condition directly, with no image push and no SQS message.
 
-Option A (recommended, before the first real run): in a **private** sandbox, publish this throwaway reusable workflow in the platform repository as `.github/workflows/claims-probe.reusable.yml`, call it from a throwaway caller on `<BOUND_BRANCH>` with the same Environment and the same SHA-pinned form as the real caller, run it with `workflow_dispatch`, then delete both files.
+The trust pins `deploy-request.reusable.yml` at one SHA, so the probe must live **at that same path** on a throwaway branch of the platform repository, and the stack is deployed with the probe commit as `PinnedWorkflowSha` first ([01](01-aws-sam.md)); afterwards the stack is updated to the real R-8 commit.
+
+1. In `<GITHUB_ORG>/<PLATFORM_REPO>`, create the branch `<PROBE_BRANCH>` from `main`, replace `.github/workflows/deploy-request.reusable.yml` on that branch with the file below, commit, push, and record the full commit SHA as `<PROBE_SHA>` (`git rev-parse HEAD`). Never merge this branch.
 
 ```yaml
-name: claims-probe
+name: b2-session-probe
 on:
   workflow_call:
     inputs:
-      environment:
-        type: string
-        required: true
+      targetId: { type: string, required: true }
+      environment: { type: string, required: true }
+      units: { type: string, required: true }
 permissions: {}
 jobs:
   probe:
@@ -123,23 +125,58 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - name: Print selected claims
+      - name: Claims, then one session name that must work and two that must be denied
+        env:
+          ROLE_ARN: ${{ vars.CICD_ROLE_ARN }}
+          AWS_REGION: ${{ vars.CICD_AWS_REGION }}
+          REPOSITORY_ID: ${{ github.repository_id }}
         run: |
           set -euo pipefail
           token="$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)"
+          echo "::add-mask::$token"
           printf '%s' "$token" | jq -R 'split(".")[1] | gsub("-";"+") | gsub("_";"/") | . + ("=" * ((4 - length % 4) % 4)) | @base64d | fromjson | {aud,sub,repository_id,repository_owner_id,environment,job_workflow_ref,event_name,ref}'
+          attempt() {
+            if aws sts assume-role-with-web-identity --role-arn "$ROLE_ARN" --role-session-name "$1" \
+                 --web-identity-token "$token" --query AssumedRoleUser.AssumedRoleId --output text > /dev/null 2> "$RUNNER_TEMP/err"; then
+              echo "$2: ALLOWED"
+            else
+              echo "$2: DENIED $(grep -oE '\(([A-Za-z]+)\)' "$RUNNER_TEMP/err" | head -1)"
+            fi
+          }
+          attempt "$REPOSITORY_ID" "session = repository_id"
+          attempt "wrong-session" "session = wrong-session"
+          attempt "$((REPOSITORY_ID + 1))" "session = another numeric id"
 ```
 
-Expected: a JSON object. Compare with the stack:
+2. Deploy the stack with `PinnedWorkflowSha = <PROBE_SHA>` ([01](01-aws-sam.md), checkpoints A to D).
+3. In the application repository, point the caller (section 6) at `@<PROBE_SHA>` and run it with **Run workflow** on `<BOUND_BRANCH>`. The caller is unchanged otherwise; the probe ignores its inputs, pushes nothing and sends nothing.
+
+Expected in the `probe` job log: the claims JSON, then exactly
+
+```text
+session = repository_id: ALLOWED
+session = wrong-session: DENIED (AccessDenied)
+session = another numeric id: DENIED (AccessDenied)
+```
+
+| Result | Meaning | Action |
+|---|---|---|
+| ALLOWED, DENIED, DENIED | P-R1 (the session-name condition is evaluated for `AssumeRoleWithWebIdentity`) and P-R2 (the claim resolves as a policy variable) hold | Record it; continue with the claims check below |
+| First line DENIED | A claim differs from the stack, or the policy variable does not resolve (P-R2) | Compare the claims with the table below first. If every claim matches, **stop**: option A fails; share the log, do not change the template |
+| Second or third line ALLOWED | The session-name condition is not enforced (P-R1 fails) | **Stop.** Option A fails; share the log. Option B (SR-2) is evaluated; nothing is changed by assumption |
+
+Compare the claims with the stack:
 
 | Claim | Must equal |
 |---|---|
 | `sub` | Stack parameter `GitHubOidcSub` (P-G10; expected default form `repo:<GITHUB_ORG>/<APP_REPO>:environment:<GITHUB_ENVIRONMENT>`; repositories created, renamed or transferred after 2026-07-15 use the immutable form `repo:<GITHUB_ORG>@<OWNER_ID>/<APP_REPO>@<REPO_ID>:environment:<GITHUB_ENVIRONMENT>`) |
 | `job_workflow_ref` | `<GITHUB_ORG>/<PLATFORM_REPO>/.github/workflows/deploy-request.reusable.yml@<ref form>` where `<ref form>` is what the probe shows for the SHA-pinned call (P-G11). The stack builds the value with the 40-hex SHA. If the probe shows a `refs/...` form instead, **stop** and share it: the template must change, do not guess |
-| `ref` | Stack parameter `GitHubBoundRef`, which must equal `CICD_BOUND_REF` (a mismatch makes the role assumption fail closed) |
+| `ref` | Stack parameter `GitHubBoundRef`, which must equal `CICD_BOUND_REF` |
 | `repository_id`, `repository_owner_id`, `environment`, `aud` | The matching stack parameters; `aud` is `sts.amazonaws.com` |
 
-The decoder pads the base64 itself and needs a jq with `@base64d` (1.6 or later, preinstalled on the Ubuntu runner). The output reveals repository identifiers: keep it private and share it only sanitized. Claude did not run this; it is a documented diagnostic.
+4. Afterwards: update the stack to `PinnedWorkflowSha = <R8_COMMIT_SHA>` (the platform `main` commit that contains task R-8; the changeset shows a single `Modify` on `CiRole`), point the caller back to `@<R8_COMMIT_SHA>`, and delete `<PROBE_BRANCH>`.
+
+The output reveals repository identifiers and, through the role ARN, the account id: keep the log private and share it sanitized. The token itself is masked and the assumed credentials are discarded. Claude did not run this.
 
 Option B (after a failure): list the denied attempts in CloudTrail (event history is regional):
 
@@ -149,16 +186,22 @@ aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,Attribut
 
 Expected: events with an `errorCode` such as `AccessDenied` and no condition name. Use Option A to find which claim differs.
 
-Record the observed `sub`, `job_workflow_ref` and the source-binding `workflowRef` form (gap G-4: exact equality with the request's `ci.workflowRef`, `CONSISTENCY_MISMATCH` otherwise) in your evidence notes.
+Record the observed `sub` and `job_workflow_ref` in your evidence notes. AC-02 V1: `ci.workflowRef` is recorded on the execution for audit only (V1-R2); it is not compared.
 
 ## 8. Trigger the run (B2 positive path)
 
-**Stop if** your target definition says `deployWindowPolicy: not-required` or a deploy window is open: do not trigger the workflow (a real SSH deployment would follow; see [04](04-definitions-and-target.md)).
+Prerequisites: section 7 passed, the stack pins `<R8_COMMIT_SHA>`, the caller calls `@<R8_COMMIT_SHA>`, and the Executor is running ([05](05-run-executor-node22.md)).
+
+The run goes through two stages. Neither opens SSH.
+
+**Stage 1, no target record yet.** Do not register `<OWNER_TARGET_ID>` yet. Run the workflow (**Run workflow** on `<BOUND_BRANCH>`). Expected: `guard` and `push-and-send` green (bound ref, OIDC, build, push, one send), then the Executor rejects the request with `TARGET_UNKNOWN`: the CI sender was authorized, the registry was read, nothing was claimed or locked ([07](07-verification.md), B2).
+
+**Stage 2, target registered with `deployWindowPolicy: required`.** Register the target with the tool ([09](09-target-registry.md)); its `sourceRepositoryId` is this repository's id (section 1). **Stop if** the record says `not-required` or a deploy window is open: an accepted request would then go on to a real SSH deployment. Run the workflow again. Expected: the request is **accepted** (the `SenderId` session suffix equals `sourceRepositoryId`, option A), an execution is created and ends `FAILED` with `DEPLOY_WINDOW_CLOSED` at the first window check, before any lock, credential read or SSH ([07](07-verification.md), B2).
 
 1. Open the Actions tab, select the workflow, **Run workflow** on `<BOUND_BRANCH>`.
 2. Watch the jobs: `ci`, then the reusable `guard`, then `push-and-send`.
 
-Expected: all green. In the `push-and-send` log: bound ref check passes, OIDC succeeds (the role ARN and account id are visible in the log by design), the image is built and pushed, the request is sent. Then in the Executor log: a message acknowledged and an execution accepted (see [07](07-verification.md)); with the window closed it ends `FAILED (DEPLOY_WINDOW_CLOSED)` and never opens SSH.
+Expected: all green. In the `push-and-send` log: bound ref check passes, OIDC succeeds (the role ARN and account id are visible in the log by design), the image is built and pushed, the request is sent.
 
 **Public-safe log check (P-G14).** Search the whole job log for the registry host and the queue URL. The role ARN and the 12-digit account id are expected to appear (non-secret variable; accepted).
 
@@ -190,5 +233,23 @@ aws sqs get-queue-attributes --queue-url <DEPLOY_QUEUE_URL> --attribute-names Ap
 Expected: unchanged counts (the Executor consumes quickly, so also check that the Executor log shows no new request). What blocks each trigger differs. `pull_request` runs on a `refs/pull/...` ref, so the Environment deployment branch rule would also block it. For `pull_request_target` and `workflow_run`, `github.ref` is the default branch: if that is your bound branch, the branch rule and the bound-ref check pass and the `sub` keeps the environment form, so the **`guard` job is the only control** that stops them. That is why this negative test matters.
 
 **Stop if** any of these runs reaches `push-and-send` or obtains AWS credentials. Disable the caller workflow and report it.
+
+## 10. Negative check: a repository that is not the target's source (option A, B2)
+
+Goal: a request from a repository other than the record's `sourceRepositoryId` is rejected with `TARGET_NOT_AUTHORIZED` and changes no target state. Only one repository is trusted by the CI role (do **not** add a second one before this section and section 7 pass), so the test changes the record's source instead of using another repository.
+
+1. Read the record and note its `version` `<N>` and its `sourceRepositoryId` ([09](09-target-registry.md), `get`).
+2. Note the target state before: `TARGET#<OWNER_TARGET_ID>` / `STATE` and `DEPLOYMENT#<OWNER_TARGET_ID>` / `SEQ` ([07](07-verification.md)).
+3. Copy the record file to `executor/.local/targets/<OWNER_TARGET_ID>-srccheck.json`, set its `sourceRepositoryId` to the numeric id of **another real repository you own** (for example the platform repository: `gh api repos/<GITHUB_ORG>/<PLATFORM_REPO> --jq .id`), and write it from version `<N>`:
+
+   ```bash
+   tools/target-registry put --file executor/.local/targets/<OWNER_TARGET_ID>-srccheck.json --updated-by <YOUR_NAME> \
+     --secret-id-prefix <SECRET_ID_PREFIX> --registry-table <REGISTRY_TABLE_NAME> --region <AWS_REGION> \
+     --profile <AWS_PROFILE_ADMIN> --expected-version <N> --checklist-confirmed
+   ```
+4. Run the caller workflow once.
+5. Restore the record: run the same `put` with the original file `executor/.local/targets/<OWNER_TARGET_ID>.json` and `--expected-version <N+1>`.
+
+Expected: a `REJECT#MSG#<SQS_MESSAGE_ID>` item with reason `TARGET_NOT_AUTHORIZED`; no `DEDUPE#<OWNER_TARGET_ID>#<REQUEST_ID>` item for that run; `TARGET#…/STATE`, `DEPLOYMENT#…/SEQ` unchanged; no `LOCK#` or `WINDOW#` item; no execution. **Stop if** the request is accepted: option A is not enforced; share the evidence. Confirm step 5 with `get` (the original `sourceRepositoryId`, version `<N+2>`).
 
 Delete every throwaway workflow afterward.

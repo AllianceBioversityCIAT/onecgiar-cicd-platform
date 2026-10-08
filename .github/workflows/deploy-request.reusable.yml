@@ -1,4 +1,4 @@
-# @akili-spec changes/cicd-executor-poc requirements FR-22, FR-25; design DD-24, DD-26, DD-29, 6.1
+# @akili-spec changes/cicd-executor-poc requirements FR-21, FR-22, FR-25; design DD-24, DD-25, DD-26, DD-29, 6.1; tasks R-8
 #
 # Trusted reusable workflow (CI contract). It builds and pushes images, captures
 # their DIGESTS and sends exactly ONE DEPLOY_REQUESTED message. It holds no deploy
@@ -8,6 +8,12 @@
 # at an immutable commit SHA. Event allowlist = `guard` job; bound-ref check = FIRST
 # step of the Environment job, read ONLY from the administrator-only Environment
 # variable CICD_BOUND_REF (fail closed when empty).
+#
+# Source binding (AC-02 V1-R1 option A, task R-8): the OIDC step sets the role session name to the
+# run's github.repository_id. The CI role trust requires sts:RoleSessionName to equal the token's
+# repository_id claim, so the SQS SenderId (<role ID>:<session name>) carries the source repository
+# and the Executor checks it against the target record's sourceRepositoryId. It is never an input:
+# a caller cannot choose it. Premises P-R1/P-R2 stay UNVERIFIED until the real B2 tests.
 #
 # Values (gate-b-plan section 12; AWS auth is GitHub OIDC only: no static access keys and
 # NO secrets at all; owner decision 2026-10-06):
@@ -204,6 +210,7 @@ jobs:
         with:
           role-to-assume: ${{ vars.CICD_ROLE_ARN }}
           aws-region: ${{ vars.CICD_AWS_REGION }}
+          role-session-name: ${{ github.repository_id }}
           mask-aws-account-id: true
 
       - name: Derive and mask the account ID (log hygiene only)

@@ -140,7 +140,7 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
       expect(workflowText).not.toMatch(/secrets\./); // no expression anywhere, comments included
       expect(workflowText.replace(/^\s*#.*$/gm, "")).not.toMatch(/secrets/i);
       expect(envSteps[oidcIdx]!.with?.["role-to-assume"]).toBe("${{ vars.CICD_ROLE_ARN }}");
-      expect(Object.keys(envSteps[oidcIdx]!.with ?? {}).sort()).toEqual(["aws-region", "mask-aws-account-id", "role-to-assume"]);
+      expect(Object.keys(envSteps[oidcIdx]!.with ?? {}).sort()).toEqual(["aws-region", "mask-aws-account-id", "role-session-name", "role-to-assume"]); // R-8
     });
 
     it("takes region and repository name from vars and the registry from the login step output", () => {
@@ -191,6 +191,27 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
       expect(withoutComments).not.toMatch(/\.amazonaws\.com/);
       expect(withoutComments).not.toMatch(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/);
       expect(withoutComments).not.toMatch(/https?:\/\//);
+    });
+  });
+
+  describe("role session name = repository_id (AC-02 V1-R1 option A, DD-24, R-8)", () => {
+    const oidcSteps = envSteps.filter((st) => st.uses?.startsWith("aws-actions/configure-aws-credentials@"));
+
+    it("the single OIDC step sets role-session-name to the run's github.repository_id", () => {
+      expect(oidcSteps).toHaveLength(1);
+      expect(oidcSteps[0]!.with?.["role-session-name"]).toBe("${{ github.repository_id }}");
+    });
+
+    it("the OIDC step takes only the role, the region, the account mask and the session name (no caller-controlled value)", () => {
+      expect(Object.keys(oidcSteps[0]!.with ?? {}).sort()).toEqual(["aws-region", "mask-aws-account-id", "role-session-name", "role-to-assume"]);
+    });
+
+    it("the session name is not a workflow input and no input, variable or event field feeds it", () => {
+      const inputs = Object.keys((wf.on["workflow_call"] as { inputs: Record<string, unknown> }).inputs);
+      expect(inputs.filter((name) => /session|repository/i.test(name))).toEqual([]);
+      const sessionName = String(oidcSteps[0]!.with?.["role-session-name"]);
+      expect(sessionName).not.toMatch(/inputs\.|vars\.|env\.|github\.event/);
+      expect(workflowText.match(/role-session-name/g)).toHaveLength(1);
     });
   });
 
@@ -451,6 +472,10 @@ describe.each([
   it("does not inherit or pass secrets", () => {
     expect(deploy.secrets).toBeUndefined();
     expect(callerText.replace(/^\s*#.*$/gm, "")).not.toMatch(/secrets:\s*inherit/);
+  });
+
+  it("never sets a role session name: the reusable workflow alone derives it from repository_id (R-8)", () => {
+    expect(callerText.replace(/^\s*#.*$/gm, "")).not.toMatch(/role-session-name|repository_id/);
   });
 
   it("passes exactly targetId, environment and units (AC-02 V1)", () => {

@@ -16,7 +16,7 @@ Run everything from the repository root. Use your admin profile for AWS commands
 | `GitHubRepositoryId`, `GitHubRepositoryOwnerId` | Numeric ids, read-only lookup in [03](03-github.md) |
 | `GitHubEnvironment` | Your chosen Environment name `<GITHUB_ENVIRONMENT>` (created later in 03; the name must match exactly) |
 | `PlatformWorkflowRepository` | `<GITHUB_ORG>/<PLATFORM_REPO>` |
-| `PinnedWorkflowSha` | Full 40-hex commit SHA of the platform repository that contains the reusable workflow. It must equal the SHA in the caller workflow. Never a tag or branch |
+| `PinnedWorkflowSha` | Full 40-hex commit SHA of the platform repository that contains the reusable workflow. It must equal the SHA in the caller workflow. Never a tag or branch. **AC-02 V1 (R-2 + R-8):** the trust requires the role session name to equal the repository id, so the SHA must be a commit whose reusable workflow sets `role-session-name: ${{ github.repository_id }}` (task R-8) or the session-name probe of [03](03-github.md) section 7; with an older SHA every run is denied |
 | `GitHubOidcSub` | The default environment-form `sub`: `repo:<GITHUB_ORG>/<APP_REPO>:environment:<GITHUB_ENVIRONMENT>`, or the immutable form `repo:<GITHUB_ORG>@<OWNER_ID>/<APP_REPO>@<REPO_ID>:environment:<GITHUB_ENVIRONMENT>` (repositories created, renamed or transferred after 2026-07-15; the pattern allows `@`). Confirm the real value at B2 (P-G10, see 03) |
 | `GitHubBoundRef` | The exact protected branch ref `refs/heads/<BOUND_BRANCH>` (no default, no wildcard). It must equal the GitHub Environment variable `CICD_BOUND_REF` ([03](03-github.md)); the stack parameter, never the caller, supplies the `ref` trust condition (SR-4) |
 | `ExistingGitHubOidcProviderArn` | **Leave it out (default empty) only if no GitHub OIDC provider exists in the account.** Add it to `parameter_overrides` when one exists, and **always after a failed first create or a teardown**: the stack retains the provider it created (`DeletionPolicy: Retain`), so a redeploy that tries to create it again fails because the account already holds one for that URL. An account holds one provider per URL. If one exists, pass its ARN `arn:aws:iam::<AWS_ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com`. Find it with `aws iam list-open-id-connect-providers --profile <AWS_PROFILE_ADMIN>` (the ARN ending `oidc-provider/token.actions.githubusercontent.com`) |
@@ -50,7 +50,7 @@ Open [`../../infra/sam/template.yaml`](../../infra/sam/template.yaml) and your `
 
 | # | Look at | What you must see |
 |---|---|---|
-| A1 | `CiRole` trust policy | Exactly seven conditions, all `StringEquals`: `aud`, `repository_id`, `repository_owner_id`, `environment`, `job_workflow_ref` (pinned SHA), `sub` and `ref` (from `GitHubBoundRef`). No `StringLike`, no wildcard |
+| A1 | `CiRole` trust policy | Exactly eight conditions, all `StringEquals`: `aud`, `repository_id`, `repository_owner_id`, `environment`, `job_workflow_ref` (pinned SHA), `sub`, `ref` (from `GitHubBoundRef`) and `sts:RoleSessionName` = the literal IAM policy variable `${token.actions.githubusercontent.com:repository_id}` (AC-02 option A). No `StringLike`, no wildcard |
 | A2 | `DeployQueuePolicy` | An explicit `Deny` of `sqs:SendMessage` for every principal not in the four platform roles (`ArnNotEquals`). Note this denies admins too (see B3 poison message in [07](07-verification.md)) |
 | A3 | `ExecutorRole` permissions | Queue consume and send, DynamoDB on the one table plus `GSI2`, `secretsmanager` only under your `SecretIdPrefix`, logs, and `PutMetricData` limited to the `CicdExecutor` namespace. **No** ECR, S3, Lambda, CodeBuild, IAM or application secrets |
 | A4 | `CiRole` permissions | `ecr:GetAuthorizationToken` (accepted `*` exception), push actions on the one repository (your `CiEcrRepositoryArn` when set, otherwise the probe repository created because it is empty; there is no separate switch and no CloudFormation Rule), `sqs:SendMessage` and `sqs:GetQueueUrl` on the deploy queue only |
@@ -100,8 +100,8 @@ Behavior and expected output:
 |---|---|
 | IAM capability | `capabilities = "CAPABILITY_IAM"` in the config (the template creates IAM roles with generated names, so `CAPABILITY_NAMED_IAM` is not needed) |
 | Extra managed stack | `resolve_s3 = true` makes SAM create one extra stack `aws-sam-cli-managed-default` with a staging bucket. See "Why `resolve_s3` stays" below |
-| Changeset review | `confirm_changeset = true` stops and prints the changeset. Read it: all `Add`, no `Remove`/`Modify` on a first deploy. Answer `y` only if it matches the template |
-| End state | Stack `cicd-poc-dev` reaches `CREATE_COMPLETE` |
+| Changeset review | `confirm_changeset = true` stops and prints the changeset. Read it: all `Add`, no `Remove`/`Modify` on a first deploy. **Update of the existing stack with the AC-02 template (R-2):** `Add` on `RegistryTable`, `Modify` on `CiRole` (trust: session-name condition, pinned SHA) and `ExecutorRole` (`GetItem` on the registry), no `Remove` and no `Replacement: True` on any table, queue or role; a later change of only `PinnedWorkflowSha` shows a single `Modify` on `CiRole`. Answer `y` only if it matches |
+| End state | Stack `cicd-poc-dev` reaches `CREATE_COMPLETE` (first deploy) or `UPDATE_COMPLETE` (AC-02 update of an existing stack) |
 
 **Alternative, guided:** `sam deploy --guided --template-file infra/sam/template.yaml --profile <AWS_PROFILE_ADMIN>` asks for every value and offers to save a config file. Answer **No** to unreviewed defaults, keep `CAPABILITY_IAM`, set the same parameters, and save the generated config as `executor/.local/gate-b/samconfig.toml` when it asks for the file name (not in the repository tree). Then verify: `git check-ignore -v executor/.local/gate-b/samconfig.toml` must print the `.local/` rule, and `git status` must show no new `samconfig.toml`. **Stop if** a `samconfig.toml` appeared elsewhere in the tree: move it under `executor/.local/gate-b/` before doing anything else.
 
@@ -119,7 +119,7 @@ Known case: **IAM propagation.** If `DeployQueuePolicy` fails on first create wi
 aws cloudformation describe-stacks --stack-name cicd-poc-dev --query "Stacks[0].Outputs" --output table --profile <AWS_PROFILE_ADMIN> --region <AWS_REGION>
 ```
 
-Expected: 16 rows, including `DeployQueueUrl`, `DeployQueueName`, `DeployQueueArn`, `DeployDlqUrl`, `ExecutionsTableName`, `CiRoleArn`, `ExecutorRoleArn`, `OperatorRoleArn`, `SchedulerRoleArn`, `CiRoleId`, `ExecutorRoleId`, `OperatorRoleId`, `SchedulerRoleId`, `OidcProviderArn`, `CiEcrRepositoryArn`, `ExecutorLogGroupName`.
+Expected: 17 rows, including `DeployQueueUrl`, `DeployQueueName`, `DeployQueueArn`, `DeployDlqUrl`, `ExecutionsTableName`, `RegistryTableName`, `CiRoleArn`, `ExecutorRoleArn`, `OperatorRoleArn`, `SchedulerRoleArn`, `CiRoleId`, `ExecutorRoleId`, `OperatorRoleId`, `SchedulerRoleId`, `OidcProviderArn`, `CiEcrRepositoryArn`, `ExecutorLogGroupName`.
 
 | Output | Used for |
 |---|---|

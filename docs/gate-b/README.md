@@ -58,6 +58,27 @@ Milestones you choose not to run are recorded as **not executed**, never as pass
 | 10 | Dedupe, supersede and poison-message checks (**B3**) | [07](07-verification.md) | One execution per request, `SUPERSEDED`, DLQ alarm |
 | 11 | Target validation (**B4**), optional deployment (**B5**), optional teardown | [06](06-target-validation.md), [07](07-verification.md), [08](08-teardown.md) | Probe outputs |
 
+## First live flow: B1 then B2 (AC-02 V1, one step at a time)
+
+The order matters: the CI role trust (task R-2) requires the session name that only the R-8 reusable workflow sets, and it pins one workflow SHA. Run one step, share the result, then continue. Nothing here opens SSH or deploys.
+
+| # | Step | Where | Done when |
+|---|---|---|---|
+| L1 | Preflight, read only: your administrative identity and the current stack state | [01](01-aws-sam.md) | You know whether `cicd-poc-dev` exists and in which state |
+| L2 | Read the numeric repository and owner ids | [03](03-github.md) section 1 | Two integers recorded locally |
+| L3 | Publish the session-name probe on a throwaway platform branch | [03](03-github.md) section 7, step 1 | `<PROBE_SHA>` recorded |
+| L4 | SAM checkpoints A to D with `PinnedWorkflowSha = <PROBE_SHA>` (changeset reviewed first) | [01](01-aws-sam.md) | Stack `CREATE_COMPLETE` or `UPDATE_COMPLETE`, outputs recorded (incl. `RegistryTableName`) |
+| L5 | GitHub Environment, variables, caller at `@<PROBE_SHA>`; run the probe | [03](03-github.md) sections 2 to 7 | ALLOWED, DENIED, DENIED; claims match (P-R1, P-R2, P-G10, P-G11) |
+| L6 | Push the R-8 commit (if not yet), update the stack to `PinnedWorkflowSha = <R8_COMMIT_SHA>`, caller back to `@<R8_COMMIT_SHA>`, delete the probe branch | [01](01-aws-sam.md), [03](03-github.md) section 7, step 4 | Single `Modify` on `CiRole` |
+| L7 | Platform secrets only: the four principal role ids, the platform Slack channel id and a real Slack bot token | [02](02-secrets.md) sections 4, 5 | `describe-secret` finds all six |
+| L8 | Executor principal and profile, Node 22, env file, dry run, start (**B1**) | [05](05-run-executor-node22.md) | `executor started`, heartbeat |
+| L9 | Run the caller with no target record (stage 1) | [03](03-github.md) section 8, [07](07-verification.md) B2 | `TARGET_UNKNOWN` rejection, no target state |
+| L10 | Register the TEST target with `deployWindowPolicy: required` (needs the TEST server's host name and public host key only; no server configuration, no login) | [09](09-target-registry.md) | `created <TARGET_ID> at version 1` |
+| L11 | Run the caller again (stage 2) | [03](03-github.md) section 8, [07](07-verification.md) B2 | Accepted, then `FAILED (DEPLOY_WINDOW_CLOSED)`, no lock, no SSH |
+| L12 | Negatives: another repository as source, untrusted triggers, wrong sender | [03](03-github.md) sections 9, 10; [07](07-verification.md) | `TARGET_NOT_AUTHORIZED`, guard failures, `UNAUTHORIZED_SENDER`; no target state change |
+
+Slack is required to start (AC2-6): the Executor checks that the platform token and channel secrets exist, and it posts rejections and outcomes to that channel. It needs a real Slack app bot token (`xoxb-…`) with the `chat:write` scope, the bot invited to the platform channel, and that channel's id ([02](02-secrets.md) section 4).
+
 ## NOT EXECUTED (status at the end of B0)
 
 Nothing below has been run by anyone. Each stays **NOT EXECUTED** until you report the result.

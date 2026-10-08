@@ -13,6 +13,10 @@
 #   <GITHUB_ENVIRONMENT>          the GitHub Environment (deployment branch rules = the
 #                                 bound branch) that holds the values below
 #
+# Source binding (AC-02 V1-R1 option A, task R-8): the reusable workflow itself sets the AWS role
+# session name to this repository's numeric id; this caller never sets it. <PINNED_COMMIT_SHA>
+# must be a platform commit that contains that change, otherwise the CI role trust denies the run.
+#
 # The Environment <GITHUB_ENVIRONMENT> holds 0 secrets and 5 variables:
 #   Variables: CICD_ROLE_ARN (the CI role ARN; not a secret, it appears in public logs),
 #              CICD_BOUND_REF (full ref of the bound branch; administrators only),

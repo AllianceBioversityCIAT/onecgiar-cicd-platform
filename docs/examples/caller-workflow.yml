@@ -4,6 +4,10 @@
 # Adding it to the application repository is Gate C (N-32) and needs owner approval (OD-A6).
 # Placeholders in angle brackets are resolved outside Git (DD-23).
 #
+# Source binding (AC-02 V1-R1 option A, task R-8): the reusable workflow itself sets the AWS role
+# session name to this repository's numeric id; this caller never sets it. <PINNED_COMMIT_SHA>
+# must be a platform commit that contains that change, otherwise the CI role trust denies the run.
+#
 # Prerequisites configured by an administrator, not in this file:
 #   - GitHub Environment <GITHUB_ENVIRONMENT> with deployment branch rules = the bound branch
 #   - 0 secrets and 5 Environment variables: CICD_ROLE_ARN (not a secret; it appears in
