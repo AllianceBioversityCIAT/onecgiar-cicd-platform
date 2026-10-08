@@ -20,7 +20,6 @@ test_migration_temp_container_mode() {
     --execution-id "$execution_id" \
     --unit demo-unit \
     --artifact server=$IMG_V2 \
-    --previous server=$IMG_V1 \
     --lock-key demo-lock \
     --fencing-token tok-1 \
     --migrate server \

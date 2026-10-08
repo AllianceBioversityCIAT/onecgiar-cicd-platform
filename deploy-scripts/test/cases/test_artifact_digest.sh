@@ -58,7 +58,7 @@ test_artifact_tag_rejected() {
     fi
   done
 
-  # A tag in the --previous hint is rejected the same way.
+  # The --previous hint is not part of the design §6.5 interface (task R-9a): an unknown argument.
   : > "$DOCKER_LOG"; : > "$AWS_FAKE_LOG"
   run_script \
     --execution-id "n15-tag-prev-$$-$RANDOM" \
@@ -67,7 +67,7 @@ test_artifact_tag_rejected() {
     --previous "server=${IMG_REPO}:v1" \
     --lock-key demo-lock \
     --fencing-token tok-1
-  assert_no_effect "--previous with a tag" || ok=1
+  assert_no_effect "removed --previous flag" || ok=1
 
   # The removed --image flag is an unknown argument (usage exit 2, no effect).
   : > "$DOCKER_LOG"; : > "$AWS_FAKE_LOG"
@@ -88,7 +88,6 @@ test_artifact_pulled_by_digest() {
     --execution-id "n15-pull-$$-$RANDOM" \
     --unit demo-unit \
     --artifact "server=$IMG_V2" \
-    --previous "server=$IMG_V1" \
     --lock-key demo-lock \
     --fencing-token tok-1
 
@@ -125,7 +124,6 @@ test_artifact_already_running_skips() {
     --execution-id "n15-same-$$-$RANDOM" \
     --unit demo-unit \
     --artifact "server=$IMG_V2" \
-    --previous "server=$IMG_V1" \
     --lock-key demo-lock \
     --fencing-token tok-1 \
     --migrate server --migration-check "exit 1" --migration-run "exit 0"
@@ -143,7 +141,9 @@ test_artifact_already_running_skips() {
   assert_eq "NONE" "$(json_get "$json" migrations)" "migrations=NONE (migration not run)" || ok=1
   assert_eq "SUCCESS" "$(json_get "$json" status)" "status=SUCCESS" || ok=1
   assert_eq "$IMG_V2" "$(json_get "$json" deployedImages.server)" "deployedImages.server unchanged" || ok=1
-  assert_eq "$IMG_V1" "$(json_get "$json" previousImages.server)" "previousImages.server kept from the hint" || ok=1
+  # §6.5 has no --previous hint: with the container already current there is no safe previous identity,
+  # so none is invented (empty) and pruning is skipped, which keeps the older image.
+  assert_eq "" "$(json_get "$json" previousImages.server)" "previousImages.server not invented (no hint in §6.5)" || ok=1
   image_is_present "$IMG_V1" && pass "previous image kept" || { fail "previous image removed"; ok=1; }
   return $ok
 }

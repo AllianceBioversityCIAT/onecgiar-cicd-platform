@@ -54,7 +54,9 @@ sandbox_init() {
   export DOCKER_STATE_DIR="$SANDBOX_DIR/docker-state"
   export DOCKER_LOG="$SANDBOX_DIR/docker.log"
   export AWS_FAKE_LOG="$SANDBOX_DIR/aws.log"
-  mkdir -p "$CICD_LOCK_DIR" "$DOCKER_STATE_DIR" "$(dirname "$DOCKER_LOG")"
+  # Target-side configuration (design §6.5, task R-9a): one file per target id.
+  export CICD_TARGET_CONFIG_DIR="$SANDBOX_DIR/targets"
+  mkdir -p "$CICD_LOCK_DIR" "$DOCKER_STATE_DIR" "$(dirname "$DOCKER_LOG")" "$CICD_TARGET_CONFIG_DIR"
   : > "$DOCKER_LOG"
   : > "$AWS_FAKE_LOG"
   export PATH="$SHIMS_DIR:$PATH"
@@ -124,15 +126,91 @@ shim_pre_acquire_lock() {
   mkdir "${lock_file}.d"
 }
 
-# Runs the script under test, capturing stdout/stderr/exit code.
-# Usage: run_script --execution-id ... --unit ... [...]
-run_script() {
+# A fixed 40-hex commit for the --commit-sha argument (audit only in the script).
+TEST_COMMIT_SHA="$(printf 'c%.0s' {1..40})"
+
+# Writes the target-side configuration file of <target-id> from KEY=VALUE lines
+# (design §6.5: the script maps each unit to its own trusted image repository).
+# Usage: write_target_config <target-id> "unit.server.repository=..." ...
+write_target_config() {
+  local target="$1"; shift
+  printf '%s\n' "$@" > "$CICD_TARGET_CONFIG_DIR/${target}.conf"
+}
+
+# Runs the script under test EXACTLY with the given arguments (the design §6.5
+# argument vector the Executor sends), capturing stdout/stderr/exit code.
+run_raw() {
   set +e
   STDOUT_FILE="$SANDBOX_DIR/stdout"
   STDERR_FILE="$SANDBOX_DIR/stderr"
   bash "$SCRIPT_UNDER_TEST" "$@" > "$STDOUT_FILE" 2> "$STDERR_FILE"
   SCRIPT_EXIT=$?
   set -e
+}
+
+# Test-side adapter for the behavioral cases (ordering, restore, pruning, mutex,
+# secrets, idempotency). Each case still states its per-unit settings in the
+# compact form it always used; the adapter writes them to the target
+# configuration file and invokes the script with ONLY the design §6.5 vector:
+#   --lock-key K               -> --target-id K (the target id is the mutex key)
+#   --fencing-token tok-N      -> --fencing-token N (digits only in §6.5)
+#   --artifact C=<repo>@<dig>  -> config unit.C.repository=<repo>, unit.C.container=C;
+#                                 argument --artifact C=<dig>
+#   --port / --health / --runtime-secret C=V -> config unit.C.<field>=V
+#   --migrate C [--migration-check X] [--migration-run Y] -> config unit.C.migrate.*
+#   --migration-mode M         -> config migration-mode=M
+#   --unit U                   -> dropped (not part of §6.5)
+# Any other argument (e.g. a removed flag) is passed through unchanged, so the
+# script's own rejection is what the case observes. The interface itself is
+# tested directly with run_raw (cases/test_interface_v65.sh).
+run_script() {
+  local -a pass_through=()
+  local -A conf=()
+  local -a conf_order=()
+  local target="" execution_id="" token="" mig=""
+  local key value unit ref
+  set_conf() { [[ -n "${conf[$1]+x}" ]] || conf_order+=("$1"); conf["$1"]="$2"; }
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --execution-id) execution_id="$2"; shift 2 ;;
+      --unit) shift 2 ;;
+      --lock-key) target="$2"; shift 2 ;;
+      --fencing-token)
+        token="$2"
+        if [[ "$token" =~ ^tok-([0-9]+)$ ]]; then token="${BASH_REMATCH[1]}"; fi
+        shift 2 ;;
+      --artifact)
+        unit="${2%%=*}"; ref="${2#*=}"
+        if [[ "$ref" == *"@"* ]]; then
+          set_conf "unit.${unit}.repository" "${ref%@*}"
+          set_conf "unit.${unit}.container" "$unit"
+          pass_through+=(--artifact "${unit}=${ref##*@}")
+        else
+          pass_through+=(--artifact "${unit}=${ref}")
+        fi
+        shift 2 ;;
+      --port|--health|--runtime-secret)
+        key="${1#--}"; value="$2"
+        set_conf "unit.${value%%=*}.${key}" "${value#*=}"
+        shift 2 ;;
+      --migrate) mig="$2"; set_conf "unit.${mig}.migrate.check" ""; shift 2 ;;
+      --migration-check) set_conf "unit.${mig}.migrate.check" "$2"; shift 2 ;;
+      --migration-run) set_conf "unit.${mig}.migrate.run" "$2"; shift 2 ;;
+      --migration-mode) set_conf "migration-mode" "$2"; shift 2 ;;
+      *) pass_through+=("$1"); shift ;;
+    esac
+  done
+  if [[ -n "$target" && "$target" != */* ]]; then
+    local -a lines=()
+    for key in "${conf_order[@]}"; do lines+=("${key}=${conf[$key]}"); done
+    write_target_config "$target" "${lines[@]}"
+  fi
+  local -a vector=()
+  [[ -n "$target" ]] && vector+=(--target-id "$target")
+  [[ -n "$execution_id" ]] && vector+=(--execution-id "$execution_id")
+  [[ -n "$token" ]] && vector+=(--fencing-token "$token")
+  vector+=(--commit-sha "$TEST_COMMIT_SHA")
+  run_raw "${vector[@]}" "${pass_through[@]}"
 }
 
 container_is_running() {

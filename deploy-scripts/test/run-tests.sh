@@ -70,7 +70,7 @@ run_test "pruning always keeps the previous image (scoped, not host-wide)"    te
 run_test "per-execution temp dir removed on every exit path (0/10/20/30/40/50)" test_temp_env_cleanup
 run_test "CICD_RESULT is the last stdout line and valid JSON"                 test_cicd_result_json
 run_test "runtime secret value never appears in stdout/stderr/logs"          test_secret_not_leaked
-run_test "--previous hint used only when no running container exists"        test_previous_hint
+run_test "previous = the image actually running; none invented when absent"   test_previous_hint
 run_test "HUP ignored during the critical section (best-effort)"             test_hup_ignored
 run_test "idempotent re-run: previous image survives pruning, no re-migration" test_idempotent_rerun
 run_test "pull fails -> exit 10, previous container state untouched"         test_pull_fails_untouched
@@ -83,6 +83,11 @@ run_test "already running these digests -> exit 0, no migration, no stop/rm/run"
 run_test "tag-started running container: previous resolved to a digest, restored and kept by digest" test_previous_resolved_to_digest
 run_test "no RepoDigest: previous restored by image ID, marked unresolved, never a tag" test_previous_unresolved_fallback
 run_test "already-current container is not rolled back by a failure elsewhere"  test_already_current_not_restored
+run_test "§6.5: the exact Executor vector deploys each unit from its configured repository and container" test_v65_executor_vector_deploys
+run_test "§6.5: removed CLI flags are usage errors with no effect"                 test_v65_removed_flags_rejected
+run_test "§6.5: missing or malformed arguments and unknown units are usage errors with no effect" test_v65_bad_arguments_rejected
+run_test "§6.5: a missing or invalid target configuration is a usage error with no effect" test_v65_config_errors_rejected
+run_test "§6.5: works over a non-interactive SSH exec (no TTY or stdin, minimal env, CRLF config)" test_v65_non_interactive_minimal_env
 
 echo
 echo "== summary =="

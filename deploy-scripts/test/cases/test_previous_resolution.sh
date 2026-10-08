@@ -105,7 +105,6 @@ test_already_current_not_restored() {
     --unit demo-unit \
     --artifact "server=$IMG_V2" \
     --artifact "worker=$IMG_V2" \
-    --previous "server=$IMG_V1" \
     --lock-key demo-lock \
     --fencing-token tok-1 \
     --health 'worker=exit 1'

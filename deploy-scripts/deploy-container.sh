@@ -1,11 +1,30 @@
 #!/usr/bin/env bash
 # @akili-spec changes/cicd-executor-poc design §5.3, §6.5, DD-10, DD-11, DD-22, DD-26; requirements FR-13, FR-16 F11-F13/F18
 #
-# Generic target-side deploy script (design §6.5, N-15). Delivered per-execution over
-# SFTP (DD-10) and run on the deploy target. GENERIC: nothing PRMS-specific or
-# project-specific is hardcoded; every unit-specific detail arrives as a CLI
-# argument from the Target Registry (artifacts, ports, migration commands, health
-# checks, secret references).
+# Generic target-side deploy script: the REFERENCE implementation of the design
+# §6.5 interface (AC-02 V1, task R-9a). The target's administrator installs it at
+# the target record's `deployScript` path, owned by an administrator and not
+# writable by the deploy user (V1-R3); the Executor runs it over a non-interactive
+# SSH exec and never delivers it (no SFTP). GENERIC: nothing project-specific is
+# hardcoded.
+#
+# Interface (design §6.5), exactly the vector the Executor sends:
+#   --target-id <id>  --execution-id <id>  --fencing-token <digits>
+#   --commit-sha <40-hex>  --artifact <unit>=sha256:<64-hex>   (repeatable)
+# Every unit-specific detail lives in the TARGET-SIDE configuration file
+# <CICD_TARGET_CONFIG_DIR, default /etc/cicd/targets>/<target-id>.conf, also
+# owned by an administrator (V1-R3). It is parsed as KEY=VALUE lines, never
+# sourced or eval'd:
+#   unit.<unit>.repository=<registry>/<repository>   (required; no tag, no digest)
+#   unit.<unit>.container=<container name>           (required)
+#   unit.<unit>.port=<host:container>                (optional)
+#   unit.<unit>.health=<http(s) URL | command run in the container>   (optional)
+#   unit.<unit>.runtime-secret=<secret reference>    (optional)
+#   unit.<unit>.migrate.check=<command> / unit.<unit>.migrate.run=<command>  (optional)
+#   migration-mode=ephemeral|temp-container          (optional, default ephemeral)
+# The image deployed for a unit is <repository>@<digest>: the repository comes
+# from this trusted file, the digest from the request. An unknown unit, a tag, a
+# missing or invalid configuration is a usage error (exit 2, no effect).
 #
 # Artifacts are immutable (DD-26, FR-13): every artifact reference is
 # <repository>@sha256:<64-hex>; a tag (or anything else) is a usage error (exit
@@ -32,8 +51,8 @@
 # (flock(2) semantics; the OS releases it when the holding process dies -- the
 # lock is the kernel's lock, never the file's existence; never delete the lock
 # file to "release" it). The lock file lives under a deploy-user-owned
-# directory keyed by --lock-key and records executionId, fencingToken, PID and
-# start time for the runbook (§12.1).
+# directory keyed by --target-id and records targetId, executionId,
+# fencingToken, commitSha, PID and start time for the runbook (§12.1).
 #
 # HUP handling: the whole script ignores SIGHUP (superset of "the critical
 # section ignores HUP") so an SSH session hangup never interrupts a migration
@@ -59,6 +78,11 @@ set -euo pipefail
 
 # Ignore session hangup for the whole lifetime of the script (see header).
 trap '' HUP
+
+# A non-interactive SSH exec may start with a short PATH; append (never prepend)
+# the usual system locations so docker, aws and flock resolve as on a login shell.
+PATH="${PATH:+${PATH}:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
 
 # ---------------------------------------------------------------------------
 # Resolve our own path so the locked re-invocation (`--internal-locked`) can
@@ -228,10 +252,14 @@ resolve_running_image() {
 
 # ---------------------------------------------------------------------------
 # Argument parsing (shared between the outer orchestrator and the locked
-# worker; both receive the SAME deploy arguments).
+# worker; both receive the SAME deploy arguments): the design §6.5 vector, then
+# the target-side configuration that maps each unit to its trusted repository
+# and container. Everything is validated BEFORE any effect (before the lock).
 # ---------------------------------------------------------------------------
 
 declare -A NEW_IMAGE=()
+# Kept for the restore/pruning logic below; design §6.5 carries no --previous
+# hint, so it is always empty (the running container is the source of truth).
 declare -A PREV_IMAGE_HINT=()
 declare -A PORT_MAP=()
 declare -A SECRET_REF=()
@@ -240,88 +268,121 @@ MIGRATE_CONTAINERS=()
 MIGRATION_CHECK_CMDS=()
 MIGRATION_RUN_CMDS=()
 MIGRATION_MODE="ephemeral"
+TARGET_ID=""
 EXECUTION_ID=""
-UNIT=""
 LOCK_KEY=""
 FENCING_TOKEN=""
+COMMIT_SHA=""
+declare -A REQUESTED_DIGEST=()
+REQUESTED_UNITS=()
+
+# Same unit grammar as the deploy request schema (artifacts property names).
+UNIT_PATTERN='^[a-z0-9][a-z0-9-]{0,31}$'
+CONFIG_FIELDS=" repository container port health runtime-secret migrate.check migrate.run "
+
+declare -A CONFIG=()
+
+# Reads <CICD_TARGET_CONFIG_DIR>/<target-id>.conf as KEY=VALUE lines (never
+# sourced): blank lines and '#' comments are ignored, CR is stripped, and only
+# the documented keys are accepted.
+load_target_config() {
+  local dir="${CICD_TARGET_CONFIG_DIR:-/etc/cicd/targets}"
+  local file="${dir}/${TARGET_ID}.conf"
+  [[ -f "$file" && -r "$file" ]] || die_usage "no readable target configuration for --target-id '$TARGET_ID' (expected $file)"
+  local line key value field unit_part
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ -z "${line//[[:space:]]/}" || "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ "$line" == *=* ]] || die_usage "target configuration: not a KEY=VALUE line: '$line'"
+    key="${line%%=*}"
+    value="${line#*=}"
+    # A repeated key is refused: a copy-paste mistake must never silently swap a repository.
+    [[ -z "${CONFIG[$key]+x}" ]] || die_usage "target configuration: duplicate key '$key'"
+    if [[ "$key" == "migration-mode" ]]; then
+      CONFIG["$key"]="$value"
+      continue
+    fi
+    [[ "$key" == unit.* ]] || die_usage "target configuration: unknown key '$key'"
+    unit_part="${key#unit.}"
+    field="${unit_part#*.}"
+    unit_part="${unit_part%%.*}"
+    [[ "$unit_part" =~ $UNIT_PATTERN ]] || die_usage "target configuration: invalid unit in key '$key'"
+    [[ "$CONFIG_FIELDS" == *" $field "* ]] || die_usage "target configuration: unknown key '$key'"
+    CONFIG["$key"]="$value"
+  done < "$file"
+}
 
 parse_args() {
-  local current_migrate_idx=-1
+  local unit digest
   while [[ $# -gt 0 ]]; do
+    [[ $# -ge 2 ]] || die_usage "'$1' needs a value"
     case "$1" in
+      --target-id)
+        TARGET_ID="$2"; shift 2 ;;
       --execution-id)
         EXECUTION_ID="$2"; shift 2 ;;
-      --unit)
-        UNIT="$2"; shift 2 ;;
-      --artifact)
-        split_kv "$2"; NEW_IMAGE["$KV_KEY"]="$KV_VAL"; shift 2 ;;
-      --previous)
-        split_kv "$2"; PREV_IMAGE_HINT["$KV_KEY"]="$KV_VAL"; shift 2 ;;
-      --lock-key)
-        LOCK_KEY="$2"; shift 2 ;;
       --fencing-token)
         FENCING_TOKEN="$2"; shift 2 ;;
-      --port)
-        split_kv "$2"; PORT_MAP["$KV_KEY"]="$KV_VAL"; shift 2 ;;
-      --runtime-secret)
-        split_kv "$2"; SECRET_REF["$KV_KEY"]="$KV_VAL"; shift 2 ;;
-      --migrate)
-        MIGRATE_CONTAINERS+=("$2")
-        MIGRATION_CHECK_CMDS+=("")
-        MIGRATION_RUN_CMDS+=("")
-        current_migrate_idx=$(( ${#MIGRATE_CONTAINERS[@]} - 1 ))
+      --commit-sha)
+        COMMIT_SHA="$2"; shift 2 ;;
+      --artifact)
+        split_kv "$2"
+        unit="$KV_KEY"; digest="$KV_VAL"
+        [[ "$unit" =~ $UNIT_PATTERN ]] || die_usage "--artifact unit must match $UNIT_PATTERN: '$unit'"
+        [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die_usage "--artifact $unit must be sha256:<64-hex> (no repository, no tag): '$digest'"
+        [[ -z "${REQUESTED_DIGEST[$unit]+x}" ]] || die_usage "--artifact unit '$unit' given twice"
+        REQUESTED_DIGEST["$unit"]="$digest"
+        REQUESTED_UNITS+=("$unit")
         shift 2 ;;
-      --migration-check)
-        if [[ $current_migrate_idx -lt 0 ]]; then
-          die_usage "--migration-check given before any --migrate"
-        fi
-        MIGRATION_CHECK_CMDS[$current_migrate_idx]="$2"
-        shift 2 ;;
-      --migration-run)
-        if [[ $current_migrate_idx -lt 0 ]]; then
-          die_usage "--migration-run given before any --migrate"
-        fi
-        MIGRATION_RUN_CMDS[$current_migrate_idx]="$2"
-        shift 2 ;;
-      --migration-mode)
-        MIGRATION_MODE="$2"; shift 2 ;;
-      --health)
-        split_kv "$2"; HEALTH_CHECK["$KV_KEY"]="$KV_VAL"; shift 2 ;;
       *)
         die_usage "unknown argument '$1'" ;;
     esac
   done
 
+  [[ -n "$TARGET_ID" ]] || die_usage "--target-id is required"
   [[ -n "$EXECUTION_ID" ]] || die_usage "--execution-id is required"
-  [[ -n "$UNIT" ]] || die_usage "--unit is required"
-  [[ -n "$LOCK_KEY" ]] || die_usage "--lock-key is required"
   [[ -n "$FENCING_TOKEN" ]] || die_usage "--fencing-token is required"
-  [[ ${#NEW_IMAGE[@]} -gt 0 ]] || die_usage "at least one --artifact is required"
-  case "$MIGRATION_MODE" in
-    ephemeral|temp-container) ;;
-    *) die_usage "--migration-mode must be 'ephemeral' or 'temp-container'" ;;
+  [[ -n "$COMMIT_SHA" ]] || die_usage "--commit-sha is required"
+  [[ ${#REQUESTED_UNITS[@]} -gt 0 ]] || die_usage "at least one --artifact is required"
+  [[ "$FENCING_TOKEN" =~ ^[0-9]{1,20}$ ]] || die_usage "--fencing-token must be digits: '$FENCING_TOKEN'"
+  [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || die_usage "--commit-sha must be 40 lowercase hex characters: '$COMMIT_SHA'"
+
+  # These identifiers become part of filesystem paths (lock file, configuration
+  # file, per-execution tmp dir, temp-container names).
+  validate_token "--target-id" "$TARGET_ID"
+  validate_token "--execution-id" "$EXECUTION_ID"
+  # The target id is the mutex key (design §1.2, §6.5).
+  LOCK_KEY="$TARGET_ID"
+
+  load_target_config
+  case "${CONFIG[migration-mode]:-ephemeral}" in
+    ephemeral|temp-container) MIGRATION_MODE="${CONFIG[migration-mode]:-ephemeral}" ;;
+    *) die_usage "target configuration: migration-mode must be 'ephemeral' or 'temp-container'" ;;
   esac
 
-  # Validated BEFORE any effect (before the lock is even attempted): these
-  # identifiers become part of filesystem paths (lock file, per-execution
-  # tmp dir, temp-container names) or docker name filters.
-  validate_token "--execution-id" "$EXECUTION_ID"
-  validate_token "--lock-key" "$LOCK_KEY"
-  local name
-  for name in "${!NEW_IMAGE[@]}" "${!PREV_IMAGE_HINT[@]}" "${!PORT_MAP[@]}" \
-              "${!SECRET_REF[@]}" "${!HEALTH_CHECK[@]}" "${MIGRATE_CONTAINERS[@]:-}"; do
-    if [[ -n "$name" ]]; then
-      validate_token "container name" "$name"
+  # Map each requested unit to its configured repository and container.
+  local repository container
+  declare -A seen_container=()
+  for unit in "${REQUESTED_UNITS[@]}"; do
+    repository="${CONFIG[unit.${unit}.repository]:-}"
+    container="${CONFIG[unit.${unit}.container]:-}"
+    [[ -n "$repository" ]] || die_usage "unit '$unit' is not configured for target '$TARGET_ID' (no unit.$unit.repository)"
+    [[ -n "$container" ]] || die_usage "unit '$unit' has no unit.$unit.container in the target configuration"
+    # A repository, never a tag or digest: the digest always comes from the request.
+    [[ "$repository" != *"@"* && "${repository##*/}" != *":"* ]] || die_usage "unit.$unit.repository must not carry a tag or digest: '$repository'"
+    validate_token "unit.$unit.container" "$container"
+    [[ -z "${seen_container[$container]+x}" ]] || die_usage "units share the container '$container'"
+    seen_container["$container"]=1
+    NEW_IMAGE["$container"]="${repository}@${REQUESTED_DIGEST[$unit]}"
+    validate_artifact_ref "unit.$unit.repository" "${NEW_IMAGE[$container]}"
+    [[ -n "${CONFIG[unit.${unit}.port]+x}" ]] && PORT_MAP["$container"]="${CONFIG[unit.${unit}.port]}"
+    [[ -n "${CONFIG[unit.${unit}.health]+x}" ]] && HEALTH_CHECK["$container"]="${CONFIG[unit.${unit}.health]}"
+    [[ -n "${CONFIG[unit.${unit}.runtime-secret]+x}" ]] && SECRET_REF["$container"]="${CONFIG[unit.${unit}.runtime-secret]}"
+    if [[ -n "${CONFIG[unit.${unit}.migrate.check]+x}" || -n "${CONFIG[unit.${unit}.migrate.run]+x}" ]]; then
+      MIGRATE_CONTAINERS+=("$container")
+      MIGRATION_CHECK_CMDS+=("${CONFIG[unit.${unit}.migrate.check]:-}")
+      MIGRATION_RUN_CMDS+=("${CONFIG[unit.${unit}.migrate.run]:-}")
     fi
-  done
-
-  # Artifact and previous-image references must be immutable digests (DD-26).
-  # Still before any effect (before the lock is attempted).
-  for name in "${!NEW_IMAGE[@]}"; do
-    validate_artifact_ref "--artifact $name" "${NEW_IMAGE[$name]}"
-  done
-  for name in "${!PREV_IMAGE_HINT[@]}"; do
-    validate_artifact_ref "--previous $name" "${PREV_IMAGE_HINT[$name]}"
   done
   return 0
 }
@@ -525,6 +586,9 @@ write_result_and_exit() {
     fi
   done
   for c in "${!RESTORE_IMAGE[@]}"; do
+    # No known previous image (no container yet, or an idempotent re-run): report
+    # nothing for it rather than an empty string the Executor would store.
+    [[ -n "${RESTORE_IMAGE[$c]}" ]] || continue
     previous_report["$c"]="${RESTORE_IMAGE[$c]}"
     if [[ -n "${UNRESOLVED_PREV[$c]:-}" ]]; then
       previous_report["$c"]="unresolved:${RESTORE_IMAGE[$c]}"
@@ -568,8 +632,10 @@ main_inner() {
   # PID, start time. Writing content does not disturb the kernel lock itself
   # (a different open, same inode) -- never delete this file to "release" it.
   {
+    printf 'targetId=%s\n' "$TARGET_ID"
     printf 'executionId=%s\n' "$EXECUTION_ID"
     printf 'fencingToken=%s\n' "$FENCING_TOKEN"
+    printf 'commitSha=%s\n' "$COMMIT_SHA"
     printf 'pid=%s\n' "$$"
     printf 'startTime=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$LOCK_FILE" 2>/dev/null || true
@@ -577,8 +643,8 @@ main_inner() {
   local container
 
   # 1. Discover the image ACTUALLY running per container. The authoritative
-  #    source for restoring is this, never DynamoDB/--previous (design §6.5).
-  #    --previous is used only as a hint when the container does not exist.
+  #    source for restoring is this, never DynamoDB (design §6.5). The
+  #    PREV_IMAGE_HINT map is always empty in V1 (no --previous in §6.5).
   for container in "${!NEW_IMAGE[@]}"; do
     local running
     running="$(docker_running_image "$container")"
@@ -594,8 +660,8 @@ main_inner() {
         # already is the requested digest. Docker state no longer exposes the
         # real previous (N-1) image, so RESTORE_IMAGE must NOT become
         # "$running" (it would equal NEW_IMAGE, collapse the keep-set and let
-        # pruning delete the real previous image). Keep the --previous hint
-        # as keep candidate; with no hint, skip pruning for this container.
+        # pruning delete the real previous image). With no hint (always
+        # the case in V1), skip pruning for this container.
         ALREADY_CURRENT["$container"]=1
         if [[ -n "${PREV_IMAGE_HINT[$container]:-}" ]]; then
           RESTORE_IMAGE["$container"]="${PREV_IMAGE_HINT[$container]}"
@@ -668,7 +734,7 @@ main_inner() {
   done
 
   # 7. Pruning: always keeps current and previous; never a host-wide prune.
-  #    Skipped for idempotent re-runs with no --previous hint (see step 1):
+  #    Skipped for idempotent re-runs (no previous hint in V1, see step 1):
   #    with no safe keep candidate, the safe default is to touch nothing.
   for container in "${!NEW_IMAGE[@]}"; do
     [[ -n "${SKIP_PRUNE[$container]:-}" ]] && continue

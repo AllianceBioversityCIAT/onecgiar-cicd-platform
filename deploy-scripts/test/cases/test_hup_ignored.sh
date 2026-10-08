@@ -22,16 +22,19 @@ test_hup_ignored() {
 
   shim_set_running "server" "$IMG_V1"
 
+  # design §6.5 vector; the slow migration comes from the target configuration (task R-9a).
+  write_target_config demo-lock \
+    "unit.server.repository=${IMG_V2%@*}" \
+    "unit.server.container=server" \
+    "unit.server.migrate.check=exit 1" \
+    "unit.server.migrate.run=sleep 1; exit 0"
   local out="$SANDBOX_DIR/hup_stdout" err="$SANDBOX_DIR/hup_stderr"
   bash "$SCRIPT_UNDER_TEST" \
+    --target-id demo-lock \
     --execution-id "t14-hup-$$-$RANDOM" \
-    --unit demo-unit \
-    --artifact server=$IMG_V2 \
-    --lock-key demo-lock \
-    --fencing-token tok-1 \
-    --migrate server \
-    --migration-check "exit 1" \
-    --migration-run "sleep 1; exit 0" \
+    --fencing-token 1 \
+    --commit-sha "$TEST_COMMIT_SHA" \
+    --artifact "server=${IMG_V2##*@}" \
     > "$out" 2> "$err" &
   local script_pid=$!
 

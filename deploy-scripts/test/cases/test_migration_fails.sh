@@ -13,7 +13,6 @@ test_migration_fails() {
     --execution-id "t14-migfail-$$-$RANDOM" \
     --unit demo-unit \
     --artifact server=$IMG_V2 \
-    --previous server=$IMG_V1 \
     --lock-key demo-lock \
     --fencing-token tok-1 \
     --migrate server \

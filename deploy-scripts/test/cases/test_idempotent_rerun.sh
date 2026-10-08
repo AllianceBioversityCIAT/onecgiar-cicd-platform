@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # FR-13 "previous image" + "script idempotency" scenarios, together:
 # GIVEN the script run twice with the same images (v1 -> v2, then v2 -> v2
-#       again, with the SAME --previous hint the caller would still supply)
-# THEN the second result is equivalent to the first (no second migration,
-#      deployedImages/previousImages unchanged) AND N's image (v1) remains
+#       again; design §6.5 carries no --previous hint, task R-9a)
+# THEN the second run deploys nothing new (no second migration, deployedImages
+#      unchanged, no previous image invented since §6.5 has no hint) AND N's image (v1) remains
 #      available on the host in BOTH outcomes -- a re-run's pruning must not
 #      delete it just because the "previous" slot now looks like "current".
 test_idempotent_rerun() {
@@ -17,7 +17,6 @@ test_idempotent_rerun() {
     --execution-id "t14-idemp-1-$$-$RANDOM" \
     --unit demo-unit \
     --artifact server=$IMG_V2 \
-    --previous server=$IMG_V1 \
     --lock-key demo-lock \
     --fencing-token tok-1 \
     --migrate server --migration-check "exit 0"
@@ -46,14 +45,13 @@ test_idempotent_rerun() {
   local docker_log_lines_after_first
   docker_log_lines_after_first="$(wc -l < "$DOCKER_LOG")"
 
-  # --- second run: SAME args (caller still passes --previous server=$IMG_V1,
+  # --- second run: SAME args (the Executor sends the same §6.5 vector again;
   #     exactly as a real caller would, since DynamoDB's view of "previous"
   #     does not change just because this run turns out to be a no-op) ---
   run_script \
     --execution-id "t14-idemp-2-$$-$RANDOM" \
     --unit demo-unit \
     --artifact server=$IMG_V2 \
-    --previous server=$IMG_V1 \
     --lock-key demo-lock \
     --fencing-token tok-1 \
     --migrate server --migration-check "exit 0"
@@ -63,13 +61,15 @@ test_idempotent_rerun() {
   local json_2; json_2="$(cicd_result_json)"
   local deployed_2 previous_2 migrations_2
   deployed_2="$(json_get "$json_2" "deployedImages.server")" || deployed_2="<missing>"
-  previous_2="$(json_get "$json_2" "previousImages.server")" || previous_2="<missing>"
+  previous_2="$(json_get "$json_2" "previousImages.server")" || previous_2="<absent>"
   migrations_2="$(json_get "$json_2" "migrations")" || migrations_2="<missing>"
 
-  if [[ "$deployed_2" == "$deployed_1" && "$previous_2" == "$previous_1" ]]; then
-    pass "second run: result is equivalent to the first (deployedImages/previousImages unchanged)"
+  # Without a hint the no-op re-run cannot know the real previous image any more, so it reports none
+  # (never invents one) and skips pruning; the deployed image is unchanged.
+  if [[ "$deployed_2" == "$deployed_1" && "$previous_2" == "<absent>" ]]; then
+    pass "second run: deployedImages unchanged; previousImages has no entry (nothing invented, no empty value stored; no hint in §6.5)"
   else
-    fail "second run: NOT equivalent to the first (first: deployed=$deployed_1 previous=$previous_1 / second: deployed=$deployed_2 previous=$previous_2)"
+    fail "second run: unexpected (first: deployed=$deployed_1 previous=$previous_1 / second: deployed=$deployed_2 previous=$previous_2)"
     ok=1
   fi
 
