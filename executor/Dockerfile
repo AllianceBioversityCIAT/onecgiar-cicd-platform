@@ -50,14 +50,14 @@
 # injected at build time"; FR-01: definitionRef recorded per execution): pass
 # the platform repo commit at build time with
 # `--build-arg DEFINITION_REF=$(git rev-parse HEAD)`. Omitting it leaves
-# CICD_DEFINITION_REF empty; because this runtime stage sets NODE_ENV=production,
-# BundledDefinitionSource then REFUSES TO START (requireInjectedRef defaults
-# to NODE_ENV==="production") instead of silently falling back to a dev
-# sentinel — a production container must never run with an unverified
-# definitionRef.
+# CICD_DEFINITION_REF empty. AC-02 V1 (R-6): the Executor no longer loads
+# definitions at startup (only schemas/ through BundledSchemaSource), so an
+# empty value no longer prevents startup; the build argument, the definition
+# directories and BundledDefinitionSource are removed by R-9.
 #
 # CICD_DEFINITIONS_ROOT: set below to the image filesystem root, where
 # deployment-definitions/, schemas/ and deploy-scripts/ are copied (DD-19).
+# AC-02 V1 (R-6): startup reads only /schemas from it.
 # BundledDefinitionSource reads this explicitly rather than relying on its
 # walk-up search, which remains only as a dev-local fallback when the env
 # var is absent.
@@ -104,10 +104,10 @@ COPY --from=builder --chown=executor:executor /build/dist ./dist
 
 # DD-19 (PoC simplification): deployment-definitions/, schemas/ and
 # deploy-scripts/ are packaged into the image at build time, at the image
-# filesystem ROOT — a sibling of /app. BundledDefinitionSource is told this
-# explicitly via CICD_DEFINITIONS_ROOT=/ below (its dev-only walk-up, which
-# looks for an ancestor directory containing both deployment-definitions/ and
-# schemas/, is not relied upon here).
+# filesystem ROOT — a sibling of /app. AC-02 V1 (R-6): at runtime only
+# BundledSchemaSource reads it (schemas/ only), told explicitly via
+# CICD_DEFINITIONS_ROOT=/ below (its dev-only walk-up is not relied upon
+# here); the definition directories are removed by R-9.
 COPY --chown=executor:executor deployment-definitions /deployment-definitions
 COPY --chown=executor:executor schemas /schemas
 COPY --chown=executor:executor deploy-scripts /deploy-scripts

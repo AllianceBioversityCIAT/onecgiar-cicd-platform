@@ -1,13 +1,13 @@
-// @akili-spec changes/cicd-executor-poc design §3.3, §4.2, §6.2, §7 (all module rows), §12, DD-14, DD-16, DD-19, DD-23, DD-25; requirements FR-04, FR-05, FR-14, FR-15, FR-21, NFR-03, NFR-04
+// @akili-spec changes/cicd-executor-poc design §1.2, §3.3, §4.2, §7 (all module rows), §12, DD-14, DD-16, DD-19 (superseded in V1), DD-23, DD-25; architecture-change-02 AC2-6, AC2-7; requirements FR-04, FR-05, FR-14, FR-15, FR-21, NFR-03, NFR-04; tasks R-6
 // Composition root (N-17b): wires ports to adapters and services, in the
 // order of design §4.2. Pure wiring: every business rule lives in the module
 // it names. Order matters:
 //   1. configuration (fail fast, all problems at once);
-//   2. every definition file is discovered, parsed (`listDeploymentIds` throws
-//      a `DefinitionLoadError` naming each bad file) and `validateForStartup`
-//      runs over EVERY bundled deployment definition: a partially valid set
-//      prevents startup (design §6.2, DD-23; owner decision 2026-10-06). Definitions are
-//      served to the core ONLY from that validated result (`StartupCatalog`);
+//   2. platform configuration (AC-02 V1, R-6): the principal refs resolve to
+//      role IDs and the platform Slack channel and token secrets must exist
+//      (AC2-6, AC2-7); a missing one prevents startup naming the ref. No
+//      Deployment Definition is loaded and no target is read: zero targets is
+//      a valid starting state. Only the bundled `schemas/` are read;
 //   3. adapters and services, the consumer last (nothing is read from the
 //      queue before everything it can reach is wired).
 // AWS credentials come from the SDK standard chain (DD-16; OD-Q12 open): no
@@ -16,11 +16,10 @@
 // AC-02 V1 (R-4, R-5): requests and the deploy path never use a definition.
 // The router resolves the named target with one GetItem on the Target
 // Registry (R-3) and authorizes its source repository (option A); the deploy
-// path runs from the execution snapshot. The definition startup validation
-// above stays until R-6.
+// path runs from the execution snapshot.
 import { SQSClient } from "@aws-sdk/client-sqs";
 import type { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
-import { BundledDefinitionSource } from "../adapters/bundled-definition-source/index.js";
+import { BundledSchemaSource } from "../adapters/bundled-schema-source/index.js";
 import {
   DeployTransactions,
   DeployWindowRepository,
@@ -41,10 +40,10 @@ import { Ssh2DeployTransport } from "../adapters/ssh-deployer/index.js";
 import { DynamoDbTargetRegistry } from "../adapters/dynamodb-target-registry/index.js";
 import { createDeployCoordinator, DEFAULT_SSH_CONCURRENCY, Semaphore } from "../application/deploy-coordinator/index.js";
 import { DeployWindowService, TargetResolutionService } from "../application/deploy-window-service/index.js";
-import { DefinitionValidationError, validateForStartup, UnresolvedReferenceError } from "../application/definition-service/index.js";
 import { createExecutionService } from "../application/execution-service/index.js";
 import { createMessageValidators, routeMessage } from "../application/message-router/index.js";
 import { createNotificationService } from "../application/notification-service/index.js";
+import { resolvePlatformConfig } from "../application/platform-config/index.js";
 import { createReconciler } from "../application/reconciler/index.js";
 import { createSenderAuthorizer } from "../application/sender-authorizer/index.js";
 import { createSqsConsumer, type InboundMessage } from "../inbound/sqs-consumer/index.js";
@@ -60,12 +59,11 @@ import {
   type MetricsSink,
 } from "../observability/index.js";
 import type { Clock } from "../ports/clock.js";
-import type { DefinitionSource } from "../ports/definition-source.js";
 import type { DeployTransport } from "../ports/deploy-transport.js";
 import type { NotificationProvider } from "../ports/notification-provider.js";
 import type { QueuePublisher } from "../ports/queue-publisher.js";
+import type { SchemaSource } from "../ports/schema-source.js";
 import type { SecretProvider } from "../ports/secret-provider.js";
-import { attributeToFiles } from "./definition-diagnosis.js";
 import {
   createExecutionLookup,
   createLockOwnerLookup,
@@ -77,14 +75,6 @@ import { loadConfig, type ExecutorConfig } from "../composition/config.js";
 import { createMessageHandlers, withNotifications } from "../composition/handlers.js";
 import { createLifecycleNotifier } from "../composition/lifecycle-notifier.js";
 import { createPendingTasks } from "../composition/pending-tasks.js";
-
-/** A `DefinitionSource` that can also enumerate the deployment ids it bundles (a property of the adapter, not of the port). */
-export type EnumerableDefinitionSource = DefinitionSource & {
-  /** Fails fast (a `DefinitionLoadError`) when any definition file cannot be loaded (owner decision 2026-10-06). */
-  listDeploymentIds(): Promise<readonly string[]>;
-  /** Optional: which file declares each deployment (used only to name the file in a startup validation error). */
-  scanDefinitions?(): Promise<{ readonly deployments: readonly { readonly deploymentId: string; readonly file: string }[] }>;
-};
 
 /** The queue consumer seam: production is `createSqsConsumer`; the composition test substitutes an in-memory queue. */
 export interface ConsumerHandle {
@@ -100,7 +90,8 @@ export interface BootstrapOptions {
   readonly logSink?: LogSink & { flush?(): Promise<void> | void };
   readonly metricsSink?: MetricsSink;
   readonly healthcheckWriter?: HealthcheckWriter;
-  readonly definitions?: EnumerableDefinitionSource;
+  /** The bundled JSON Schemas; default: `schemas/` under `CICD_DEFINITIONS_ROOT` (AC-02 V1: nothing else is read from it). */
+  readonly schemas?: SchemaSource;
   readonly documentClient?: DynamoDBDocumentClient;
   /** Replaces the SSH transport (the composition test uses a fake). */
   readonly createTransport?: () => DeployTransport;
@@ -118,7 +109,6 @@ export interface BootstrapOptions {
 
 export interface Executor {
   readonly config: ExecutorConfig;
-  readonly deploymentIds: readonly string[];
   /** Routes one raw message exactly as the consumer would (used by the consumer and by tests). */
   handle(message: InboundMessage): Promise<{ ack: boolean }>;
   start(): Promise<void>;
@@ -138,22 +128,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
   const metrics = createMetrics({ sink: options.metricsSink ?? stdoutSink, clock });
   const secrets = options.secrets;
 
-  // 2. Startup validation over ALL bundled definitions (design §6.2). Any failure prevents startup.
-  const definitions: EnumerableDefinitionSource =
-    options.definitions ?? new BundledDefinitionSource({ env: { ...options.env, ...(config.definitionsRoot === undefined ? {} : { CICD_DEFINITIONS_ROOT: config.definitionsRoot }) } });
-  const deploymentIds = await definitions.listDeploymentIds();
-  if (deploymentIds.length === 0) throw new Error("refusing to start: no deployment definitions were found (design §6.2)");
-  let startup;
-  try {
-    startup = await validateForStartup({ definitionSource: definitions, secretProvider: secrets, principalRefs: config.principalRefs }, deploymentIds);
-  } catch (error) {
-    if (!(error instanceof DefinitionValidationError) || definitions.scanDefinitions === undefined) throw error;
-    const scan = await definitions.scanDefinitions();
-    throw await attributeToFiles(definitions, new Map(scan.deployments.map((d) => [d.deploymentId, d.file])), error);
-  }
-  for (const ref of [config.platformSlack.channelRef, config.platformSlack.tokenRef]) {
-    if (!(await secrets.exists(ref))) throw new UnresolvedReferenceError(ref);
-  }
+  // 2. Platform configuration (AC2-6, AC2-7) and the bundled schemas. Any failure prevents startup.
+  const platform = await resolvePlatformConfig(secrets, { principalRefs: config.principalRefs, platformSlack: config.platformSlack });
+  const schemas = options.schemas ?? new BundledSchemaSource(config.definitionsRoot === undefined ? {} : { root: config.definitionsRoot });
+  const validators = await createMessageValidators(schemas);
+  const targetRecordSchema = JSON.parse((await schemas.getSchema("target-record.schema.json")).content) as object;
 
   // 3. Adapters over the single table (design §5.1).
   const client = options.documentClient ?? createDocumentClient({ tableName: config.tableName, region: config.region, ...(config.dynamoEndpoint === undefined ? {} : { endpoint: config.dynamoEndpoint }) });
@@ -169,7 +148,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
   const registry = new DynamoDbTargetRegistry({
     client,
     tableName: config.registryTableName,
-    schema: JSON.parse((await definitions.getSchema("target-record.schema.json")).content) as object,
+    schema: targetRecordSchema,
   });
 
   const sqs = options.publisher === undefined || options.createConsumer === undefined ? new SQSClient({ region: config.region }) : undefined;
@@ -241,8 +220,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
 
   // 5. Router: sender authorization (DD-25: the shared CI role and the platform principals), the Target Registry
   //    lookup and source authorization (option A), handlers bound to the services.
-  const validators = await createMessageValidators(definitions);
-  const authorizer = createSenderAuthorizer({ principals: startup.resolvedPrincipals, metrics });
+  const authorizer = createSenderAuthorizer({ principals: platform.principals, metrics });
   const handlers = createMessageHandlers({ executionService, coordinator, reconciler, windows, resolution, notifier, metrics, logger, pending });
   const routerDeps = { validators, authorizer, targets: registry, dedupe, clock, handlers };
 
@@ -262,7 +240,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
   }
 
   // 6. Consumer and liveness (design §12): the heartbeat metric and the healthcheck file; the consumer keeps SQS visibility alive (DD-14).
-  // NFR-04: one long deploy (up to the definition timeout) occupies a poller for its whole run, because the consumer awaits its
+  // NFR-04: one long deploy (up to the deploy timeout) occupies a poller for its whole run, because the consumer awaits its
   // handlers before polling again. A single poller would therefore starve every other deployment's lock retries, so the
   // composition runs several independent single-message pollers: one per SSH slot (the semaphore bound) plus two reserved for
   // lock retries, reconcile ticks and window events. `maxMessages` stays 1 on purpose: a batch would be held until its slowest
@@ -286,12 +264,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
   let stopping: Promise<void> | undefined;
   return {
     config,
-    deploymentIds,
     handle,
     async start() {
       heartbeat.start();
       await Promise.all(consumers.map((c) => c.start()));
-      logger.info("executor started", { deployments: deploymentIds.length });
+      logger.info("executor started");
     },
     stop() {
       stopping ??= (async () => {

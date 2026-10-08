@@ -6,7 +6,7 @@
 // standard chain; OD-Q12 stays open). Every problem is collected and reported
 // at once so a misconfigured deployment fails fast with ONE clear message.
 import { secretIdPrefixProblem } from "../adapters/secrets-manager-provider/index.js";
-import type { PlatformPrincipalRefs } from "../application/definition-service/index.js";
+import type { PlatformPrincipalRefs } from "../application/platform-config/index.js";
 
 export class ConfigError extends Error {
   public readonly problems: readonly string[];
@@ -25,7 +25,7 @@ export interface ExecutorConfig {
   readonly region: string;
   /** Non-AWS endpoint override (DynamoDB Local / emulators); absent in AWS. */
   readonly dynamoEndpoint?: string;
-  /** Root holding `deployment-definitions/`, `schemas/`, `deploy-scripts/` (read by the bundled DefinitionSource itself). */
+  /** Root holding the bundled `schemas/` (AC-02 V1, R-6: the only content the Executor reads from it; the variable keeps its name until R-9). */
   readonly definitionsRoot?: string;
   readonly principalRefs: PlatformPrincipalRefs;
   /** Platform channel and token (logical refs) for REJECTED notifications (design §6.6). */

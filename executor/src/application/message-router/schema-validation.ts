@@ -2,14 +2,14 @@
 // Ajv wiring to validate a parseable message against the repo-root
 // schemas/deploy-request.schema.json (DEPLOY_REQUESTED) and
 // schemas/event.schema.json (internal events). Both schemas are obtained
-// through the `DefinitionSource` port (DD-19, CLAUDE.md rule 5) and compiled
-// once at startup, never rebuilt per message. The rules live only in the
+// through the `SchemaSource` port (AC-02 V1, R-6: the bundled `schemas/`) and
+// compiled once at startup, never rebuilt per message. The rules live only in the
 // schemas ("reuse it, do not duplicate the rules").
 import type { Ajv2020 } from "ajv/dist/2020.js";
 import type { ValidateFunction } from "ajv";
 import type { FormatsPluginOptions } from "ajv-formats";
 import { createRequire } from "node:module";
-import type { DefinitionSource } from "../../ports/definition-source.js";
+import type { SchemaSource } from "../../ports/schema-source.js";
 
 // ajv and ajv-formats are CommonJS packages: see
 // executor/test/contract/support/ajv-factory.ts for the NodeNext interop note.
@@ -51,13 +51,13 @@ function toValidator(validate: ValidateFunction): MessageSchemaValidator {
   };
 }
 
-export async function createMessageValidators(definitionSource: DefinitionSource): Promise<MessageValidators> {
+export async function createMessageValidators(schemaSource: SchemaSource): Promise<MessageValidators> {
   // strictRequired is disabled: the per-type oneOf branches `require` properties declared in the same branch.
   const ajv = new Ajv2020Ctor({ allErrors: true, strict: true, strictRequired: false });
   addFormats(ajv);
   const [request, event] = await Promise.all([
-    definitionSource.getSchema(DEPLOY_REQUEST_SCHEMA_NAME),
-    definitionSource.getSchema(EVENT_SCHEMA_NAME),
+    schemaSource.getSchema(DEPLOY_REQUEST_SCHEMA_NAME),
+    schemaSource.getSchema(EVENT_SCHEMA_NAME),
   ]);
   return {
     deployRequest: toValidator(ajv.compile(JSON.parse(request.content) as object)),

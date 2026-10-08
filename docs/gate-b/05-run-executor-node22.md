@@ -280,7 +280,7 @@ Edit `executor/.local/executor.env` (ignored by Git). Format: `KEY=VALUE`, one p
 | `CICD_PLATFORM_SLACK_CHANNEL_REF`, `CICD_PLATFORM_SLACK_TOKEN_REF` | Logical refs for the platform notifications |
 | `CICD_SECRET_ID_PREFIX` | The stack's `SecretIdPrefix`, exactly (e.g. `cicd-poc/dev/`) |
 | `CICD_LOGS_URL_TEMPLATE` (contains `{executionId}`), `CICD_RUNBOOK_URL` | Any HTTPS URLs you control (links shown in Slack) |
-| `CICD_DEFINITIONS_ROOT` | **Absolute** path of `executor\.local\definitions` ([04](04-definitions-and-target.md)) |
+| `CICD_DEFINITIONS_ROOT` | **Absolute** path of a directory that contains `schemas/` (for example `executor\.local\definitions` from [04](04-definitions-and-target.md), or the repository root). AC-02 V1 (R-6): the Executor reads only `schemas/` from it; any `deployment-definitions/` there is ignored. The variable keeps its name until R-9 |
 | `CICD_HEALTHCHECK_PATH` | Recommended on Windows: an absolute path such as `<REPO_ROOT>\executor\.local\cicd-executor.health` (the default `/tmp/...` may not be writable) |
 | `CICD_DYNAMODB_ENDPOINT` | **Leave unset.** It points the Executor at a local emulator; the launcher refuses it |
 
@@ -304,7 +304,7 @@ Expected, one per line: `run-executor (dry run): nothing is started`, `node: <pa
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/gate-b/run-executor.ps1
 ```
 
-Expected, in the console (JSON lines): a line with the message `executor started` and `"deployments":<N>` with N equal to your number of definitions, then a heartbeat roughly every minute. There is no separate "definitions validated" line: startup validation succeeded when `executor started` appears. A refusal prints `executor refused to start: <message>` and exits 1.
+Expected, in the console (JSON lines): a line with the message `executor started`, then a heartbeat roughly every minute. AC-02 V1 (R-6): startup loads no Deployment Definition and reads no target, so it succeeds with zero targets in the registry; it only resolves the four principal refs and checks that the platform Slack channel and token secrets exist (AC2-6, AC2-7). A refusal prints `executor refused to start: <message>` and exits 1.
 
 Do not pipe the launcher through `tee` or another process: it can interfere with Ctrl+C delivery to Node and the ordered stop. Keep the console scrollback if you need a record, and copy the relevant lines (sanitized) afterwards.
 
@@ -336,8 +336,7 @@ Observe liveness from the console log (heartbeat lines) and the healthcheck file
 | `executor refused to start: ... <PLACEHOLDER> ...` naming a logical ref | The secret for that ref does not exist or is not readable under `CICD_SECRET_ID_PREFIX`. Create it ([02](02-secrets.md)); check the prefix equals the stack's `SecretIdPrefix` and ends with `/` |
 | `AccessDeniedException` on a secret | The secret is outside the prefix, or the prefix differs from the stack parameter |
 | `invalid Executor configuration: ...` | A required variable is empty or a ref is not in `<UPPER_SNAKE>` form; all problems are listed at once |
-| `executor refused to start: N definition file(s) cannot be loaded` or `... definition validation issue(s)`, followed by one line per file with the reason | The Executor refuses to start on any unparsable or invalid definition file, the duplicate of a `deploymentId`, a file without `deploymentId` (other than the target registry), or any entry under `deployment-definitions/` that is not a regular directory or a lowercase `.yaml`/`.yml` file (README, `.bak`, `.YAML`, symbolic links). Each line names the file (relative to the definitions root) and the reason, never its content. Fix that file and start again; run `definitions:check` as the preflight |
-| Definitions refused at startup for a value `definitions:check` accepted (unsafe value, migration command with line breaks) | Fix the definition; `definitions:check` does not catch every case (limitation K-3). The startup validation is the authority |
+| `executor refused to start: schema not found: "<name>.schema.json"` | `CICD_DEFINITIONS_ROOT` does not point at a directory that contains `schemas/` |
 | `refusing to run: Node major 22 is required` | Wrong binary; check `executor/.local/node22/node.exe --version` |
 | `RequestTimeTooSkewed` / `SignatureDoesNotMatch` | System clock off by more than about five minutes. Resync Windows time |
 | Timeouts or connection errors behind a proxy | The AWS SDK does not honor `HTTPS_PROXY` by itself; Node 22.21 and later documents `NODE_USE_ENV_PROXY=1` (verify in the Node docs for your version). The Executor has no proxy code. Put the variables in `executor.env` if you need them |

@@ -1,38 +1,13 @@
 // @akili-spec changes/cicd-executor-poc design §1.2, §6.2, §6.5, §7 (main), DD-19, DD-23; requirements FR-01, FR-21, NFR-01; tasks R-4, R-5 (AC-02 V1)
-// Composition units that need no database: configuration fail-fast, startup validation over ALL bundled
-// definitions (an invalid set prevents startup; removed by R-6), the V1 deploy plan built from the execution
-// snapshot (no definition, no secret resolution), and the router carrying `senderRef` / `sqsMessageId` to the handlers.
-import { readFileSync } from "node:fs";
+// Composition units that need no database: configuration fail-fast (the V1 startup without definitions is
+// covered by startup-fail-fast.test.ts, R-6), the V1 deploy plan built from the execution snapshot (no definition, no secret resolution), and the router carrying `senderRef` / `sqsMessageId` to the handlers.
 import { describe, expect, it } from "vitest";
-import { stringify as stringifyYaml, parse as parseYaml } from "yaml";
 import { loadConfig, ConfigError } from "../../src/composition/config.js";
-import { bootstrap, type EnumerableDefinitionSource } from "../../src/main/bootstrap.js";
-import { DefinitionValidationError } from "../../src/application/definition-service/index.js";
 import { deployPlanOf } from "../../src/application/deploy-coordinator/index.js";
 import { DeployTransactions } from "../../src/adapters/dynamodb-state-store/deploy-transactions.js";
 import { createMessageValidators, routeMessage, type MessageHandlers } from "../../src/application/message-router/index.js";
-import { deployRequestSchemaPath, eventSchemaPath, prmsReportingDevDeploymentYamlPath, targetsDevYamlPath, deploymentSchemaPath, targetsSchemaPath, targetRecordSchemaPath } from "../contract/support/schema-paths.js";
-import { InMemoryDefinitionSource } from "../support/in-memory-definition-source.js";
-import { FakeSecretProvider } from "../support/fake-secret-provider.js";
-import { KNOWN_REFS, bundledDefinitions, fakeSecrets, validEnv } from "../support/composition-fixtures.js";
+import { bundledSchemas, validEnv } from "../support/composition-fixtures.js";
 import type { ExecutionItem } from "../../src/adapters/dynamodb-state-store/types.js";
-
-const read = (p: string): string => readFileSync(p, "utf8");
-
-function inMemory(deployment: string): EnumerableDefinitionSource {
-  const source = new InMemoryDefinitionSource({
-    deployments: { "prms-reporting-dev": deployment },
-    targetRegistry: read(targetsDevYamlPath),
-    schemas: {
-      "deployment.schema.json": read(deploymentSchemaPath),
-      "targets.schema.json": read(targetsSchemaPath),
-      "deploy-request.schema.json": read(deployRequestSchemaPath),
-      "event.schema.json": read(eventSchemaPath),
-      "target-record.schema.json": read(targetRecordSchemaPath),
-    },
-  });
-  return Object.assign(source, { listDeploymentIds: async () => ["prms-reporting-dev"] });
-}
 
 describe("configuration (design §3.3, DD-16, DD-23)", () => {
   it("accepts a complete environment", () => {
@@ -63,28 +38,6 @@ describe("configuration (design §3.3, DD-16, DD-23)", () => {
     expect(loadConfig(validEnv()).secretIdPrefix).toBe("");
     expect(loadConfig(validEnv({ CICD_SECRET_ID_PREFIX: "cicd-poc/dev/" })).secretIdPrefix).toBe("cicd-poc/dev/");
     expect(() => loadConfig(validEnv({ CICD_SECRET_ID_PREFIX: "bad prefix*" }))).toThrowError(/CICD_SECRET_ID_PREFIX/);
-  });
-});
-
-describe("startup validation over ALL bundled definitions (design §6.2)", () => {
-  it("enumerates the bundled definitions", async () => {
-    expect(await bundledDefinitions().listDeploymentIds()).toContain("prms-reporting-dev");
-  });
-
-  it("an invalid definition set prevents startup (falsifier: skipping validateForStartup makes this red)", async () => {
-    const invalid = parseYaml(read(prmsReportingDevDeploymentYamlPath)) as Record<string, unknown>;
-    delete invalid["targetRef"];
-    await expect(
-      bootstrap({ env: validEnv(), secrets: fakeSecrets(), definitions: inMemory(stringifyYaml(invalid)), documentClient: {} as never, publisher: { publish: async () => ({ messageId: "x" }) }, createConsumer: () => ({ start: async () => {}, stop: async () => {} }) }),
-    ).rejects.toBeInstanceOf(DefinitionValidationError);
-  });
-
-  it("an unresolved reference prevents startup", async () => {
-    const partial = { ...KNOWN_REFS };
-    delete partial["<PRMS_REPORTING_CI_ROLE_REF>"];
-    await expect(
-      bootstrap({ env: validEnv(), secrets: new FakeSecretProvider(partial), definitions: inMemory(read(prmsReportingDevDeploymentYamlPath)), documentClient: {} as never }),
-    ).rejects.toThrow(/did not resolve/);
   });
 });
 
@@ -141,7 +94,7 @@ describe("V1 deploy plan from the execution snapshot (design §6.5, NFR-01)", ()
 
 describe("router carries audit data to the handlers (FR-21)", () => {
   it("passes senderRef (role-ID prefix) and the SQS messageId into the rejection", async () => {
-    const validators = await createMessageValidators(inMemory(read(prmsReportingDevDeploymentYamlPath)));
+    const validators = await createMessageValidators(bundledSchemas());
     const rejections: unknown[] = [];
     const handlers = { rejected: async (r: unknown) => void rejections.push(r) } as unknown as MessageHandlers;
     await routeMessage(

@@ -195,7 +195,7 @@ Gate C keeps permanent hosting and operational readiness (container image build 
 
 ## 10a. AC-02 V1 (owner decisions 2026-10-07)
 
-B1 Executor startup is **PENDING** until AC-02 V1 tasks R-1…R-6 are implemented (the Executor can then start with no definitions and zero targets) and the startup prerequisites that remain exist (a real Slack token, AC2-6; the platform identifier references, AC2-7). Deployments wait for the first real target record and its real credential. No sentinel or example secrets are created (owner direction). See `architecture-change-02.md` and tasks §6.0.3.
+B1 Executor startup is **PENDING**. AC-02 V1 tasks R-1…R-6 are implemented and validated locally (2026-10-07; the Executor starts with no definitions and zero targets, verified with fakes and DynamoDB Local only, not against AWS). What remains are the owner-run startup prerequisites: the deployed R-2 template (`RegistryTableName` for `CICD_REGISTRY_TABLE_NAME`), a real Slack token (AC2-6) and the platform identifier references (AC2-7). Deployments wait for the first real target record and its real credential. No sentinel or example secrets are created (owner direction). See `architecture-change-02.md` and tasks §6.0.3.
 
 ## 11. Owner clarifications (2026-10-06)
 

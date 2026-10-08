@@ -8,7 +8,7 @@ import { createSecretsManagerClient, SecretsManagerSecretProvider } from "../ada
 import { loadConfig } from "../composition/config.js";
 import type { SecretProvider } from "../ports/secret-provider.js";
 import { bootstrap } from "./bootstrap.js";
-import { describeStartupFailure } from "./definition-diagnosis.js";
+import { describeStartupFailure } from "./startup-diagnosis.js";
 
 /**
  * The Executor's own operational secrets come from Secrets Manager through the SDK default credential chain
@@ -25,7 +25,7 @@ async function run(): Promise<number> {
   try {
     executor = await bootstrap({ env: process.env, secrets: createRuntimeSecretProvider(process.env) });
   } catch (error) {
-    // Definition problems are listed one file per line (owner decision 2026-10-06: no partially valid definition set).
+    // One safe line: configuration problems and unresolved references name the variable or the logical ref only.
     process.stderr.write(`${describeStartupFailure(error).join("\n")}\n`);
     return 1;
   }

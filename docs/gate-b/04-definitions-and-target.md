@@ -63,9 +63,9 @@ This needs Node and a build (see [05](05-run-executor-node22.md) for the portabl
 
 Expected: `OK <deployment id>` per deployment, then `definitions:check passed (N deployment(s))`, exit 0.
 
-**Stop if** it prints `FAIL` for any file or reports zero deployments. A definition file that cannot be parsed is reported here by file, parser code and position. The Executor itself refuses to start (exit code 1, the affected file and reason on stderr) if ANY definition file cannot be parsed or validated: it never starts with a partially valid definition set. This check is the preflight; it does not replace the startup validation.
+**Stop if** it prints `FAIL` for any file or reports zero deployments. A definition file that cannot be parsed is reported here by file, parser code and position. Before AC-02 V1 the Executor also refused to start on any definition file that could not be parsed or validated. AC-02 V1 (R-6): the Executor no longer loads definitions at startup; full cleanup in R-9. This check is now the only definition validation.
 
-Limitation: the check does not refuse a literal migration command containing line breaks or NUL bytes; the Executor refuses it at startup. A green check does not guarantee startup.
+Limitation: the check does not refuse a literal migration command containing line breaks or NUL bytes. AC-02 V1 (R-6): the Executor no longer loads definitions at startup; full cleanup in R-9.
 
 ### 4. Create the secrets
 

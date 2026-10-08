@@ -18,7 +18,7 @@
 //   - Fail-closed: missing/malformed SenderId, unknown or recreated role ID,
 //     empty configured ID -> not authorized.
 import type { MessageEventType } from "../../domain/request-contract/index.js";
-import type { ResolvedPrincipals } from "../definition-service/index.js";
+import type { ResolvedPrincipals } from "../platform-config/index.js";
 import type { SenderAuthorizer } from "../message-router/index.js";
 
 /** Principal class a message type must come from (design §6.4). */
