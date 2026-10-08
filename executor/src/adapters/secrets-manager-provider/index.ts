@@ -1,6 +1,9 @@
 // @akili-spec changes/cicd-executor-poc design §4.2, §7, NFR-02, DD-16, DD-23
 // SecretProvider over AWS Secrets Manager. Resolves the Executor's OWN
-// operational secrets by logical reference (`<NAME>` -> `secretIdPrefix + NAME`).
+// operational secrets by logical reference (`<NAME>` -> `secretIdPrefix + NAME`)
+// and a target record's `credentialRef` (AC-02 V1, design §6.3): a full secret
+// name that must lie under `secretIdPrefix` (the onboarding tool enforces the
+// same rule, R-7; checked again here, fail closed).
 // - `exists` uses DescribeSecret ONLY, never GetSecretValue (owner ruling:
 //   existence without reading; see ports/secret-provider.ts).
 // - `getSecret` reads at the point of use and never caches the value.
@@ -13,6 +16,8 @@ import type { SecretProvider } from "../../ports/secret-provider.js";
 
 const LOGICAL_REF = /^<([A-Z][A-Z0-9_]*)>$/;
 const SECRET_ID_PREFIX = /^[A-Za-z0-9/_+=.@-]*$/;
+/** A Secrets Manager secret name (same charset as target-record.schema.json `credentialRef`; no ':' so never an ARN). */
+const SECRET_NAME = /^[A-Za-z0-9/_+=.@-]{1,512}$/;
 
 export type SecretProviderOperation = "exists" | "getSecret";
 
@@ -43,6 +48,19 @@ export interface SecretsManagerSecretProviderDeps {
 /** Validates a prefix against Secrets Manager name characters; returns a problem or undefined. */
 export function secretIdPrefixProblem(prefix: string): string | undefined {
   return SECRET_ID_PREFIX.test(prefix) ? undefined : "must contain only letters, digits and /_+=.@-";
+}
+
+/**
+ * The rule for a target record's `credentialRef` (design §6.3; tasks R-7): a secret name strictly under the
+ * Executor's non-empty secret id prefix, so a new target needs no IAM change. Returns a problem or undefined.
+ */
+export function credentialRefProblem(secretIdPrefix: string, credentialRef: string): string | undefined {
+  if (secretIdPrefix === "") return "the Executor secret id prefix is empty, so no credentialRef can be scoped to it";
+  if (!SECRET_NAME.test(credentialRef)) return "is not a Secrets Manager secret name (letters, digits and /_+=.@- only)";
+  if (!credentialRef.startsWith(secretIdPrefix) || credentialRef.length === secretIdPrefix.length) {
+    return "must be a secret name under the Executor's secret id prefix";
+  }
+  return undefined;
 }
 
 export function createSecretsManagerClient(region: string): SecretsManagerSender {
@@ -90,7 +108,8 @@ export class SecretsManagerSecretProvider implements SecretProvider {
 
   private toSecretId(operation: SecretProviderOperation, secretRef: string): string {
     const match = LOGICAL_REF.exec(secretRef);
-    if (match === null || match[1] === undefined) throw new SecretProviderError(operation, "<invalid-ref>", "InvalidLogicalRef");
-    return `${this.secretIdPrefix}${match[1]}`;
+    if (match !== null && match[1] !== undefined) return `${this.secretIdPrefix}${match[1]}`;
+    if (credentialRefProblem(this.secretIdPrefix, secretRef) === undefined) return secretRef;
+    throw new SecretProviderError(operation, "<invalid-ref>", "InvalidLogicalRef");
   }
 }

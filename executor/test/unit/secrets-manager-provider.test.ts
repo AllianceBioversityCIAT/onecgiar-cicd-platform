@@ -53,6 +53,35 @@ describe("SecretsManagerSecretProvider", () => {
     expect(client.calls).toHaveLength(0);
   });
 
+  // A target record's credentialRef is a full secret name under the Executor's prefix (design §6.3,
+  // target-record.schema.json: no '<' or '>'), enforced at onboarding (R-7) and again here (fail closed).
+  it("reads a target credentialRef (full secret name under the prefix) as-is, for getSecret and exists", async () => {
+    const client = fakeClient(() => ({ SecretString: "key" }));
+    const p = new SecretsManagerSecretProvider({ client, secretIdPrefix: PREFIX });
+    expect(await p.getSecret("cicd-poc/dev/example-app-dev/ssh")).toBe("key");
+    await p.exists("cicd-poc/dev/example-app-dev/ssh");
+    expect((client.calls[0] as GetSecretValueCommand).input.SecretId).toBe("cicd-poc/dev/example-app-dev/ssh");
+    expect((client.calls[1] as DescribeSecretCommand).input.SecretId).toBe("cicd-poc/dev/example-app-dev/ssh");
+  });
+
+  it("refuses a full secret name outside the prefix, the bare prefix, a look-alike prefix or an ARN, without calling the SDK", async () => {
+    const client = fakeClient(() => ({ SecretString: "key" }));
+    const p = new SecretsManagerSecretProvider({ client, secretIdPrefix: PREFIX });
+    for (const bad of ["other/app/ssh", "cicd-poc/dev/", "cicd-poc/devx/ssh", "cicd-poc/dev-other/ssh", SAMPLE_ARN, "cicd-poc/dev/a b"]) {
+      const error = (await capture(p.getSecret(bad))) as SecretProviderError;
+      expect(error).toBeInstanceOf(SecretProviderError);
+      expect(error.code).toBe("InvalidLogicalRef");
+      await expect(p.exists(bad)).rejects.toBeInstanceOf(SecretProviderError);
+    }
+    expect(client.calls).toHaveLength(0);
+  });
+
+  it("refuses every full secret name when the prefix is empty (nothing to scope it to)", async () => {
+    const client = fakeClient(() => ({ SecretString: "key" }));
+    await expect(new SecretsManagerSecretProvider({ client, secretIdPrefix: "" }).getSecret("example-app-dev/ssh")).rejects.toBeInstanceOf(SecretProviderError);
+    expect(client.calls).toHaveLength(0);
+  });
+
   it("exists uses DescribeSecret only, never GetSecretValue", async () => {
     const client = fakeClient(() => ({ Name: "n" }));
     expect(await new SecretsManagerSecretProvider({ client, secretIdPrefix: PREFIX }).exists("<A_REF>")).toBe(true);
