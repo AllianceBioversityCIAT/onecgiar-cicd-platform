@@ -939,3 +939,42 @@ Executed by the owner (AWS, GitHub); prepared and checked by Claude. Real identi
 | Trust pinned to the R-8 workflow | **DEPLOYED and read back** (`get-role`) | Not yet exercised by a run: the first run with the R-8 workflow happens at L9 |
 
 **Still pending (not validated):** P-A4 (the real SQS `SenderId` suffix equals the repository id), the R-8 workflow end to end (build, ECR push, one `SendMessage`), SQS delivery to the Executor, the Executor started against AWS (L7 platform secrets incl. a real Slack token, L8 startup), the router outcomes on AWS (`TARGET_UNKNOWN` without a record, accepted request ending `FAILED (DEPLOY_WINDOW_CLOSED)` with no lock or SSH, `TARGET_NOT_AUTHORIZED` with no target state change, `UNAUTHORIZED_SENDER`), and B3–B5. The caller on `b2-session-probe` still points at `@3840f99`; a push to that branch now runs the probe and is denied by the trust (harmless, no message sent). It is moved to `@7f148ce…` only at L9, after L7 and L8, because that push runs the real flow. A second repository is not added to the trust (option A gate).
+
+## B2 first live flow — L7 to L9: Executor on AWS and the first real request, `TARGET_UNKNOWN` (2026-10-08): **PASS (controlled rejection)**
+
+Executed by the owner (AWS, GitHub, Slack); prepared, checked and pushed (only the authorized commits) by Claude. Real account identifiers, role names, the queue URL and secret values are kept out of Git.
+
+| Step | What happened | Evidence |
+|---|---|---|
+| L7.1–L7.3 | Read-only checks with the owner identity | Stack `UPDATE_COMPLETE`, 17 outputs, four role ids of the expected form; `ExecutorRole` has only `executor-runtime` (7 statements, incl. `TargetRegistryRead`); the dedicated Executor user has only `AssumeExecutorRoleOnly` (`simulate-principal-policy`: `sts:AssumeRole` on the Executor role allowed, everything else `implicitDeny`), no groups, no console password, one existing access key (no new static key); the isolated `cicd-executor` profile resolves to the Executor role session `cicd-executor-workstation`; no secret existed under `cicd-poc/dev/` yet |
+| L7 decision | Slack Incoming Webhooks evaluated and not adopted: no thread or root update (design §6.6), the startup check needs both refs (AC2-6), and reusing the existing servers' webhook would share a credential owned elsewhere | Bot token kept (approved design, no code change) |
+| L7.7 | Six platform secrets created by the owner: four principal references (role ids) and the platform Slack channel and bot token | `list-secrets` shows the six names; values never printed |
+| L7.8 | Local configuration | `dist/` rebuilt with Node 22.23.3; the env file fixed locally (it pointed `CICD_DEFINITIONS_ROOT` at a stale pre-AC-02 copy of the schemas without `target-record.schema.json`, lacked `CICD_REGISTRY_TABLE_NAME` and `CICD_CI_PRINCIPAL_REF`, and its references did not match the secret names); `loadConfig` OK; `run-executor.ps1 -DryRun` exit 0 (the launcher stripped inherited static keys from the parent shell); queue and DLQ empty, both tables empty |
+| L8 | Executor started on the workstation against AWS (owner) | `executor started`, heartbeat every 60 s, healthcheck file updated, no error |
+| L9.1 | Caller commit **`77c514f781792643c50ef2a92f540909c70a82d0`** on the bound branch `b2-session-probe`: reusable workflow `@7f148ceb90e494edd4b87a161524936c4f7ded94` (R-8, the SHA pinned in the trust), `targetId` `b2-probe` (absent from `cicd-registry-dev`, consistent read), one `FROM scratch` build unit under `b2/` | R-8 `guard` and "Validate build inputs" scripts run locally with bash and jq: pass; one `send-message` step, last, no retry; no SSH or deploy wording in executable content; local Docker build not executed (daemon not running) |
+| L9.3 | Only `77c514f` pushed (fast-forward from `b0e9b5a`); the push triggered exactly one run | Run **`37840910980`**, workflow `b2-caller`, event `push`, attempt 1 |
+
+**L9 traceability (one request end to end).**
+
+| Hop | Identifier | Observed |
+|---|---|---|
+| GitHub Actions | Run `37840910980` attempt 1, commit `77c514f`, <https://github.com/AllianceBioversityCIAT/onecgiar-cicd-platform/actions/runs/37840910980> | `completed` / `success`: bound ref, build, OIDC with the session name = repository id, ECR push, request body, one send |
+| SQS | Message id `30e714fc-7aea-4680-9bd9-fa69415881c3` | Delivered once: `ApproximateReceiveCount` = 1 |
+| Executor | Same message id | `RejectedRequests` = 1 with reason `TARGET_UNKNOWN`; message acknowledged; heartbeat continued afterwards |
+| DynamoDB `cicd-executions-dev` | `REJECT#MSG#30e714fc-7aea-4680-9bd9-fa69415881c3` | `reason` `TARGET_UNKNOWN`, `targetId` `b2-probe`, `requestId` `37840910980-1` (= run id + attempt) |
+| Slack (platform channel) | — | `Request rejected: TARGET_UNKNOWN` received |
+
+**What this proves.** The R-8 reusable workflow ran for real under the trust pinned to `7f148ce`; the CI role sent one `DEPLOY_REQUESTED`; SQS delivered it to the Executor running against AWS; the router authorized the CI sender (the `SenderId` session suffix was numeric, otherwise the reason would be `UNAUTHORIZED_SENDER`), validated the body against the schema, read the Target Registry and rejected the unknown target with a rejection record keyed by the SQS message id; the platform Slack notification works with the real bot token. Result: **PASS** for the L9 objective (controlled `TARGET_UNKNOWN` rejection).
+
+**Not verified yet (no evidence collected for them; record before closing B2):**
+
+| Check | How |
+|---|---|
+| No dedupe claim for the rejected request | `get-item` `DEDUPE#b2-probe#37840910980-1` / `DEDUPE` returns nothing |
+| No target state | `DEPLOYMENT#b2-probe` / `SEQ`, `TARGET#b2-probe` / `STATE`, `LOCK#b2-probe` / `LOCK` and `WINDOW#b2-probe` / `WINDOW` return nothing; no `EXEC#` item for `37840910980-1` |
+| No SSH | Structurally impossible for this request (no target record, so no execution, coordinator or transport call); not yet confirmed explicitly from the Executor console (no connection or deploy line) and the absence of any `EXEC#` item |
+| Queue state afterwards | Deploy queue and DLQ back to 0 messages |
+| ECR | Exactly one image tagged `ci-probe-37840910980-1` in the probe repository |
+| `senderRef` on the rejection item | Equals the CI role id (stack output `CiRoleId`), without the session suffix |
+
+**Still pending for B2:** P-A4 in full (the `SenderId` suffix equals the record's `sourceRepositoryId`) needs stage 2 with a registered target (`deployWindowPolicy: required`, ending `FAILED (DEPLOY_WINDOW_CLOSED)` with no lock or SSH) and the `TARGET_NOT_AUTHORIZED` negative; then the untrusted-trigger and wrong-sender negatives (L10–L12). No target is registered, no window exists, and no second repository is added to the trust.
