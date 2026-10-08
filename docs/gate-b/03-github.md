@@ -98,6 +98,7 @@ Expected: neither list contains `CICD_BOUND_REF`.
 2. Replace every placeholder named in the file header: `<GITHUB_ORG>/<PLATFORM_REPO>`, `<PINNED_COMMIT_SHA>`, `<BOUND_BRANCH>`, `<OWNER_TARGET_ID>`, `<GITHUB_ENVIRONMENT>`, the units, and the lint/test step. Do not add `role-session-name` or any AWS step to the caller.
 3. `<PINNED_COMMIT_SHA>` must be a full 40-hex commit SHA, never a tag or branch, and **must equal** the stack parameter `PinnedWorkflowSha`. Moving the pin means changing the stack (and the trust policy) in the same change. For the real run it is the platform commit that contains task R-8 (`role-session-name: ${{ github.repository_id }}`); during the section 7 probe it is the probe commit.
 4. The caller passes no secrets (no `secrets:` key, no `secrets: inherit`).
+5. **Platform repository as its own caller** (allowed for the PoC: the trust only needs `repository_id`, `repository_owner_id`, `sub`, `environment` and `ref` to name that repository, environment and bound branch): call the reusable workflow with the full `<GITHUB_ORG>/<PLATFORM_REPO>/.github/workflows/deploy-request.reusable.yml@<SHA>` form, never the local `./.github/workflows/...` form (a local call is not pinned to a SHA, so `job_workflow_ref` would not match). Use a dedicated bound branch (for example `refs/heads/<BOUND_BRANCH>` other than `main`) holding the caller, so `main` carries no caller workflow; trigger it with `push` to that branch (a `workflow_dispatch` run needs the workflow file on the default branch).
 
 Expected: `workflow_dispatch` is available on the Actions tab for this workflow.
 
@@ -107,7 +108,7 @@ The CI role trust compares exact strings and, with option A, requires the role s
 
 The trust pins `deploy-request.reusable.yml` at one SHA, so the probe must live **at that same path** on a throwaway branch of the platform repository, and the stack is deployed with the probe commit as `PinnedWorkflowSha` first ([01](01-aws-sam.md)); afterwards the stack is updated to the real R-8 commit.
 
-1. In `<GITHUB_ORG>/<PLATFORM_REPO>`, create the branch `<PROBE_BRANCH>` from `main`, replace `.github/workflows/deploy-request.reusable.yml` on that branch with the file below, commit, push, and record the full commit SHA as `<PROBE_SHA>` (`git rev-parse HEAD`). Never merge this branch.
+1. In `<GITHUB_ORG>/<PLATFORM_REPO>`, create the branch `<PROBE_BRANCH>` from the **published** `origin/main` (so pushing it publishes no unreviewed local commit), replace `.github/workflows/deploy-request.reusable.yml` on that branch with the file below, commit, push, and record the full commit SHA as `<PROBE_SHA>` (`git rev-parse HEAD`). Never merge this branch.
 
 ```yaml
 name: b2-session-probe
