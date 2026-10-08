@@ -11,7 +11,7 @@ import { LockRepository } from "../../src/adapters/dynamodb-state-store/lock-rep
 import { TargetStateRepository } from "../../src/adapters/dynamodb-state-store/target-state-repository.js";
 import { DeployTransactions } from "../../src/adapters/dynamodb-state-store/deploy-transactions.js";
 import { createDeployCoordinator, Semaphore } from "../../src/application/deploy-coordinator/index.js";
-import { FakePlans, FakeQueue, FakeTransport, FakeWindows, TEST_SOURCE_REF, World } from "../support/deploy-coordinator-fakes.js";
+import { FakeQueue, FakeTransport, FakeWindows, TEST_SOURCE_REF, World } from "../support/deploy-coordinator-fakes.js";
 import { executionFixture } from "./execution-fixture.js";
 import { createTestDocumentClient, dynamoDbLocalAvailable, ensureTestTable, testTableName } from "./setup.js";
 
@@ -54,25 +54,25 @@ describe.skipIf(!dynamoDbLocalAvailable())("deploy coordinator transactions (Dyn
       executionId: seed.executionId,
       expected: { status: "WAITING_LOCK", version: 1 },
       patch: x9Patch(Date.now() + 60_000),
-      lockKey: seed.lockKey,
+      lockKey: seed.targetId,
       dispatched: stamp(seed.executionId, 5),
       now: Date.now(),
     });
     expect(out).toEqual({ outcome: "COMMITTED" });
     expect(await executions.get(seed.executionId)).toMatchObject({ status: "DEPLOYING", version: 2, dispatchToken: "token-1", attempt: 1 });
-    expect((await targets.get(seed.lockKey))?.highestDispatched).toEqual(stamp(seed.executionId, 5));
+    expect((await targets.get(seed.targetId))?.highestDispatched).toEqual(stamp(seed.executionId, 5));
   });
 
   test("a refused highestDispatched cancels the WHOLE transaction: the Execution item keeps no intent (CS-2)", async () => {
     const seed = executionFixture({ order: { sourceRef: TEST_SOURCE_REF, runNumber: 5, runAttempt: 1 } });
     await executions.create(seed);
-    await targets.raiseHighestDispatched(seed.lockKey, stamp("exec-newer", 9), Date.now());
+    await targets.raiseHighestDispatched(seed.targetId, stamp("exec-newer", 9), Date.now());
 
     const out = await tx.beginDispatch({
       executionId: seed.executionId,
       expected: { status: "WAITING_LOCK", version: 1 },
       patch: x9Patch(Date.now() + 60_000),
-      lockKey: seed.lockKey,
+      lockKey: seed.targetId,
       dispatched: stamp(seed.executionId, 5),
       now: Date.now(),
     });
@@ -81,7 +81,7 @@ describe.skipIf(!dynamoDbLocalAvailable())("deploy coordinator transactions (Dyn
     expect(after).toMatchObject({ status: "WAITING_LOCK", version: 1, attempt: 0 });
     expect(after?.dispatchToken).toBeUndefined();
     expect(after?.fencingToken).toBeUndefined();
-    expect((await targets.get(seed.lockKey))?.highestDispatched).toEqual(stamp("exec-newer", 9));
+    expect((await targets.get(seed.targetId))?.highestDispatched).toEqual(stamp("exec-newer", 9));
   });
 
   test("a stale Execution version cancels the transaction: highestDispatched is NOT raised", async () => {
@@ -91,24 +91,24 @@ describe.skipIf(!dynamoDbLocalAvailable())("deploy coordinator transactions (Dyn
       executionId: seed.executionId,
       expected: { status: "WAITING_LOCK", version: 7 },
       patch: x9Patch(Date.now() + 60_000),
-      lockKey: seed.lockKey,
+      lockKey: seed.targetId,
       dispatched: stamp(seed.executionId, 3),
       now: Date.now(),
     });
     expect(out).toEqual({ outcome: "EXECUTION_CONFLICT" });
-    expect(await targets.get(seed.lockKey)).toBeUndefined();
+    expect(await targets.get(seed.targetId)).toBeUndefined();
     expect(await executions.get(seed.executionId)).toMatchObject({ status: "WAITING_LOCK", version: 1 });
   });
 
   test("an equal run number is accepted (same execution re-entering X9 after exit 50)", async () => {
     const seed = executionFixture();
     await executions.create(seed);
-    await targets.raiseHighestDispatched(seed.lockKey, stamp(seed.executionId, 5), Date.now());
+    await targets.raiseHighestDispatched(seed.targetId, stamp(seed.executionId, 5), Date.now());
     const out = await tx.beginDispatch({
       executionId: seed.executionId,
       expected: { status: "WAITING_LOCK", version: 1 },
       patch: x9Patch(Date.now() + 60_000),
-      lockKey: seed.lockKey,
+      lockKey: seed.targetId,
       dispatched: stamp(seed.executionId, 5),
       now: Date.now(),
     });
@@ -124,25 +124,25 @@ describe.skipIf(!dynamoDbLocalAvailable())("deploy coordinator transactions (Dyn
       executionId: seed.executionId,
       expected: { status: "DEPLOYING", version: 1, dispatchToken: "token-OTHER" },
       patch,
-      lockKey: seed.lockKey,
+      lockKey: seed.targetId,
       entry: { executionId: seed.executionId, since: 1 },
       now: Date.now(),
     });
     expect(stale).toEqual({ outcome: "EXECUTION_CONFLICT" });
-    expect((await targets.get(seed.lockKey))?.unresolved).toBeUndefined();
+    expect((await targets.get(seed.targetId))?.unresolved).toBeUndefined();
     expect((await executions.get(seed.executionId))?.status).toBe("DEPLOYING");
 
     const ok = await tx.markUnknownTargetState({
       executionId: seed.executionId,
       expected: { status: "DEPLOYING", version: 1, dispatchToken: "token-1" },
       patch,
-      lockKey: seed.lockKey,
+      lockKey: seed.targetId,
       entry: { executionId: seed.executionId, since: 42 },
       now: Date.now(),
     });
     expect(ok).toEqual({ outcome: "COMMITTED" });
     expect((await executions.get(seed.executionId))?.status).toBe("UNKNOWN_TARGET_STATE");
-    expect((await targets.get(seed.lockKey))?.unresolved).toEqual([{ executionId: seed.executionId, since: 42 }]);
+    expect((await targets.get(seed.targetId))?.unresolved).toEqual([{ executionId: seed.executionId, since: 42 }]);
   });
 
   test("LockRepository.acquire reports alreadyHeld: fresh and post-release acquisitions are not, a live re-entrant one is", async () => {
@@ -156,7 +156,7 @@ describe.skipIf(!dynamoDbLocalAvailable())("deploy coordinator transactions (Dyn
 
   test("coordinator over the real repositories, CS-2 (a): newer run ends UNKNOWN_TARGET_STATE, the older run is superseded at S2", async () => {
     const lockKey = `<LOGICAL_LOCK_KEY>-${String(Date.now())}`;
-    const base = { lockKey, lockWaitStartedAt: Date.now(), lockWaitAttempts: 0 };
+    const base = { targetId: lockKey, lockWaitStartedAt: Date.now(), lockWaitAttempts: 0 };
     const newer = executionFixture({ ...base, order: { sourceRef: TEST_SOURCE_REF, runNumber: 8, runAttempt: 1 } });
     const older = executionFixture({ ...base, order: { sourceRef: TEST_SOURCE_REF, runNumber: 7, runAttempt: 1 } });
     await executions.create(newer);
@@ -172,7 +172,6 @@ describe.skipIf(!dynamoDbLocalAvailable())("deploy coordinator transactions (Dyn
       locks,
       target: targets,
       windows: new FakeWindows(),
-      plans: new FakePlans(),
       transport,
       queue: new FakeQueue(world),
       clock: { now: () => new Date() },
@@ -201,7 +200,7 @@ describe.skipIf(!dynamoDbLocalAvailable())("deploy coordinator transactions (Dyn
 
   test("coordinator over the real repositories: exit 0 writes the fenced lastDeployed and ends SUCCEEDED", async () => {
     const lockKey = `<LOGICAL_LOCK_KEY>-ok-${String(Date.now())}`;
-    const item = executionFixture({ lockKey, lockWaitStartedAt: Date.now(), lockWaitAttempts: 0, order: { sourceRef: TEST_SOURCE_REF, runNumber: 3, runAttempt: 1 } });
+    const item = executionFixture({ targetId: lockKey, lockWaitStartedAt: Date.now(), lockWaitAttempts: 0, order: { sourceRef: TEST_SOURCE_REF, runNumber: 3, runAttempt: 1 } });
     await executions.create(item);
     const world = new World();
     const transport = new FakeTransport(world);
@@ -213,7 +212,6 @@ describe.skipIf(!dynamoDbLocalAvailable())("deploy coordinator transactions (Dyn
       locks,
       target: targets,
       windows: new FakeWindows(),
-      plans: new FakePlans(),
       transport,
       queue: new FakeQueue(world),
       clock: { now: () => new Date() },

@@ -22,7 +22,6 @@ import { createMetrics } from "../../src/observability/metrics/index.js";
 import type { ExecutionItem } from "../../src/adapters/dynamodb-state-store/types.js";
 import {
   FakeLocks,
-  FakePlans,
   FakeQueue,
   FakeTarget,
   FakeTransactions,
@@ -73,7 +72,6 @@ describe.skipIf(!dynamoDbLocalAvailable())("reconciler (DynamoDB Local)", () => 
       locks: new FakeLocks(world),
       target: new FakeTarget(world),
       windows: new FakeWindows(),
-      plans: new FakePlans(),
       transport: new FakeTransport(world),
       queue,
       clock: world.clock,
@@ -178,7 +176,7 @@ describe.skipIf(!dynamoDbLocalAvailable())("reconciler (DynamoDB Local)", () => 
   test("overdue QUEUED, S1: a newer highestAccepted gives X3 SUPERSEDED and publishes nothing", async () => {
     build();
     const item = await seed({ status: "QUEUED", lockWaitAttempts: undefined });
-    expect(await targets.raiseHighestAccepted(item.lockKey, { sourceRef: item.order.sourceRef, runNumber: item.order.runNumber + 1, executionId: "exec-newer" }, T)).toMatchObject({ raised: true });
+    expect(await targets.raiseHighestAccepted(item.targetId, { sourceRef: item.order.sourceRef, runNumber: item.order.runNumber + 1, executionId: "exec-newer" }, T)).toMatchObject({ raised: true });
     const summary = await reconciler.reconcile();
     expect(summary.actions).toContainEqual({ executionId: item.executionId, action: "SUPERSEDED" });
     const stored = await executions.get(item.executionId);
@@ -192,7 +190,7 @@ describe.skipIf(!dynamoDbLocalAvailable())("reconciler (DynamoDB Local)", () => 
   test.each([0, -1])("overdue QUEUED, S1: highestAccepted at runNumber offset %i proceeds to evaluateQueued", async (offset) => {
     build();
     const item = await seed({ status: "QUEUED", lockWaitAttempts: undefined, order: { sourceRef: "refs/heads/main", runNumber: 5, runAttempt: 1 } });
-    await targets.raiseHighestAccepted(item.lockKey, { sourceRef: item.order.sourceRef, runNumber: item.order.runNumber + offset, executionId: "exec-other" }, T);
+    await targets.raiseHighestAccepted(item.targetId, { sourceRef: item.order.sourceRef, runNumber: item.order.runNumber + offset, executionId: "exec-other" }, T);
     const summary = await reconciler.reconcile();
     expect(summary.actions).toContainEqual({ executionId: item.executionId, action: "QUEUED_REEVALUATED" });
     expect((await executions.get(item.executionId))?.status).toBe("WAITING_LOCK");
@@ -208,7 +206,7 @@ describe.skipIf(!dynamoDbLocalAvailable())("reconciler (DynamoDB Local)", () => 
     expect(stored?.status).toBe("UNKNOWN_TARGET_STATE");
     expect(stored?.error).toEqual({ code: "UNKNOWN_TARGET_STATE" });
     expect(stored?.activeStatus).toBeUndefined();
-    expect((await targets.get(item.lockKey))?.unresolved).toEqual([{ executionId: item.executionId, since: T }]);
+    expect((await targets.get(item.targetId))?.unresolved).toEqual([{ executionId: item.executionId, since: T }]);
   });
 
   test("overdue DEPLOYING without execStartedAt: X11 DISPATCH_INTERRUPTED, no unresolved entry, nothing published", async () => {
@@ -219,7 +217,7 @@ describe.skipIf(!dynamoDbLocalAvailable())("reconciler (DynamoDB Local)", () => 
     const stored = await executions.get(item.executionId);
     expect(stored?.status).toBe("FAILED");
     expect(stored?.error).toEqual({ code: "DISPATCH_INTERRUPTED" });
-    expect((await targets.get(item.lockKey))?.unresolved).toBeUndefined();
+    expect((await targets.get(item.targetId))?.unresolved).toBeUndefined();
     expect(world.published).toHaveLength(0);
   });
 

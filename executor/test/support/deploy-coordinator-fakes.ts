@@ -1,4 +1,4 @@
-// @akili-spec changes/cicd-executor-poc design §5.1, §7.3, §7.5, DD-28
+// @akili-spec changes/cicd-executor-poc design §5.1, §6.5, §7.3, §7.5, DD-28; tasks R-5 (AC-02 V1)
 // In-memory fakes of the deploy-coordinator ports. The storage fakes reproduce
 // the conditional-write semantics of the DynamoDB repositories (status +
 // version + dispatchToken on the Execution item; monotonic max on
@@ -23,40 +23,52 @@ import type {
 import type {
   DeployExecutionStore,
   DeployLockPort,
-  DeployPlan,
-  DeployPlanResolver,
   DeployTargetPort,
   DeployTransactionPort,
   WindowRevalidator,
 } from "../../src/application/deploy-coordinator/index.js";
 import { buildSourceRef } from "../../src/application/execution-service/index.js";
-import type { Revalidation, RevalidationPoint } from "../../src/application/deploy-window-service/index.js";
+import type { Revalidation, RevalidationPoint, WindowTarget } from "../../src/application/deploy-window-service/index.js";
 import {
   DeployTransportError,
   type DeploySession,
   type DeployTransport,
   type ScriptExecOutcome,
   type ScriptExecRequest,
+  type SshTarget,
 } from "../../src/ports/deploy-transport.js";
 import type { QueueMessage, QueuePublisher } from "../../src/ports/queue-publisher.js";
 import { FakeClock } from "./execution-service-fakes.js";
 
-export const TEST_SOURCE_REF = buildSourceRef({ repository: "<REPOSITORY_REF>", workflow: "<WORKFLOW_REF>", environment: "<ENVIRONMENT_REF>" });
-export const TEST_LOCK_KEY = "<LOGICAL_LOCK_KEY>";
+export const TEST_SOURCE_REF = buildSourceRef({ repository: "<REPOSITORY_REF>", workflow: "<WORKFLOW_REF>" });
+/** V1: the lock key is the targetId (design §1.2). */
+export const TEST_LOCK_KEY = "example-app-dev";
+export const TEST_SNAPSHOT = {
+  version: 3,
+  project: "example",
+  environment: "dev",
+  host: "target.example.internal",
+  port: 2222,
+  user: "deploy",
+  hostKey: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample"],
+  credentialRef: "cicd-poc/dev/example-app-dev/ssh",
+  deployScript: "/opt/cicd/example-app/deploy.sh",
+  deployWindowPolicy: "required",
+  sourceRepositoryId: "123456789",
+} as const;
 
 export function waitingExecution(over: Partial<ExecutionItem> = {}): ExecutionItem {
   const now = 1_800_000_000_000;
   return {
     executionId: "exec-1",
-    deploymentId: "<LOGICAL_DEPLOYMENT>",
-    definitionRef: "<DEFINITION_REF>",
+    targetId: TEST_LOCK_KEY,
+    targetSnapshot: { ...TEST_SNAPSHOT, hostKey: [...TEST_SNAPSHOT.hostKey] },
     requestId: "100-1",
     commitSha: "0123456789abcdef0123456789abcdef01234567",
     artifacts: { app: "sha256:<DIGEST>" },
     order: { sourceRef: TEST_SOURCE_REF, runNumber: 5, runAttempt: 1 },
     ci: { repository: "<REPOSITORY_REF>", runId: "100", workflowRef: "<WORKFLOW_REF>" },
     senderRef: "<SENDER_REF>",
-    lockKey: TEST_LOCK_KEY,
     sequence: 1,
     status: "WAITING_LOCK",
     version: 1,
@@ -228,10 +240,13 @@ export class FakeTarget implements DeployTargetPort {
 
 export class FakeWindows implements WindowRevalidator {
   public readonly points: RevalidationPoint[] = [];
+  /** The window target each revalidation received (the snapshot's policy, AC-02 V1). */
+  public readonly targets: WindowTarget[] = [];
   /** Points that fail from now on. */
   public readonly deny = new Set<RevalidationPoint>();
-  public async revalidate(point: RevalidationPoint): Promise<Revalidation> {
+  public async revalidate(point: RevalidationPoint, target: WindowTarget): Promise<Revalidation> {
     this.points.push(point);
+    this.targets.push(target);
     if (!this.deny.has(point)) return { ok: true, point };
     return {
       ok: false,
@@ -240,17 +255,6 @@ export class FakeWindows implements WindowRevalidator {
       transition: { V1: "X4", V2: "X8", V3: "X15", V4: "X10" }[point] as "X4" | "X8" | "X15" | "X10",
       reason: "WINDOW_CLOSED",
     };
-  }
-}
-
-export class FakePlans implements DeployPlanResolver {
-  public readonly plan: DeployPlan = {
-    targetRef: "<TARGET_REF>",
-    timeoutMinutes: 10,
-    scriptArgs: (fencingToken) => ["--lock-key", TEST_LOCK_KEY, "--fencing-token", String(fencingToken)],
-  };
-  public async resolve(): Promise<DeployPlan> {
-    return this.plan;
   }
 }
 
@@ -271,7 +275,8 @@ export class FakeTransport implements DeployTransport {
   public connectScript: Array<"OK" | "SSH_CONNECT" | "HOST_KEY_MISMATCH" | "HANG"> = ["OK"];
   public execScript: ExecScript[] = [{ kind: "EXIT", exitCode: 0 }];
   public connects = 0;
-  public delivers = 0;
+  /** The SSH target of every connect (from the execution snapshot). */
+  public readonly targets: SshTarget[] = [];
   public execs = 0;
   public opened = 0;
   public closed = 0;
@@ -293,8 +298,9 @@ export class FakeTransport implements DeployTransport {
     for (const release of this.hangs.splice(0)) release();
   }
 
-  public async connect(): Promise<DeploySession> {
+  public async connect(target: SshTarget): Promise<DeploySession> {
     this.connects += 1;
+    this.targets.push(target);
     const behaviour = this.connectScript.shift() ?? "OK";
     if (behaviour === "HANG") await new Promise<void>((resolve) => this.hangs.push(resolve));
     if (behaviour === "SSH_CONNECT" || behaviour === "HANG") throw new DeployTransportError("SSH_CONNECT", "connect failed");
@@ -302,9 +308,6 @@ export class FakeTransport implements DeployTransport {
     this.opened += 1;
     let closed = false;
     return {
-      deliverScript: async () => {
-        this.delivers += 1;
-      },
       exec: async (request) => {
         this.execs += 1;
         this.lastExec = request;

@@ -15,17 +15,17 @@ export class DedupeRepository {
     private readonly tableName: string,
   ) {}
 
-  public async get(deploymentId: string, requestId: string): Promise<DedupeItem | undefined> {
-    const key = dedupeKey(deploymentId, requestId);
+  public async get(targetId: string, requestId: string): Promise<DedupeItem | undefined> {
+    const key = dedupeKey(targetId, requestId);
     const result = await this.client.send(
       new GetCommand({ TableName: this.tableName, Key: { [TABLE_PK_ATTR]: key.pk, [TABLE_SK_ATTR]: key.sk } }),
     );
     return result.Item as DedupeItem | undefined;
   }
 
-  /** DD-20 step 1: claim a brand-new `{deploymentId, requestId}` (`attribute_not_exists`). */
-  public async claim(deploymentId: string, requestId: string, claimToken: string, claimLeaseExpiresAt: number, expiresAt: number): Promise<boolean> {
-    const key = dedupeKey(deploymentId, requestId);
+  /** DD-20 step 1: claim a brand-new `{targetId, requestId}` (`attribute_not_exists`). */
+  public async claim(targetId: string, requestId: string, claimToken: string, claimLeaseExpiresAt: number, expiresAt: number): Promise<boolean> {
+    const key = dedupeKey(targetId, requestId);
     return runConditionalWrite(() =>
       this.client.send(
         new PutCommand({
@@ -33,7 +33,7 @@ export class DedupeRepository {
           Item: {
             [TABLE_PK_ATTR]: key.pk,
             [TABLE_SK_ATTR]: key.sk,
-            deploymentId,
+            targetId,
             requestId,
             state: "CLAIMED",
             claimToken,
@@ -53,14 +53,14 @@ export class DedupeRepository {
    * already set, per DD-20: an already stored sequence is reused.
    */
   public async takeOverExpiredClaim(
-    deploymentId: string,
+    targetId: string,
     requestId: string,
     previousClaimToken: string,
     newClaimToken: string,
     newClaimLeaseExpiresAt: number,
     now: number,
   ): Promise<boolean> {
-    const key = dedupeKey(deploymentId, requestId);
+    const key = dedupeKey(targetId, requestId);
     return runConditionalWrite(() =>
       this.client.send(
         new UpdateCommand({
@@ -82,8 +82,8 @@ export class DedupeRepository {
   }
 
   /** DD-20 step 2: record the sequence, conditional on owning the claim and the sequence being unassigned. */
-  public async recordSequence(deploymentId: string, requestId: string, claimToken: string, sequence: number): Promise<boolean> {
-    const key = dedupeKey(deploymentId, requestId);
+  public async recordSequence(targetId: string, requestId: string, claimToken: string, sequence: number): Promise<boolean> {
+    const key = dedupeKey(targetId, requestId);
     return runConditionalWrite(() =>
       this.client.send(
         new UpdateCommand({
@@ -99,8 +99,8 @@ export class DedupeRepository {
   }
 
   /** DD-20 step 4: bind the dedupe record to the created execution, conditional on owning the claim. */
-  public async bind(deploymentId: string, requestId: string, claimToken: string, executionId: string): Promise<boolean> {
-    const key = dedupeKey(deploymentId, requestId);
+  public async bind(targetId: string, requestId: string, claimToken: string, executionId: string): Promise<boolean> {
+    const key = dedupeKey(targetId, requestId);
     return runConditionalWrite(() =>
       this.client.send(
         new UpdateCommand({

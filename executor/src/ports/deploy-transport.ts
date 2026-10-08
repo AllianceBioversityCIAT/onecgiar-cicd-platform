@@ -1,9 +1,12 @@
-// @akili-spec changes/cicd-executor-poc design §6.5, §7.5, DD-04, DD-05, DD-10, DD-28
+// @akili-spec changes/cicd-executor-poc design §6.3, §6.5, §7.5, DD-04, DD-05, DD-28; requirements FR-12, FR-13; tasks R-5 (AC-02 V1)
 // Port: the SSH call abstraction of the deploy coordinator (replaces the
-// closed step-handler registry, DD-05). It only connects, delivers the
-// bundled script (SFTP) and runs it with ARGUMENTS (never a concatenated
-// command string, design §7 Forbidden). N-13 implements it with `ssh2`; the
-// coordinator is tested with a fake. No SSH library types leak through here.
+// closed step-handler registry, DD-05). It only connects to the target named
+// by the execution's snapshot and runs the deploy script INSTALLED ON THE
+// TARGET at the snapshot's `deployScript` path, with ARGUMENTS (never a
+// concatenated command string, design §7 Forbidden). AC-02 V1: nothing is
+// delivered to the target (no SFTP upload, no checksum, DD-10 removed). The
+// `ssh2` adapter implements it; the coordinator is tested with a fake. No SSH
+// library types leak through here.
 
 /** `CICD_RESULT` JSON of the script's last stdout line (design §6.5), present on exits 0/10/20/30/40/50. */
 export interface CicdResult {
@@ -16,11 +19,26 @@ export interface CicdResult {
   readonly mutexHolder?: string;
 }
 
+/** Where to connect, from the execution's target snapshot (design §5.1, §6.3). Non-secret values plus a credential REFERENCE. */
+export interface SshTarget {
+  readonly targetId: string;
+  readonly host: string;
+  /** SSH port; absent means 22. */
+  readonly port?: number;
+  readonly user: string;
+  /** Pinned host key: one or more OpenSSH public-key lines (strict, never `StrictHostKeyChecking=no`). */
+  readonly hostKey: readonly string[];
+  /** Secrets Manager reference of the SSH credential; the transport reads it at connect time and keeps it in memory only. */
+  readonly credentialRef: string;
+}
+
 export interface ScriptExecRequest {
   readonly executionId: string;
+  /** Absolute path of the deploy script installed on the target (the snapshot's `deployScript`). */
+  readonly scriptPath: string;
   /** Script arguments, one element per argument (design §6.5). Never joined into a shell string. */
   readonly args: readonly string[];
-  /** The script's own deadline (definition `timeoutMinutes`). */
+  /** The script's own deadline (platform `deployTimeoutMinutes`). */
   readonly timeoutMs: number;
 }
 
@@ -44,15 +62,13 @@ export class DeployTransportError extends Error {
 }
 
 export interface DeploySession {
-  /** SFTP-delivers the bundled script for `executionId` (DD-10). Throws `DeployTransportError` on failure. */
-  deliverScript(executionId: string): Promise<void>;
-  /** Runs the delivered script once. Must never re-run it; a lost session is reported, not retried (DD-28). */
+  /** Runs the target's script once. Must never re-run it; a lost session is reported, not retried (DD-28). */
   exec(request: ScriptExecRequest): Promise<ScriptExecOutcome>;
   /** Idempotent. Closing the session does not stop a running script (it ignores HUP). */
   close(): Promise<void>;
 }
 
 export interface DeployTransport {
-  /** Opens a session to the target named by a logical reference. Throws `DeployTransportError` on failure. */
-  connect(targetRef: string): Promise<DeploySession>;
+  /** Opens a session to the snapshot's target. Throws `DeployTransportError` on failure. */
+  connect(target: SshTarget): Promise<DeploySession>;
 }

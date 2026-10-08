@@ -13,6 +13,11 @@
 // AWS credentials come from the SDK standard chain (DD-16; OD-Q12 open): no
 // credential is configured or read here. Application secrets are never read
 // (NFR-01).
+// AC-02 V1 (R-4, R-5): requests and the deploy path never use a definition.
+// The router resolves the named target with one GetItem on the Target
+// Registry (R-3) and authorizes its source repository (option A); the deploy
+// path runs from the execution snapshot. The definition startup validation
+// above stays until R-6.
 import { SQSClient } from "@aws-sdk/client-sqs";
 import type { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { BundledDefinitionSource } from "../adapters/bundled-definition-source/index.js";
@@ -33,6 +38,7 @@ import {
 import { createSlackProvider } from "../adapters/notify/slack-provider/index.js";
 import { createSqsQueuePublisher } from "../adapters/sqs-publisher/index.js";
 import { Ssh2DeployTransport } from "../adapters/ssh-deployer/index.js";
+import { DynamoDbTargetRegistry } from "../adapters/dynamodb-target-registry/index.js";
 import { createDeployCoordinator, DEFAULT_SSH_CONCURRENCY, Semaphore } from "../application/deploy-coordinator/index.js";
 import { DeployWindowService, TargetResolutionService } from "../application/deploy-window-service/index.js";
 import { DefinitionValidationError, validateForStartup, UnresolvedReferenceError } from "../application/definition-service/index.js";
@@ -60,20 +66,17 @@ import type { NotificationProvider } from "../ports/notification-provider.js";
 import type { QueuePublisher } from "../ports/queue-publisher.js";
 import type { SecretProvider } from "../ports/secret-provider.js";
 import { attributeToFiles } from "./definition-diagnosis.js";
-import { createStartupCatalog } from "../composition/catalog.js";
 import {
   createExecutionLookup,
   createLockOwnerLookup,
   createResolutionAuditWriter,
   createTargetOrderingPort,
-  createTargetResolver,
   createUnresolvedStore,
 } from "../composition/adapters.js";
 import { loadConfig, type ExecutorConfig } from "../composition/config.js";
 import { createMessageHandlers, withNotifications } from "../composition/handlers.js";
 import { createLifecycleNotifier } from "../composition/lifecycle-notifier.js";
 import { createPendingTasks } from "../composition/pending-tasks.js";
-import { createPlanResolver, verifyPlansAtStartup } from "../composition/plan-resolver.js";
 
 /** A `DefinitionSource` that can also enumerate the deployment ids it bundles (a property of the adapter, not of the port). */
 export type EnumerableDefinitionSource = DefinitionSource & {
@@ -89,12 +92,6 @@ export interface ConsumerHandle {
   stop(): Promise<void>;
 }
 
-/** Callbacks the composition hands to whichever transport it builds. */
-export interface TransportHooks {
-  /** FR-12: persist the sha256 of the script that was actually delivered on the execution (best effort; awaited via the pending tracker). */
-  readonly onScriptDelivered: (info: { executionId: string; sha256: string; definitionRef: string }) => void;
-}
-
 export interface BootstrapOptions {
   readonly env: NodeJS.ProcessEnv;
   /** Resolves the Executor's OWN operational refs (DD-23). Required: the Secrets Manager adapter is wired by the entry point. */
@@ -105,8 +102,8 @@ export interface BootstrapOptions {
   readonly healthcheckWriter?: HealthcheckWriter;
   readonly definitions?: EnumerableDefinitionSource;
   readonly documentClient?: DynamoDBDocumentClient;
-  /** Replaces the SSH transport (the composition test uses a fake). It receives the checksum hook the real transport is given (FR-12). */
-  readonly createTransport?: (hooks: TransportHooks) => DeployTransport;
+  /** Replaces the SSH transport (the composition test uses a fake). */
+  readonly createTransport?: () => DeployTransport;
   readonly notificationProviders?: readonly NotificationProvider[];
   /** Publishes back onto the event queue; default: the SQS publisher of N-17a. */
   readonly publisher?: QueuePublisher;
@@ -157,8 +154,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
   for (const ref of [config.platformSlack.channelRef, config.platformSlack.tokenRef]) {
     if (!(await secrets.exists(ref))) throw new UnresolvedReferenceError(ref);
   }
-  const catalog = createStartupCatalog(startup);
-  await verifyPlansAtStartup({ catalog, secrets });
 
   // 3. Adapters over the single table (design §5.1).
   const client = options.documentClient ?? createDocumentClient({ tableName: config.tableName, region: config.region, ...(config.dynamoEndpoint === undefined ? {} : { endpoint: config.dynamoEndpoint }) });
@@ -169,6 +164,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
   const windowsRepo = new DeployWindowRepository(client, table);
   const stateStore = new DynamoDbStateStore(client, table);
   const transactions = new DeployTransactions(client, executions, targets);
+  const dedupe = new DedupeRepository(client, table);
+  // Target Registry (AC-02 V1, design §5.3): a separate table read with GetItem only; validated with the R-1 schema.
+  const registry = new DynamoDbTargetRegistry({
+    client,
+    tableName: config.registryTableName,
+    schema: JSON.parse((await definitions.getSchema("target-record.schema.json")).content) as object,
+  });
 
   const sqs = options.publisher === undefined || options.createConsumer === undefined ? new SQSClient({ region: config.region }) : undefined;
   const publisher = options.publisher ?? createSqsQueuePublisher({ client: sqs as SQSClient, queueUrl: config.queueUrl });
@@ -185,7 +187,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
   const notifier = createLifecycleNotifier({
     notifications,
     executions,
-    catalog,
     platformSlack: config.platformSlack,
     logsUrlTemplate: config.logsUrlTemplate,
     runbookUrl: config.runbookUrl,
@@ -195,29 +196,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
   });
 
   // 4. Services.
-  const windows = new DeployWindowService({ windows: windowsRepo, targets: catalog, clock });
-  const hooks: TransportHooks = {
-    onScriptDelivered: (info) => {
-      pending.track(
-        executions.setAuditOnce(info.executionId, "scriptChecksum", info.sha256).catch((error: unknown) => {
-          logger.error("could not persist the delivered-script checksum", {
-            executionId: info.executionId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }),
-      );
-    },
-  };
-  const transport =
-    options.createTransport?.(hooks) ??
-    new Ssh2DeployTransport({ secrets, definitions, targets: createTargetResolver(catalog), logger, onScriptDelivered: hooks.onScriptDelivered });
+  const windows = new DeployWindowService({ windows: windowsRepo, targets: registry, clock });
+  const transport = options.createTransport?.() ?? new Ssh2DeployTransport({ secrets, logger });
   const rawCoordinator = createDeployCoordinator({
     executions,
     transactions,
     locks,
     target: targets,
     windows,
-    plans: createPlanResolver({ catalog, secrets }),
     transport,
     queue: publisher,
     clock,
@@ -226,8 +212,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
   });
   const coordinator = withNotifications(rawCoordinator, notifier, pending);
   const executionService = createExecutionService({
-    catalog,
-    dedupe: new DedupeRepository(client, table),
+    dedupe,
     sequences: new SequenceRepository(client, table),
     executions,
     rejections: new RejectionRepository(client, table),
@@ -254,11 +239,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
     clock,
   });
 
-  // 5. Router: sender authorization (DD-25) over the validated startup result, handlers bound to the services.
+  // 5. Router: sender authorization (DD-25: the shared CI role and the platform principals), the Target Registry
+  //    lookup and source authorization (option A), handlers bound to the services.
   const validators = await createMessageValidators(definitions);
-  const authorizer = createSenderAuthorizer({ allowedSenders: startup.resolvedAllowedSenders, principals: startup.resolvedPrincipals, metrics });
+  const authorizer = createSenderAuthorizer({ principals: startup.resolvedPrincipals, metrics });
   const handlers = createMessageHandlers({ executionService, coordinator, reconciler, windows, resolution, notifier, metrics, logger, pending });
-  const routerDeps = { validators, authorizer, sources: catalog, handlers };
+  const routerDeps = { validators, authorizer, targets: registry, dedupe, clock, handlers };
 
   async function handle(message: InboundMessage): Promise<{ ack: boolean }> {
     const result = await routeMessage(

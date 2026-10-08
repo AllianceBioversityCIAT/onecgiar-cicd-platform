@@ -82,9 +82,13 @@ export interface CreationChecks {
   readonly senderAuthorized: boolean;
   readonly schemaValid: boolean;
   readonly requestIdMatches: boolean;
-  readonly deploymentKnown: boolean;
-  readonly consistencyOk: boolean;
-  /** Dedupe claim on {deploymentId, requestId} owned by this processing (DD-20). Required by X1 only: X2 happens before any claim. */
+  /** The named target exists in the Target Registry (design §6.3, AC-02 V1). */
+  readonly targetKnown: boolean;
+  /** The target record is schema-valid and matches its key (design §6.3). */
+  readonly targetValid: boolean;
+  /** The SenderId session suffix (IAM-enforced repository_id) equals the record's sourceRepositoryId (option A, DD-25). */
+  readonly sourceAuthorized: boolean;
+  /** Dedupe claim on {targetId, requestId} owned by this processing (DD-20). Required by X1 only: X2 happens before any claim. */
   readonly dedupeClaimOwned: boolean;
 }
 
@@ -216,8 +220,9 @@ function firstRejectReason(c: CreationChecks): RejectReason | undefined {
   if (!c.senderAuthorized) return "UNAUTHORIZED_SENDER";
   if (!c.schemaValid) return "SCHEMA_INVALID";
   if (!c.requestIdMatches) return "REQUEST_ID_MISMATCH";
-  if (!c.deploymentKnown) return "UNKNOWN_DEPLOYMENT";
-  if (!c.consistencyOk) return "CONSISTENCY_MISMATCH";
+  if (!c.targetKnown) return "TARGET_UNKNOWN";
+  if (!c.targetValid) return "TARGET_INVALID";
+  if (!c.sourceAuthorized) return "TARGET_NOT_AUTHORIZED";
   return undefined;
 }
 

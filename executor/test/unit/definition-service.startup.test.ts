@@ -37,6 +37,7 @@ import {
 } from "../../src/application/definition-service/index.js";
 
 const PRINCIPAL_REFS: PlatformPrincipalRefs = {
+  ciPrincipalRef: "<CI_PRINCIPAL_REF>",
   executorPrincipalRef: "<EXECUTOR_PRINCIPAL_REF>",
   schedulerPrincipalRef: "<SCHEDULER_PRINCIPAL_REF>",
   operatorPrincipalRef: "<OPERATOR_PRINCIPAL_REF>",
@@ -98,6 +99,7 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
     "<PRMS_REPORTING_CLIENT_HEALTH_URL_REF>": "resolved-client-health",
     "<PRMS_REPORTING_SLACK_CHANNEL_REF>": "resolved-slack-channel",
     // Platform principal refs (DD-25).
+    "<CI_PRINCIPAL_REF>": "FAKE-CI-ROLE-ID",
     "<EXECUTOR_PRINCIPAL_REF>": "FAKE-EXECUTOR-ROLE-ID",
     "<SCHEDULER_PRINCIPAL_REF>": "FAKE-SCHEDULER-ROLE-ID",
     "<OPERATOR_PRINCIPAL_REF>": "FAKE-OPERATOR-ROLE-ID",
@@ -246,6 +248,7 @@ describe("definition-service.validateForStartup — reference resolution (DD-23,
       environment: "resolved-environment",
     });
     expect(result.resolvedPrincipals).toEqual({
+      ci: "FAKE-CI-ROLE-ID",
       executor: "FAKE-EXECUTOR-ROLE-ID",
       scheduler: "FAKE-SCHEDULER-ROLE-ID",
       operator: "FAKE-OPERATOR-ROLE-ID",

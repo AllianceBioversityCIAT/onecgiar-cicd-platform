@@ -4,10 +4,9 @@
 // way SQS would, a fake deploy transport and a recording notification provider.
 import { findRepoRoot, BundledDefinitionSource } from "../../src/adapters/bundled-definition-source/index.js";
 import type { InboundMessage } from "../../src/inbound/sqs-consumer/index.js";
-import type { DeploySession, DeployTransport, ScriptExecOutcome, ScriptExecRequest } from "../../src/ports/deploy-transport.js";
+import type { DeploySession, DeployTransport, ScriptExecOutcome, ScriptExecRequest, SshTarget } from "../../src/ports/deploy-transport.js";
 import type { NotificationEvent, NotificationProvider } from "../../src/ports/notification-provider.js";
 import type { QueueMessage, QueuePublisher } from "../../src/ports/queue-publisher.js";
-import type { TransportHooks } from "../../src/main/bootstrap.js";
 import { FakeSecretProvider } from "./fake-secret-provider.js";
 
 export const CI_ROLE = "FAKECIROLEID";
@@ -23,6 +22,7 @@ export const KNOWN_REFS: Record<string, string> = {
   "<PRMS_REPORTING_SERVER_HEALTH_URL_REF>": "resolved-server-health",
   "<PRMS_REPORTING_CLIENT_HEALTH_URL_REF>": "resolved-client-health",
   "<PRMS_REPORTING_SLACK_CHANNEL_REF>": "resolved-slack-channel",
+  "<CI_PRINCIPAL_REF>": CI_ROLE,
   "<EXECUTOR_PRINCIPAL_REF>": EXECUTOR_ROLE,
   "<SCHEDULER_PRINCIPAL_REF>": SCHEDULER_ROLE,
   "<OPERATOR_PRINCIPAL_REF>": OPERATOR_ROLE,
@@ -52,6 +52,7 @@ export function validEnv(over: Record<string, string | undefined> = {}): NodeJS.
     CICD_REGISTRY_TABLE_NAME: "cicd-registry-test",
     CICD_QUEUE_URL: "https://queue.example.invalid/<AWS_ACCOUNT_ID>/events",
     AWS_REGION: "us-east-1",
+    CICD_CI_PRINCIPAL_REF: "<CI_PRINCIPAL_REF>",
     CICD_EXECUTOR_PRINCIPAL_REF: "<EXECUTOR_PRINCIPAL_REF>",
     CICD_SCHEDULER_PRINCIPAL_REF: "<SCHEDULER_PRINCIPAL_REF>",
     CICD_OPERATOR_PRINCIPAL_REF: "<OPERATOR_PRINCIPAL_REF>",
@@ -103,18 +104,16 @@ export class RecordingProvider implements NotificationProvider {
   }
 }
 
-/** A transport whose script "succeeds"; it reports a delivery checksum through the hook like the SSH transport does. */
-export function successfulTransport(hooks: TransportHooks, calls: ScriptExecRequest[] = [], exit: ScriptExecOutcome = {
+/** A transport whose script "succeeds"; it records every SSH target and exec it receives (AC-02 V1: nothing is delivered). */
+export function successfulTransport(calls: ScriptExecRequest[] = [], exit: ScriptExecOutcome = {
   kind: "EXIT",
   exitCode: 0,
   cicdResult: { status: "SUCCESS", deployedImages: { "server-container": "server-repo@sha256:aa" }, healthy: true },
-}): DeployTransport {
+}, targets: SshTarget[] = []): DeployTransport {
   return {
-    async connect(): Promise<DeploySession> {
+    async connect(target: SshTarget): Promise<DeploySession> {
+      targets.push(target);
       return {
-        async deliverScript(executionId) {
-          hooks.onScriptDelivered({ executionId, sha256: "f".repeat(64), definitionRef: "test-definition-ref" });
-        },
         async exec(request) {
           calls.push(request);
           return exit;

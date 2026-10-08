@@ -1,16 +1,19 @@
-// @akili-spec changes/cicd-executor-poc design §3.3, §5.1, §7 (execution-service row), §7.1, §7.3 (X1, X2, X3), DD-20, DD-25, DD-27; requirements FR-03, FR-07, FR-21, FR-23
-// Identity, dedupe and execution creation (N-10). Receives a request already
-// validated by the message-router (sender, schema, requestId, definition
-// lookup, repository/workflow consistency) and:
-//   1. checks unit-set equality with the definition (FR-03): else X2 CONSISTENCY_MISMATCH;
-//   2. claims the dedupe key `{deploymentId, requestId}` (DD-20, leased claim);
-//   3. ONLY AFTER owning the claim, takes the per-deployment sequence (a
-//      rejection or a lost claim never consumes a number, RL-5);
-//   4. creates the execution in QUEUED (X1, `attribute_not_exists`) and binds the claim;
-//   5. raises `TARGET.highestAccepted` in a SEPARATE conditional write (E2: not
+// @akili-spec changes/cicd-executor-poc design §1.2, §3.3, §5.1, §6.3, §7 (execution-service row), §7.1, §7.3 (X1, X2, X3), DD-20, DD-25, DD-27; requirements FR-02, FR-03, FR-07, FR-21, FR-23; tasks R-4 (AC-02 V1)
+// Identity, dedupe and execution creation. Receives a request already
+// validated by the message-router (sender, schema, requestId, target lookup,
+// target validity and source authorization, option A) and:
+//   1. claims the dedupe key `{targetId, requestId}` (DD-20, leased claim);
+//   2. ONLY AFTER owning the claim, takes the per-target sequence (a rejection
+//      or a lost claim never consumes a number, RL-5);
+//   3. creates the execution in QUEUED (X1, `attribute_not_exists`) with the
+//      non-secret snapshot of the target record (design §5.1, §6.3) and binds
+//      the claim;
+//   4. raises `TARGET.highestAccepted` in a SEPARATE conditional write (E2: not
 //      a condition of X1; a refused raise is the expected outcome for an older
 //      request);
-//   6. evaluates S1 and, when superseded, applies X3 (QUEUED -> SUPERSEDED).
+//   5. evaluates S1 and, when superseded, applies X3 (QUEUED -> SUPERSEDED).
+// AC-02 V1: the deploy identity and lock key is the `targetId` (design §1.2);
+// there are no Deployment Definitions, so nothing here reads a definition.
 // Redelivery table (DD-20), by the stored dedupe state:
 //   - absent                      -> claim (`attribute_not_exists`); the winner proceeds;
 //   - BOUND                       -> no-op (DUPLICATE); recovery is the reconciler's;
@@ -24,19 +27,17 @@
 //                                    a loser gets `ClaimInProgressError`.
 // Every write after the claim is conditional on the claim token, so a
 // processing that lost its lease can never double-bind.
-// Out of scope: V1/X4/X5 and everything after QUEUED (deploy-coordinator,
-// reconciler), sender authorization (N-06), TARGET adapter (N-09).
+// Rejections (X2) are recorded under the SQS message identity only
+// (`REJECT#MSG#`, design §5.1, §6.3): no item keyed by a target is written.
 import { randomUUID } from "node:crypto";
 import { applyTransition, newExecutionSnapshot, type CreationChecks } from "../../domain/state-machine/index.js";
-import type { RejectReason } from "../../domain/errors/index.js";
 import { evaluateS1, type OrderingValue } from "../../domain/supersede-policy/index.js";
 import type { Clock } from "../../ports/clock.js";
 import type { ValidatedDeployRequest, Rejection } from "../message-router/index.js";
-import type { ExecutionItem, RejectionItem } from "../../adapters/dynamodb-state-store/types.js";
-import type { RejectionRef } from "../../adapters/dynamodb-state-store/keys.js";
+import type { ExecutionItem, RejectionItem, TargetSnapshot } from "../../adapters/dynamodb-state-store/types.js";
+import type { TargetRecord } from "../../ports/target-registry.js";
 import type {
   DedupePort,
-  DeploymentCatalog,
   ExecutionStorePort,
   RejectionStorePort,
   SequencePort,
@@ -47,8 +48,6 @@ import { buildSourceRef } from "./source-ref.js";
 export { buildSourceRef, type BoundSource } from "./source-ref.js";
 export type {
   DedupePort,
-  DeploymentCatalog,
-  DeploymentInfo,
   ExecutionStorePort,
   RejectionStorePort,
   SequencePort,
@@ -65,37 +64,27 @@ export const EXECUTION_TTL_SECONDS = 180 * 24 * 60 * 60;
 /** `QUEUED` deadline (design §7.1): created + 5 minutes. */
 export const QUEUED_DEADLINE_MS = 5 * 60 * 1000;
 
-// Identifier shapes of the schema (deploy-request.schema.json). An identifier
-// that does not match is "unusable" for a REJECT# key (design §5.1).
-const USABLE_DEPLOYMENT_ID = /^[a-z0-9][a-z0-9-]{1,62}$/;
-const USABLE_REQUEST_ID = /^[0-9]{1,20}-[0-9]{1,4}$/;
-
 /** A validated request plus the audit sender reference (role-ID prefix only, DD-25), carried from the authorizer result. */
 export interface AcceptedDeployRequest extends ValidatedDeployRequest {
   readonly senderRef: string;
 }
 
-/** A router rejection plus the audit data the record needs. */
-export interface RejectionInput extends Rejection {
-  readonly senderRef: string;
-  /** SQS MessageId: the REJECT#MSG# key when `deploymentId`/`requestId` are missing or unusable. */
-  readonly sqsMessageId?: string;
-}
+/** A router rejection (it carries the sender reference and the SQS message id, the record key). */
+export type RejectionInput = Rejection;
 
 export type DeployRequestedOutcome =
   | { readonly outcome: "CREATED"; readonly executionId: string; readonly sequence: number; readonly status: "QUEUED" | "SUPERSEDED" }
-  | { readonly outcome: "DUPLICATE"; readonly executionId?: string }
-  | { readonly outcome: "REJECTED"; readonly reason: RejectReason };
+  | { readonly outcome: "DUPLICATE"; readonly executionId?: string };
 
 /** A foreign, live (or just-taken-over) claim owns this request: do NOT acknowledge, SQS redelivers (DD-20). */
 export class ClaimInProgressError extends Error {
-  public constructor(deploymentId: string, requestId: string) {
-    super(`dedupe claim for ${deploymentId}#${requestId} is owned by another processing; retry on redelivery`);
+  public constructor(targetId: string, requestId: string) {
+    super(`dedupe claim for ${targetId}#${requestId} is owned by another processing; retry on redelivery`);
     this.name = "ClaimInProgressError";
   }
 }
 
-/** Ordering values of different sources met: impossible under validation (DD-27), so fail safe loudly instead of guessing. */
+/** Ordering values of different sources met (V1: two caller workflows on one target, V1-R2): fail safe loudly instead of guessing (DD-27). */
 export class OrderingSourceMismatchError extends Error {
   public constructor(executionId: string) {
     super(`supersede ordering for ${executionId} met a value of another source; refusing to compare (DD-27)`);
@@ -104,7 +93,6 @@ export class OrderingSourceMismatchError extends Error {
 }
 
 export interface ExecutionServiceDeps {
-  readonly catalog: DeploymentCatalog;
   readonly dedupe: DedupePort;
   readonly sequences: SequencePort;
   readonly executions: ExecutionStorePort;
@@ -126,42 +114,27 @@ const ALL_PASSED: CreationChecks = {
   senderAuthorized: true,
   schemaValid: true,
   requestIdMatches: true,
-  deploymentKnown: true,
-  consistencyOk: true,
+  targetKnown: true,
+  targetValid: true,
+  sourceAuthorized: true,
   dedupeClaimOwned: true,
 };
 
-function x2Reason(failed: Partial<CreationChecks>): RejectReason {
-  const t = applyTransition(null, { kind: "CREATE", checks: { ...ALL_PASSED, ...failed, dedupeClaimOwned: false } });
-  if (!t.accepted || t.transitionId !== "X2" || t.rejectReason === undefined) {
-    throw new Error("execution-service: a failed creation check did not yield X2");
-  }
-  return t.rejectReason;
-}
-
-/** `true` when the request's artifact keys equal the definition's units exactly (no missing, no extra). */
-function unitSetsEqual(requested: readonly string[], declared: readonly string[]): boolean {
-  const a = new Set(requested);
-  const b = new Set(declared);
-  if (a.size !== requested.length || b.size !== declared.length) return false;
-  return a.size === b.size && [...a].every((unit) => b.has(unit));
-}
-
-/** The `REJECT#` key of a rejection: scoped `{deploymentId, requestId}` when both are usable, else the SQS message id (design §5.1). */
-export function rejectionRef(input: Pick<RejectionInput, "deploymentId" | "requestId" | "sqsMessageId">): RejectionRef {
-  const { deploymentId, requestId, sqsMessageId } = input;
-  if (
-    deploymentId !== undefined &&
-    requestId !== undefined &&
-    USABLE_DEPLOYMENT_ID.test(deploymentId) &&
-    USABLE_REQUEST_ID.test(requestId)
-  ) {
-    return { deploymentId, requestId };
-  }
-  if (sqsMessageId === undefined) {
-    throw new Error("execution-service: a rejection with unusable identifiers needs the SQS message id (REJECT#MSG#)");
-  }
-  return { sqsMessageId };
+/** The non-secret copy of the target record written on the execution at X1 (design §5.1, §6.3). Deep copy: never aliases the caller's object. */
+export function snapshotOf(target: TargetRecord): TargetSnapshot {
+  return {
+    version: target.version,
+    project: target.project,
+    environment: target.environment,
+    host: target.host,
+    ...(target.port === undefined ? {} : { port: target.port }),
+    user: target.user,
+    hostKey: [...target.hostKey],
+    credentialRef: target.credentialRef,
+    deployScript: target.deployScript,
+    deployWindowPolicy: target.deployWindowPolicy,
+    sourceRepositoryId: target.sourceRepositoryId,
+  };
 }
 
 type ClaimResult =
@@ -171,93 +144,85 @@ type ClaimResult =
 export function createExecutionService(deps: ExecutionServiceDeps): ExecutionService {
   const newClaimToken = deps.newClaimToken ?? randomUUID;
 
-  async function record(ref: RejectionRef, reason: RejectReason, senderRef: string, deploymentId: string | undefined): Promise<boolean> {
+  async function record(input: RejectionInput): Promise<boolean> {
     const item: Omit<RejectionItem, "expiresAt"> = {
-      reason,
-      senderRef,
-      ...(deploymentId === undefined ? {} : { deploymentId }),
+      reason: input.reason,
+      senderRef: input.senderRef,
+      ...(input.targetId === undefined ? {} : { targetId: input.targetId }),
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
       receivedAt: deps.clock.now().getTime(),
     };
-    return deps.rejections.record(ref, item);
+    return deps.rejections.record({ sqsMessageId: input.sqsMessageId }, item);
   }
 
   /** DD-20: returns the owned claim (with an already stored sequence when taken over), or a no-op outcome. */
-  async function acquireClaim(deploymentId: string, requestId: string): Promise<ClaimResult> {
+  async function acquireClaim(targetId: string, requestId: string): Promise<ClaimResult> {
     const token = newClaimToken();
     // Two attempts: the item can only vanish between claim and get through TTL expiry (7 d), which is not worth more.
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const nowMs = deps.clock.now().getTime();
       const leaseUntil = nowMs + DEDUPE_CLAIM_LEASE_MS;
       const expiresAt = Math.floor(nowMs / 1000) + DEDUPE_TTL_SECONDS;
-      if (await deps.dedupe.claim(deploymentId, requestId, token, leaseUntil, expiresAt)) return { owned: true, token };
+      if (await deps.dedupe.claim(targetId, requestId, token, leaseUntil, expiresAt)) return { owned: true, token };
 
-      const existing = await deps.dedupe.get(deploymentId, requestId);
+      const existing = await deps.dedupe.get(targetId, requestId);
       if (existing === undefined) continue;
       if (existing.state === "BOUND") {
         return { owned: false, ...(existing.executionId === undefined ? {} : { executionId: existing.executionId }) };
       }
-      if (existing.claimLeaseExpiresAt >= nowMs) throw new ClaimInProgressError(deploymentId, requestId);
-      const tookOver = await deps.dedupe.takeOverExpiredClaim(deploymentId, requestId, existing.claimToken, token, leaseUntil, nowMs);
-      if (!tookOver) throw new ClaimInProgressError(deploymentId, requestId);
+      if (existing.claimLeaseExpiresAt >= nowMs) throw new ClaimInProgressError(targetId, requestId);
+      const tookOver = await deps.dedupe.takeOverExpiredClaim(targetId, requestId, existing.claimToken, token, leaseUntil, nowMs);
+      if (!tookOver) throw new ClaimInProgressError(targetId, requestId);
       return { owned: true, token, ...(existing.sequence === undefined ? {} : { storedSequence: existing.sequence }) };
     }
-    throw new ClaimInProgressError(deploymentId, requestId);
+    throw new ClaimInProgressError(targetId, requestId);
   }
 
   /** DD-20 step 2: reuse a stored sequence, else increment (only here, after the claim) and record it conditional on the claim. */
-  async function resolveSequence(deploymentId: string, requestId: string, token: string, stored: number | undefined): Promise<number> {
+  async function resolveSequence(targetId: string, requestId: string, token: string, stored: number | undefined): Promise<number> {
     if (stored !== undefined) return stored;
-    const taken = await deps.sequences.increment(deploymentId);
-    if (await deps.dedupe.recordSequence(deploymentId, requestId, token, taken)) return taken;
+    const taken = await deps.sequences.increment(targetId);
+    if (await deps.dedupe.recordSequence(targetId, requestId, token, taken)) return taken;
     // Not recorded: the claim is no longer ours, or a sequence was stored meanwhile (our number becomes a gap).
-    const current = await deps.dedupe.get(deploymentId, requestId);
+    const current = await deps.dedupe.get(targetId, requestId);
     if (current?.claimToken === token && current.sequence !== undefined) return current.sequence;
-    throw new ClaimInProgressError(deploymentId, requestId);
+    throw new ClaimInProgressError(targetId, requestId);
   }
 
   async function deployRequested(input: AcceptedDeployRequest): Promise<DeployRequestedOutcome> {
-    const { request, senderRef } = input;
-    const { deploymentId, requestId } = request;
+    const { request, senderRef, target } = input;
+    const { targetId, requestId } = request;
+    if (target.targetId !== targetId) throw new Error("execution-service: the validated target does not match the request's targetId");
 
-    // 1. Definition-derived checks (X2: no claim, no sequence).
-    const info = await deps.catalog.getDeployment(deploymentId);
-    if (info === undefined) {
-      const reason = x2Reason({ deploymentKnown: false });
-      await record({ deploymentId, requestId }, reason, senderRef, deploymentId);
-      return { outcome: "REJECTED", reason };
-    }
-    if (!unitSetsEqual(Object.keys(request.artifacts), info.units)) {
-      const reason = x2Reason({ consistencyOk: false });
-      await record({ deploymentId, requestId }, reason, senderRef, deploymentId);
-      return { outcome: "REJECTED", reason };
-    }
-
-    // 2. Dedupe claim (DD-20). Nothing below runs without owning it.
-    const claim = await acquireClaim(deploymentId, requestId);
+    // 1. Dedupe claim (DD-20). Nothing below runs without owning it; every target check already passed in the router.
+    const claim = await acquireClaim(targetId, requestId);
     if (!claim.owned) {
       return { outcome: "DUPLICATE", ...(claim.executionId === undefined ? {} : { executionId: claim.executionId }) };
     }
 
-    // 3. Sequence: only after the claim, never for rejections or lost claims.
-    const sequence = await resolveSequence(deploymentId, requestId, claim.token, claim.storedSequence);
-    const executionId = `${deploymentId}-${String(sequence)}`;
+    // 2. Sequence: only after the claim, never for rejections or lost claims.
+    const sequence = await resolveSequence(targetId, requestId, claim.token, claim.storedSequence);
+    const executionId = `${targetId}-${String(sequence)}`;
 
-    // 4. X1: QUEUED, `attribute_not_exists` (a repeat after a crash is idempotent), then bind the claim.
+    // 3. X1: QUEUED, `attribute_not_exists` (a repeat after a crash is idempotent), then bind the claim.
     const created = applyTransition(null, { kind: "CREATE", checks: ALL_PASSED });
     if (!created.accepted || created.transitionId !== "X1") throw new Error("execution-service: X1 was not accepted by the state machine");
     const nowMs = deps.clock.now().getTime();
-    const order = { sourceRef: buildSourceRef(info.source), runNumber: request.ci.runNumber, runAttempt: request.ci.runAttempt };
+    const order = {
+      sourceRef: buildSourceRef({ repository: request.ci.repository, workflow: request.ci.workflowRef }),
+      runNumber: request.ci.runNumber,
+      runAttempt: request.ci.runAttempt,
+    };
     const item: ExecutionItem = {
       executionId,
-      deploymentId,
-      definitionRef: info.definitionRef,
+      targetId,
+      targetSnapshot: snapshotOf(target),
       requestId,
       commitSha: request.commitSha,
       artifacts: request.artifacts,
       order,
       ci: { repository: request.ci.repository, runId: request.ci.runId, workflowRef: request.ci.workflowRef },
       senderRef,
-      lockKey: info.lockKey,
       sequence,
       status: "QUEUED",
       version: 1,
@@ -269,18 +234,18 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
       expiresAt: Math.floor(nowMs / 1000) + EXECUTION_TTL_SECONDS,
     };
     await deps.executions.create(item);
-    if (!(await deps.dedupe.bind(deploymentId, requestId, claim.token, executionId))) {
+    if (!(await deps.dedupe.bind(targetId, requestId, claim.token, executionId))) {
       // The claim was taken over meanwhile; the new owner completes the same idempotent path.
       return { outcome: "DUPLICATE", executionId };
     }
 
-    // 5. highestAccepted: a separate conditional raise (E2). A refusal is expected for an older request.
+    // 4. highestAccepted: a separate conditional raise (E2). A refusal is expected for an older request.
     const value: OrderingValue = { sourceRef: order.sourceRef, runNumber: order.runNumber };
-    const raise = await deps.target.raiseHighestAccepted(info.lockKey, { ...value, executionId });
+    const raise = await deps.target.raiseHighestAccepted(targetId, { ...value, executionId });
     if (!raise.accepted && raise.reason === "SOURCE_MISMATCH") throw new OrderingSourceMismatchError(executionId);
 
-    // 6. S1 (cheap, non-authoritative): older than lastDeployed / highestDispatched / highestAccepted -> X3.
-    const decision = evaluateS1(value, await deps.target.readOrdering(info.lockKey));
+    // 5. S1 (cheap, non-authoritative): older than lastDeployed / highestDispatched / highestAccepted -> X3.
+    const decision = evaluateS1(value, await deps.target.readOrdering(targetId));
     if (decision.decision === "REJECTED_SOURCE_MISMATCH") throw new OrderingSourceMismatchError(executionId);
     if (decision.decision === "PROCEED") return { outcome: "CREATED", executionId, sequence, status: "QUEUED" };
 
@@ -303,7 +268,7 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
   }
 
   async function rejected(input: RejectionInput): Promise<boolean> {
-    return record(rejectionRef(input), input.reason, input.senderRef, input.deploymentId);
+    return record(input);
   }
 
   return { deployRequested, rejected };

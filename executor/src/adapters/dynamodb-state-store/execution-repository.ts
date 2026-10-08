@@ -103,12 +103,12 @@ export class ExecutionRepository {
   }
 
   /**
-   * Write-once audit fields (`slackThreadTs`, `scriptChecksum`) that are NOT part of the state machine. Conditional on the
+   * Write-once audit field (`slackThreadTs`; V1: no `scriptChecksum`, no script is delivered) that are NOT part of the state machine. Conditional on the
    * item existing and the field being absent; it deliberately does NOT touch `version`, `status` or the GSI2 attributes, so it can
    * never invalidate the version an in-flight coordinator attempt holds (DD-03: the state itself stays guarded by status + version).
    * `false` when the field was already set (a redelivered or concurrent writer won).
    */
-  public async setAuditOnce(executionId: string, field: "slackThreadTs" | "scriptChecksum", value: string): Promise<boolean> {
+  public async setAuditOnce(executionId: string, field: "slackThreadTs", value: string): Promise<boolean> {
     const key = executionKey(executionId);
     return runConditionalWrite(() =>
       this.client.send(

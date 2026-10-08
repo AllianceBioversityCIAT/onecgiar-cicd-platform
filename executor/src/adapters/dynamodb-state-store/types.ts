@@ -7,11 +7,35 @@
 import type { ExecutionStatus } from "../../domain/state-machine/index.js";
 import type { DomainErrorCode, RejectReason } from "../../domain/errors/index.js";
 
+/**
+ * Non-secret copy of the target record taken at acceptance (X1, design §5.1, §6.3;
+ * AC-02 V1). Lock retries, reconciliation and dispatch use it for the whole
+ * execution, so a later edit or deletion of the record never changes an
+ * in-flight execution. `credentialRef` is a reference; the credential is read
+ * only at connect time.
+ */
+export interface TargetSnapshot {
+  /** Version of the target record that was copied. */
+  readonly version: number;
+  readonly project: string;
+  readonly environment: string;
+  readonly host: string;
+  /** SSH port; absent means 22. */
+  readonly port?: number;
+  readonly user: string;
+  readonly hostKey: readonly string[];
+  readonly credentialRef: string;
+  readonly deployScript: string;
+  readonly deployWindowPolicy: "required" | "not-required";
+  readonly sourceRepositoryId: string;
+}
+
 /** Execution item (`EXEC#{executionId}` / `META`), design §5.1. */
 export interface ExecutionItem {
   readonly executionId: string;
-  readonly deploymentId: string;
-  readonly definitionRef: string;
+  /** V1 deploy identity and lock key (design §1.2). */
+  readonly targetId: string;
+  readonly targetSnapshot: TargetSnapshot;
   readonly requestId: string;
   readonly commitSha: string;
   /** Immutable artifact identity: unit name to image digest (DD-26). */
@@ -25,7 +49,6 @@ export interface ExecutionItem {
     readonly runUrl?: string;
   };
   readonly senderRef: string;
-  readonly lockKey: string;
   readonly sequence: number;
   readonly status: ExecutionStatus;
   /** Optimistic-concurrency counter (DD-03); every write increments it. */
@@ -46,7 +69,6 @@ export interface ExecutionItem {
   readonly windowClosedDuringRun?: boolean;
   /** The script exited with a code that guarantees `CICD_RESULT` (0/10/20/30/40) but none was parsed (design §6.5, §7.2). */
   readonly cicdResultMissing?: boolean;
-  readonly scriptChecksum?: string;
   readonly result?: { readonly code: number; readonly cicdResult?: string; readonly logTail?: string };
   readonly error?: { readonly code: DomainErrorCode; readonly message?: string };
   readonly slackThreadTs?: string;
@@ -63,7 +85,9 @@ export interface ExecutionItem {
 export interface RejectionItem {
   readonly reason: RejectReason;
   readonly senderRef: string;
-  readonly deploymentId?: string;
+  /** Best-effort identifiers read from the (possibly invalid) body, audit only (V1: the record key is always the SQS message id). */
+  readonly targetId?: string;
+  readonly requestId?: string;
   readonly receivedAt: number;
   /** Epoch seconds (DynamoDB TTL); 30 days after `receivedAt`. */
   readonly expiresAt: number;
@@ -71,9 +95,9 @@ export interface RejectionItem {
 
 export type DedupeState = "CLAIMED" | "BOUND";
 
-/** Dedupe item (`DEDUPE#{deploymentId}#{requestId}` / `DEDUPE`), design DD-20. */
+/** Dedupe item (`DEDUPE#{targetId}#{requestId}` / `DEDUPE`), design DD-20, §1.2. */
 export interface DedupeItem {
-  readonly deploymentId: string;
+  readonly targetId: string;
   readonly requestId: string;
   readonly state: DedupeState;
   readonly claimToken: string;
@@ -104,9 +128,9 @@ export interface DeployWindowItem {
   readonly deadlineAt?: number;
 }
 
-/** Sequence item (`DEPLOYMENT#{deploymentId}` / `SEQ`). */
+/** Sequence item (`DEPLOYMENT#{targetId}` / `SEQ`), design §5.1 with the V1 mapping of §1.2. */
 export interface SequenceItem {
-  readonly deploymentId: string;
+  readonly targetId: string;
   readonly value: number;
 }
 

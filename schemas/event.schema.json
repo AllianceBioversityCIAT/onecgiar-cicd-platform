@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://onecgiar-cicd-platform/schemas/event.schema.json",
   "title": "Internal event envelope",
-  "$comment": "@akili-spec changes/cicd-executor-poc design 6.4; requirements FR-04. Reduced to the internal event types of design 6.4 (DEPLOY_REQUESTED has its own schema: deploy-request.schema.json). Envelope: specVersion, eventType, timestamp, source in {executor, scheduler, operator}; eventId (UUID) is required by every branch EXCEPT RECONCILE_TICK. G-8 (owner decision 2026-10-06): RECONCILE_TICK is an internal periodic trigger with a minimal contract (specVersion, eventType, source, timestamp); EventBridge Scheduler cannot produce a UUID, so the sender does NOT supply eventId (the branch forbids it) and the Executor generates its own correlation id at the handling boundary. N-05: each eventType accepts ONLY its own fields. Exactly one oneOf branch matches (its eventType const), and unevaluatedProperties false rejects any property not evaluated by the envelope or by the matching branch. The sender class per type (DD-25: LOCK_RETRY_REQUESTED from executor, RECONCILE_TICK from scheduler, operator events from operator) is pinned through the branch's `source` const. Authenticating the real sender is FR-21 and is not a schema concern. Coverage of the target's externalDeployers by externalJobsDisabled and the bounds of closesAt are semantic checks outside the schema.",
+  "$comment": "@akili-spec changes/cicd-executor-poc design 6.4; requirements FR-04; AC-02 V1: the window and resolution events name the targetId (the V1 lock key) instead of a lockKey. Reduced to the internal event types of design 6.4 (DEPLOY_REQUESTED has its own schema: deploy-request.schema.json). Envelope: specVersion, eventType, timestamp, source in {executor, scheduler, operator}; eventId (UUID) is required by every branch EXCEPT RECONCILE_TICK. G-8 (owner decision 2026-10-06): RECONCILE_TICK is an internal periodic trigger with a minimal contract (specVersion, eventType, source, timestamp); EventBridge Scheduler cannot produce a UUID, so the sender does NOT supply eventId (the branch forbids it) and the Executor generates its own correlation id at the handling boundary. N-05: each eventType accepts ONLY its own fields. Exactly one oneOf branch matches (its eventType const), and unevaluatedProperties false rejects any property not evaluated by the envelope or by the matching branch. The sender class per type (DD-25: LOCK_RETRY_REQUESTED from executor, RECONCILE_TICK from scheduler, operator events from operator) is pinned through the branch's `source` const. Authenticating the real sender is FR-21 and is not a schema concern. The bounds of closesAt and the target checks (known, valid, window required) are semantic checks outside the schema; externalJobsDisabled is recorded for audit (AC-02 V1: external deployers are not modeled, V1-R5).",
   "type": "object",
   "unevaluatedProperties": false,
   "required": ["specVersion", "eventType", "timestamp", "source"],
@@ -42,7 +42,7 @@
       "properties": {
         "eventType": { "const": "DEPLOY_WINDOW_OPEN_REQUESTED" },
         "source": { "const": "operator" },
-        "lockKey": { "type": "string", "minLength": 1 },
+        "targetId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
         "openedBy": { "type": "string", "minLength": 1 },
         "externalJobsDisabled": {
           "type": "array",
@@ -52,23 +52,23 @@
         "closesAt": { "type": "string", "format": "date-time" },
         "note": { "type": "string", "maxLength": 1024 }
       },
-      "required": ["eventId", "lockKey", "openedBy", "externalJobsDisabled", "closesAt"]
+      "required": ["eventId", "targetId", "openedBy", "externalJobsDisabled", "closesAt"]
     },
     {
       "properties": {
         "eventType": { "const": "DEPLOY_WINDOW_CLOSE_REQUESTED" },
         "source": { "const": "operator" },
-        "lockKey": { "type": "string", "minLength": 1 },
+        "targetId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
         "closedBy": { "type": "string", "minLength": 1 },
         "note": { "type": "string", "maxLength": 1024 }
       },
-      "required": ["eventId", "lockKey", "closedBy"]
+      "required": ["eventId", "targetId", "closedBy"]
     },
     {
       "properties": {
         "eventType": { "const": "TARGET_RESOLUTION_RECORDED" },
         "source": { "const": "operator" },
-        "lockKey": { "type": "string", "minLength": 1 },
+        "targetId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
         "executionId": { "type": "string", "minLength": 1 },
         "resolvedBy": { "type": "string", "minLength": 1 },
         "observedDigests": {
@@ -77,7 +77,7 @@
         },
         "note": { "type": "string", "maxLength": 1024 }
       },
-      "required": ["eventId", "lockKey", "executionId", "resolvedBy", "observedDigests"]
+      "required": ["eventId", "targetId", "executionId", "resolvedBy", "observedDigests"]
     }
   ]
 }

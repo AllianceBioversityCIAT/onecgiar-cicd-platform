@@ -49,3 +49,17 @@ export function buildRemoteCommand(scriptPath: string, args: readonly string[]):
   assertSafeScriptArgs(args);
   return [scriptPath, ...args].map(shellQuote).join(" ");
 }
+
+/**
+ * The target's deploy script path (AC-02 V1, design §6.3): absolute, letters,
+ * digits, `.`, `_`, `/`, `-` only, no `.` or `..` segment and no trailing slash.
+ * Defense in depth behind the target-record schema; the value is never request text.
+ */
+const SCRIPT_PATH_PATTERN = /^\/[A-Za-z0-9._/-]{1,255}$/;
+const SCRIPT_PATH_FORBIDDEN = /(^|\/)\.{1,2}(\/|$)|\/$/;
+
+export function assertSafeScriptPath(scriptPath: string): void {
+  if (typeof scriptPath !== "string" || !SCRIPT_PATH_PATTERN.test(scriptPath) || SCRIPT_PATH_FORBIDDEN.test(scriptPath)) {
+    throw new UnsafeArgumentError("deploy script path is not a safe absolute path");
+  }
+}

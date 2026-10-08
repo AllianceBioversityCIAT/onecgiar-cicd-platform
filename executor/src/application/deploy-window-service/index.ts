@@ -1,8 +1,13 @@
-// @akili-spec changes/cicd-executor-poc design §4.2, §7.7, DD-21; requirements FR-18, FR-24, RL-1
+// @akili-spec changes/cicd-executor-poc design §4.2, §6.4, §7.7, DD-21; requirements FR-18, FR-24, RL-1; tasks R-5 (AC-02 V1)
 // Deploy-window service: opens/closes windows (idempotent, conditional writes
 // through the window repository) and answers the coordinator's revalidation
 // V1-V4 (fail fast, no waiting). Authorization of the operator principal is
 // the router's job (DD-25); this service trusts only ports and persisted data.
+// AC-02 V1: windows are keyed by the `targetId` (the V1 lock key, design §1.2).
+// Opening reads the target with one GetItem (R-3) and rejects an unknown or
+// invalid target and a target whose policy is `not-required`. Revalidation of
+// an accepted execution never re-reads the registry: the caller passes the
+// window policy of the execution's snapshot.
 import {
   isDeployAllowed,
   validateOpenWindow,
@@ -13,6 +18,7 @@ import {
   type WindowRecord,
 } from "../../domain/window-policy/index.js";
 import type { Clock } from "../../ports/clock.js";
+import type { TargetRegistry } from "../../ports/target-registry.js";
 
 export { TargetResolutionService } from "./target-resolution.js";
 export type {
@@ -50,19 +56,20 @@ export interface WindowStore {
   ): Promise<boolean>;
 }
 
-/** Resolves a target's window policy and its (opaque, already resolved) external deployers by `lockKey`. */
-export interface TargetPolicyLookup {
-  resolve(lockKey: string): Promise<TargetWindowPolicy | undefined>;
+/** The target of a revalidation: its id (the window key) and the window policy of the execution snapshot. */
+export interface WindowTarget extends TargetWindowPolicy {
+  readonly targetId: string;
 }
 
 export interface DeployWindowServiceDeps {
   readonly windows: WindowStore;
-  readonly targets: TargetPolicyLookup;
+  /** Read-only Target Registry (R-3), used only to open a window. */
+  readonly targets: TargetRegistry;
   readonly clock: Clock;
 }
 
 export interface OpenWindowCommand {
-  readonly lockKey: string;
+  readonly targetId: string;
   readonly openedBy: string;
   readonly externalJobsDisabled: readonly string[];
   /** ISO-8601 date-time, as in the event. */
@@ -70,7 +77,7 @@ export interface OpenWindowCommand {
   readonly note?: string;
 }
 
-export type OpenRejection = OpenViolation | "UNKNOWN_TARGET";
+export type OpenRejection = OpenViolation | "UNKNOWN_TARGET" | "INVALID_TARGET";
 
 export type OpenOutcome =
   | { readonly outcome: "OPENED" }
@@ -79,7 +86,6 @@ export type OpenOutcome =
       readonly outcome: "REJECTED";
       readonly reason: OpenRejection;
       readonly violations: readonly OpenRejection[];
-      readonly uncovered: readonly string[];
     }
   /** A concurrent writer won; the caller must let the message be redelivered. */
   | { readonly outcome: "CONFLICT" };
@@ -114,13 +120,12 @@ export class DeployWindowService {
 
   public async open(command: OpenWindowCommand): Promise<OpenOutcome> {
     const now = this.deps.clock.now().getTime();
-    const target = await this.deps.targets.resolve(command.lockKey);
-    if (target === undefined) {
-      return { outcome: "REJECTED", reason: "UNKNOWN_TARGET", violations: ["UNKNOWN_TARGET"], uncovered: [] };
-    }
+    const lookup = await this.deps.targets.getTarget(command.targetId);
+    if (lookup.kind === "missing") return { outcome: "REJECTED", reason: "UNKNOWN_TARGET", violations: ["UNKNOWN_TARGET"] };
+    if (lookup.kind === "invalid") return { outcome: "REJECTED", reason: "INVALID_TARGET", violations: ["INVALID_TARGET"] };
     const closesAt = Date.parse(command.closesAt);
     const validation = validateOpenWindow({
-      target,
+      target: { deployWindowPolicy: lookup.target.deployWindowPolicy },
       openedBy: command.openedBy,
       externalJobsDisabled: command.externalJobsDisabled,
       closesAt,
@@ -131,7 +136,6 @@ export class DeployWindowService {
         outcome: "REJECTED",
         reason: validation.violations[0] as OpenViolation,
         violations: validation.violations,
-        uncovered: validation.uncovered,
       };
     }
     const patch = {
@@ -142,9 +146,9 @@ export class DeployWindowService {
       ...(command.note === undefined ? {} : { note: command.note }),
     };
 
-    const existing = await this.deps.windows.get(command.lockKey);
+    const existing = await this.deps.windows.get(command.targetId);
     if (existing === undefined) {
-      const created = await this.deps.windows.createOpen({ lockKey: command.lockKey, state: "OPEN", ...patch, version: 1 });
+      const created = await this.deps.windows.createOpen({ lockKey: command.targetId, state: "OPEN", ...patch, version: 1 });
       return created ? { outcome: "OPENED" } : { outcome: "CONFLICT" };
     }
 
@@ -152,18 +156,18 @@ export class DeployWindowService {
     if (existing.state === "OPEN") {
       if (existing.closesAt !== undefined && existing.closesAt > now) return { outcome: "ALREADY_OPEN" };
       // Expired but not yet closed by the reconciler: close it, then reopen.
-      const expired = await this.deps.windows.close(command.lockKey, version, { closedReason: "EXPIRED", closedAt: now });
+      const expired = await this.deps.windows.close(command.targetId, version, { closedReason: "EXPIRED", closedAt: now });
       if (!expired) return { outcome: "CONFLICT" };
       version += 1;
     }
-    const reopened = await this.deps.windows.reopen(command.lockKey, version, patch);
+    const reopened = await this.deps.windows.reopen(command.targetId, version, patch);
     return reopened ? { outcome: "OPENED" } : { outcome: "CONFLICT" };
   }
 
-  public async close(command: { readonly lockKey: string; readonly closedBy: string }): Promise<CloseOutcome> {
-    const existing = await this.deps.windows.get(command.lockKey);
+  public async close(command: { readonly targetId: string; readonly closedBy: string }): Promise<CloseOutcome> {
+    const existing = await this.deps.windows.get(command.targetId);
     if (existing === undefined || existing.state === "CLOSED") return { outcome: "ALREADY_CLOSED" };
-    const closed = await this.deps.windows.close(command.lockKey, existing.version, {
+    const closed = await this.deps.windows.close(command.targetId, existing.version, {
       closedBy: command.closedBy,
       closedReason: "MANUAL",
       closedAt: this.deps.clock.now().getTime(),
@@ -171,9 +175,9 @@ export class DeployWindowService {
     return closed ? { outcome: "CLOSED" } : { outcome: "CONFLICT" };
   }
 
-  /** `isDeployAllowed(lockKey, needUntil)` (design §4.3); `needUntil` is epoch ms (now + timeoutMinutes). */
-  public async isDeployAllowed(lockKey: string, needUntil: number): Promise<DeployDecision> {
-    const [target, window] = await Promise.all([this.deps.targets.resolve(lockKey), this.deps.windows.get(lockKey)]);
+  /** `isDeployAllowed(target, needUntil)` (design §4.3); `needUntil` is epoch ms (now + deployTimeoutMinutes). */
+  public async isDeployAllowed(target: WindowTarget, needUntil: number): Promise<DeployDecision> {
+    const window = target.deployWindowPolicy === "required" ? await this.deps.windows.get(target.targetId) : undefined;
     return isDeployAllowed({ target, window, needUntil, now: this.deps.clock.now().getTime() });
   }
 
@@ -183,8 +187,8 @@ export class DeployWindowService {
    * (RL-1): a denial maps straight to `FAILED (DEPLOY_WINDOW_CLOSED)` through
    * the point's transition; this method never waits and never retries.
    */
-  public async revalidate(point: RevalidationPoint, lockKey: string, needUntil: number): Promise<Revalidation> {
-    const decision = await this.isDeployAllowed(lockKey, needUntil);
+  public async revalidate(point: RevalidationPoint, target: WindowTarget, needUntil: number): Promise<Revalidation> {
+    const decision = await this.isDeployAllowed(target, needUntil);
     if (decision.allowed) return { ok: true, point };
     return { ok: false, point, failureCode: "DEPLOY_WINDOW_CLOSED", transition: FAILURE_TRANSITION[point], reason: decision.reason };
   }

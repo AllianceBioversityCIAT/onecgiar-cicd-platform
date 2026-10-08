@@ -68,14 +68,14 @@ describe.skipIf(!dynamoDbLocalAvailable())("Remaining repositories (DynamoDB Loc
     expect(await repo.markOnce(executionId, eventKey, Date.now() + 7 * 24 * 60 * 60 * 1000)).toBe(false);
   });
 
-  test("RejectionRepository: the record is created once (idempotent), TTL 30 d, scoped and MSG keys", async () => {
+  test("RejectionRepository: the record is created once (idempotent), TTL 30 d, keyed only by the SQS message id (AC-02 V1)", async () => {
     const repo = new RejectionRepository(client, testTableName());
-    const ref = { deploymentId: `<LOGICAL_DEPLOYMENT>-${randomUUID()}`, requestId: "100-1" };
+    const ref = { sqsMessageId: `msg-${randomUUID()}` };
     const receivedAt = Date.now();
 
-    expect(await repo.record(ref, { reason: "UNAUTHORIZED_SENDER", senderRef: "<SENDER_REF>", deploymentId: ref.deploymentId, receivedAt })).toBe(true);
+    expect(await repo.record(ref, { reason: "UNAUTHORIZED_SENDER", senderRef: "<SENDER_REF>", targetId: "example-app-dev", requestId: "100-1", receivedAt })).toBe(true);
     // Redelivery with a different reason must not overwrite the first record.
-    expect(await repo.record(ref, { reason: "SCHEMA_INVALID", senderRef: "<SENDER_REF>", deploymentId: ref.deploymentId, receivedAt: receivedAt + 5 })).toBe(false);
+    expect(await repo.record(ref, { reason: "SCHEMA_INVALID", senderRef: "<SENDER_REF>", receivedAt: receivedAt + 5 })).toBe(false);
 
     const stored = await repo.get(ref);
     expect(stored?.reason).toBe("UNAUTHORIZED_SENDER");
@@ -85,6 +85,7 @@ describe.skipIf(!dynamoDbLocalAvailable())("Remaining repositories (DynamoDB Loc
     const msgRef = { sqsMessageId: `msg-${randomUUID()}` };
     expect(await repo.record(msgRef, { reason: "SCHEMA_INVALID", senderRef: "<SENDER_REF>", receivedAt })).toBe(true);
     expect(await repo.record(msgRef, { reason: "SCHEMA_INVALID", senderRef: "<SENDER_REF>", receivedAt })).toBe(false);
-    expect((await repo.get(msgRef))?.deploymentId).toBeUndefined();
+    expect((await repo.get(msgRef))?.targetId).toBeUndefined();
+    expect((await repo.get(ref))?.targetId).toBe("example-app-dev");
   });
 });

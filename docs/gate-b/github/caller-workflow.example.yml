@@ -8,8 +8,8 @@
 #                                 (DD-24): moving the pin means changing the trust policy
 #                                 in the same change.
 #   <BOUND_BRANCH>                the one branch allowed to deploy
-#   <OWNER_DEPLOYMENT_ID>         the semantic deployment identifier (matches a Deployment
-#                                 Definition owned by the platform)
+#   <OWNER_TARGET_ID>             the Target Registry identifier of the target this repository
+#                                 deploys (its record names this repository as the source)
 #   <GITHUB_ENVIRONMENT>          the GitHub Environment (deployment branch rules = the
 #                                 bound branch) that holds the values below
 #
@@ -50,6 +50,6 @@ jobs:
       contents: read
     uses: <GITHUB_ORG>/<PLATFORM_REPO>/.github/workflows/deploy-request.reusable.yml@<PINNED_COMMIT_SHA>
     with:
-      deploymentId: "<OWNER_DEPLOYMENT_ID>"
+      targetId: "<OWNER_TARGET_ID>"
       environment: "<GITHUB_ENVIRONMENT>"
       units: '[{"unit":"<UNIT_A>","context":"<CONTEXT_A>"},{"unit":"<UNIT_B>","context":"<CONTEXT_B>","dockerfile":"<DOCKERFILE_B>"}]'

@@ -1,9 +1,9 @@
-// @akili-spec changes/cicd-executor-poc design §6.4, runbook §12.2 (TARGET_RESOLUTION_RECORDED), DD-25; requirements FR-17
+// @akili-spec changes/cicd-executor-poc design §1.2, §6.4, runbook §12.2 (TARGET_RESOLUTION_RECORDED), DD-25; requirements FR-17; tasks R-5 (AC-02 V1)
 // Handles TARGET_RESOLUTION_RECORDED. The CLI is not trusted: the Executor
 // checks the preconditions here, through ports:
-//   1. the execution exists, is UNKNOWN_TARGET_STATE and belongs to `lockKey`;
+//   1. the execution exists, is UNKNOWN_TARGET_STATE and belongs to `targetId`;
 //   2. it is listed in the target's `unresolved[]`;
-//   3. the `lockKey` has no live lock owner.
+//   3. the target (the V1 lock key, design §1.2) has no live lock owner.
 // Effect: audit first (idempotent per eventId), then remove that ONE entry
 // from `unresolved[]` through a conditional write. The ports below expose no
 // way to touch `lastDeployed`, `highestDispatched`, `highestAccepted` or any
@@ -18,7 +18,7 @@ export interface UnresolvedStore {
 }
 
 export interface ExecutionLookup {
-  getStatus(executionId: string): Promise<{ readonly status: string; readonly lockKey: string } | undefined>;
+  getStatus(executionId: string): Promise<{ readonly status: string; readonly targetId: string } | undefined>;
 }
 
 export interface LockOwnerLookup {
@@ -28,7 +28,7 @@ export interface LockOwnerLookup {
 
 export interface ResolutionAudit {
   readonly eventId: string;
-  readonly lockKey: string;
+  readonly targetId: string;
   readonly executionId: string;
   readonly resolvedBy: string;
   /** SQS SenderId role of the operator principal, when the caller supplies it. */
@@ -50,7 +50,7 @@ export interface ResolutionContext {
 export type ResolutionRejection =
   | "EXECUTION_NOT_FOUND"
   | "EXECUTION_NOT_UNKNOWN_TARGET_STATE"
-  | "LOCK_KEY_MISMATCH"
+  | "TARGET_MISMATCH"
   | "NOT_LISTED_IN_UNRESOLVED"
   | "LOCK_HAS_LIVE_OWNER";
 
@@ -70,7 +70,7 @@ export interface TargetResolutionDeps {
 
 export interface TargetResolutionEvent {
   readonly eventId: string;
-  readonly lockKey: string;
+  readonly targetId: string;
   readonly executionId: string;
   readonly resolvedBy: string;
   readonly observedDigests: Readonly<Record<string, string>>;
@@ -88,17 +88,17 @@ export class TargetResolutionService {
     const execution = await this.deps.executions.getStatus(event.executionId);
     if (execution === undefined) return reject("EXECUTION_NOT_FOUND");
     if (execution.status !== "UNKNOWN_TARGET_STATE") return reject("EXECUTION_NOT_UNKNOWN_TARGET_STATE");
-    if (execution.lockKey !== event.lockKey) return reject("LOCK_KEY_MISMATCH");
+    if (execution.targetId !== event.targetId) return reject("TARGET_MISMATCH");
 
-    const unresolved = await this.deps.unresolved.listUnresolved(event.lockKey);
+    const unresolved = await this.deps.unresolved.listUnresolved(event.targetId);
     if (!unresolved.includes(event.executionId)) return reject("NOT_LISTED_IN_UNRESOLVED");
 
     const now = this.deps.clock.now().getTime();
-    if (await this.deps.locks.hasLiveOwner(event.lockKey, now)) return reject("LOCK_HAS_LIVE_OWNER");
+    if (await this.deps.locks.hasLiveOwner(event.targetId, now)) return reject("LOCK_HAS_LIVE_OWNER");
 
     await this.deps.audit.write({
       eventId: event.eventId,
-      lockKey: event.lockKey,
+      targetId: event.targetId,
       executionId: event.executionId,
       resolvedBy: event.resolvedBy,
       ...(context.senderId === undefined ? {} : { senderId: context.senderId }),
@@ -106,7 +106,7 @@ export class TargetResolutionService {
       ...(event.note === undefined ? {} : { note: event.note }),
       at: now,
     });
-    const removed = await this.deps.unresolved.removeUnresolved(event.lockKey, event.executionId);
+    const removed = await this.deps.unresolved.removeUnresolved(event.targetId, event.executionId);
     return removed ? { outcome: "RECORDED" } : { outcome: "CONFLICT" };
   }
 }

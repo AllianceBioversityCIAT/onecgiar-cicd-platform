@@ -1,4 +1,4 @@
-// @akili-spec changes/cicd-executor-poc design §6.6, §7.3; requirements FR-14, FR-15
+// @akili-spec changes/cicd-executor-poc design §6.6, §7.3; requirements FR-14, FR-15; tasks R-4 (AC-02 V1: platform channel, targetId)
 // Table-driven: every terminal status / error code maps to its notification kind, in the Slack thread, with the logs link.
 import { describe, expect, it } from "vitest";
 import { createLifecycleNotifier } from "../../src/composition/lifecycle-notifier.js";
@@ -13,7 +13,7 @@ function setup(item: Partial<ExecutionItem>) {
   const sent: NotificationInput[] = [];
   const full = {
     executionId: "dep-1-7",
-    deploymentId: "dep-1",
+    targetId: "dep-1",
     commitSha: "a".repeat(40),
     ci: { repository: "example-org/example-app", runId: "10", workflowRef: "w" },
     startedAt: 1000,
@@ -25,7 +25,6 @@ function setup(item: Partial<ExecutionItem>) {
   const notifier = createLifecycleNotifier({
     notifications: { notify: async (i) => (sent.push(i), {}) },
     executions: { get: async () => full, setAuditOnce: async () => true },
-    catalog: { notificationDestination: () => ({ channelRef: "<CH>", tokenRef: "<TOK>" }) },
     platformSlack: { channelRef: "<PLATFORM_CH>", tokenRef: "<PLATFORM_TOK>" },
     logsUrlTemplate: "https://logs.example.invalid/search?q={executionId}",
     runbookUrl: RUNBOOK,
@@ -59,7 +58,7 @@ describe("lifecycle notifier: terminal outcomes (FR-15, FR-14, design §6.6)", (
     const { notifier, sent } = setup(item);
     await notifier.outcome("dep-1-7");
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ kind, threadRef: "1700000000.000100", logsUrl: LOGS("dep-1-7"), durationMs: 4000, destination: { channelRef: "<CH>" }, ...extra });
+    expect(sent[0]).toMatchObject({ kind, threadRef: "1700000000.000100", logsUrl: LOGS("dep-1-7"), durationMs: 4000, destination: { channelRef: "<PLATFORM_CH>", tokenRef: "<PLATFORM_TOK>" }, targetId: "dep-1", ...extra });
   });
 
   it("non-terminal statuses notify nothing", async () => {

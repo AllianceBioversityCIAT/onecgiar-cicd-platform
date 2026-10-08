@@ -1,13 +1,13 @@
-// @akili-spec changes/cicd-executor-poc design §3.3, §6.1, §7 (message-router, execution-service, deploy-coordinator, reconciler rows); requirements FR-04, FR-14, FR-15, FR-21
+// @akili-spec changes/cicd-executor-poc design §3.3, §6.1, §6.4, §7 (message-router, execution-service, deploy-coordinator, reconciler rows); requirements FR-04, FR-14, FR-15, FR-21; tasks R-4, R-5 (AC-02 V1)
 // Binds the router's `MessageHandlers` to the services (N-17b). Every handler
 // either resolves (the router acknowledges) or rejects (no ack, SQS
 // redelivers). Notifications are best effort and never alter the outcome;
-// background work (the delivered-script checksum write) is awaited before the
-// handler resolves so what the operator sees is already persisted.
+// background work is awaited before the handler resolves so what the operator
+// sees is already persisted. AC-02 V1: requests and operator events name the
+// `targetId`; every rejection is recorded under the SQS message identity.
 import { randomUUID } from "node:crypto";
 import type { MessageHandlers } from "../application/message-router/index.js";
 import type { ExecutionService } from "../application/execution-service/index.js";
-import { rejectionRef } from "../application/execution-service/index.js";
 import type { DeployCoordinator } from "../application/deploy-coordinator/index.js";
 import type { Reconciler } from "../application/reconciler/index.js";
 import type { DeployWindowService, TargetResolutionService } from "../application/deploy-window-service/index.js";
@@ -70,15 +70,9 @@ export function createMessageHandlers(deps: HandlerDeps): MessageHandlers {
   return {
     async deployRequested(validated) {
       const outcome = await executionService.deployRequested(validated);
-      const { deploymentId, requestId } = validated.request;
-      if (outcome.outcome === "REJECTED") {
-        // Raised inside execution-service (unit set / unknown definition): the router's authorizer did not count it.
-        deps.metrics.recordRejectedRequest(outcome.reason);
-        await notifier.rejected({ rejectionId: `${deploymentId}#${requestId}`, reason: outcome.reason, senderRef: validated.senderRef });
-        return;
-      }
+      const { targetId, requestId } = validated.request;
       if (outcome.outcome === "DUPLICATE") {
-        logger.info("duplicate DEPLOY_REQUESTED ignored", { deploymentId, requestId, ...(outcome.executionId === undefined ? {} : { executionId: outcome.executionId }) });
+        logger.info("duplicate DEPLOY_REQUESTED ignored", { targetId, requestId, ...(outcome.executionId === undefined ? {} : { executionId: outcome.executionId }) });
         return;
       }
       await notifier.accepted(outcome.executionId);
@@ -93,9 +87,8 @@ export function createMessageHandlers(deps: HandlerDeps): MessageHandlers {
       const created = await executionService.rejected(rejection);
       // The authorizer already counted UNAUTHORIZED_SENDER when it decided: never count it twice.
       if (created && rejection.reason !== "UNAUTHORIZED_SENDER") deps.metrics.recordRejectedRequest(rejection.reason);
-      const ref = rejectionRef(rejection);
       await notifier.rejected({
-        rejectionId: "sqsMessageId" in ref ? `MSG#${ref.sqsMessageId}` : `${ref.deploymentId}#${ref.requestId}`,
+        rejectionId: `MSG#${rejection.sqsMessageId}`,
         reason: rejection.reason,
         senderRef: rejection.senderRef,
       });
@@ -123,18 +116,18 @@ export function createMessageHandlers(deps: HandlerDeps): MessageHandlers {
 
     async deployWindowOpenRequested(event) {
       const outcome = await deps.windows.open({
-        lockKey: event.lockKey,
+        targetId: event.targetId,
         openedBy: event.openedBy,
         externalJobsDisabled: event.externalJobsDisabled,
         closesAt: event.closesAt,
         ...(event.note === undefined ? {} : { note: event.note }),
       });
       if (outcome.outcome === "CONFLICT") throw new RedeliverError("deploy window open");
-      if (outcome.outcome === "REJECTED") logger.warn("deploy window open rejected", { lockKey: event.lockKey, reason: outcome.reason });
+      if (outcome.outcome === "REJECTED") logger.warn("deploy window open rejected", { targetId: event.targetId, reason: outcome.reason });
     },
 
     async deployWindowCloseRequested(event) {
-      const outcome = await deps.windows.close({ lockKey: event.lockKey, closedBy: event.closedBy });
+      const outcome = await deps.windows.close({ targetId: event.targetId, closedBy: event.closedBy });
       if (outcome.outcome === "CONFLICT") throw new RedeliverError("deploy window close");
     },
 
@@ -142,7 +135,7 @@ export function createMessageHandlers(deps: HandlerDeps): MessageHandlers {
       const outcome = await deps.resolution.record(
         {
           eventId: event.eventId,
-          lockKey: event.lockKey,
+          targetId: event.targetId,
           executionId: event.executionId,
           resolvedBy: event.resolvedBy,
           observedDigests: event.observedDigests,
@@ -151,7 +144,7 @@ export function createMessageHandlers(deps: HandlerDeps): MessageHandlers {
         { senderId: context.senderRef },
       );
       if (outcome.outcome === "CONFLICT") throw new RedeliverError("target resolution");
-      if (outcome.outcome === "REJECTED") logger.warn("target resolution rejected", { lockKey: event.lockKey, reason: outcome.reason });
+      if (outcome.outcome === "REJECTED") logger.warn("target resolution rejected", { targetId: event.targetId, reason: outcome.reason });
     },
   };
 }

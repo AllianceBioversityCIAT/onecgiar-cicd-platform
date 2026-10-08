@@ -275,6 +275,7 @@ Edit `executor/.local/executor.env` (ignored by Git). Format: `KEY=VALUE`, one p
 | `AWS_REGION` | `<AWS_REGION>` |
 | `CICD_QUEUE_URL`, `CICD_TABLE_NAME` | Stack outputs `DeployQueueUrl`, `ExecutionsTableName` |
 | `CICD_REGISTRY_TABLE_NAME` | Stack output `RegistryTableName` (Target Registry, AC-02 V1; available after the owner deploys the R-2 template) |
+| `CICD_CI_PRINCIPAL_REF` | Logical `<PLACEHOLDER>` ref whose secret holds the role id of the CI role shared by the authorized repositories (stack output `CiRoleId`; AC-02 V1: the only principal allowed to send `DEPLOY_REQUESTED`). **Required**: startup fails if it is missing or does not resolve |
 | `CICD_EXECUTOR_PRINCIPAL_REF`, `CICD_SCHEDULER_PRINCIPAL_REF`, `CICD_OPERATOR_PRINCIPAL_REF` | Logical `<PLACEHOLDER>` refs whose secrets hold the role ids ([02](02-secrets.md)) |
 | `CICD_PLATFORM_SLACK_CHANNEL_REF`, `CICD_PLATFORM_SLACK_TOKEN_REF` | Logical refs for the platform notifications |
 | `CICD_SECRET_ID_PREFIX` | The stack's `SecretIdPrefix`, exactly (e.g. `cicd-poc/dev/`) |

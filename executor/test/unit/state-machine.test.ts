@@ -38,8 +38,9 @@ const GOOD_CHECKS: CreationChecks = {
   senderAuthorized: true,
   schemaValid: true,
   requestIdMatches: true,
-  deploymentKnown: true,
-  consistencyOk: true,
+  targetKnown: true,
+  targetValid: true,
+  sourceAuthorized: true,
   dedupeClaimOwned: true,
 };
 
@@ -227,8 +228,9 @@ describe("creations X1 / X2 (CW-3: no RECEIVED)", () => {
     ["senderAuthorized", "UNAUTHORIZED_SENDER"],
     ["schemaValid", "SCHEMA_INVALID"],
     ["requestIdMatches", "REQUEST_ID_MISMATCH"],
-    ["deploymentKnown", "UNKNOWN_DEPLOYMENT"],
-    ["consistencyOk", "CONSISTENCY_MISMATCH"],
+    ["targetKnown", "TARGET_UNKNOWN"],
+    ["targetValid", "TARGET_INVALID"],
+    ["sourceAuthorized", "TARGET_NOT_AUTHORIZED"],
   ] as const)("X2 rejects with %s failing -> %s (no sequence)", (field, reason) => {
     const r = applyTransition(null, { kind: "CREATE", checks: { ...GOOD_CHECKS, [field]: false } });
     expect(r).toMatchObject({ accepted: true, transitionId: "X2", rejectReason: reason, next: { status: "REJECTED" } });
@@ -237,14 +239,21 @@ describe("creations X1 / X2 (CW-3: no RECEIVED)", () => {
   it("X2 reports the first failing reason when several fail (sender first)", () => {
     const r = applyTransition(null, {
       kind: "CREATE",
-      checks: { ...GOOD_CHECKS, senderAuthorized: false, schemaValid: false, consistencyOk: false },
+      checks: { ...GOOD_CHECKS, senderAuthorized: false, schemaValid: false, sourceAuthorized: false },
     });
     expect(r).toMatchObject({ rejectReason: "UNAUTHORIZED_SENDER" });
   });
 
+  it("target checks keep the design §6.3 order: unknown, then invalid, then not authorized (AC-02 V1)", () => {
+    const r = applyTransition(null, { kind: "CREATE", checks: { ...GOOD_CHECKS, targetValid: false, sourceAuthorized: false } });
+    expect(r).toMatchObject({ rejectReason: "TARGET_INVALID" });
+    const u = applyTransition(null, { kind: "CREATE", checks: { ...GOOD_CHECKS, targetKnown: false, targetValid: false, sourceAuthorized: false } });
+    expect(u).toMatchObject({ rejectReason: "TARGET_UNKNOWN" });
+  });
+
   it("every rejection reason is reachable", () => {
     const seen = new Set<string>();
-    for (const field of ["senderAuthorized", "schemaValid", "requestIdMatches", "deploymentKnown", "consistencyOk"] as const) {
+    for (const field of ["senderAuthorized", "schemaValid", "requestIdMatches", "targetKnown", "targetValid", "sourceAuthorized"] as const) {
       const r = applyTransition(null, { kind: "CREATE", checks: { ...GOOD_CHECKS, [field]: false } });
       if (r.accepted && r.rejectReason) seen.add(r.rejectReason);
     }
@@ -262,8 +271,9 @@ describe("creations X1 / X2 (CW-3: no RECEIVED)", () => {
     ["senderAuthorized", "UNAUTHORIZED_SENDER"],
     ["schemaValid", "SCHEMA_INVALID"],
     ["requestIdMatches", "REQUEST_ID_MISMATCH"],
-    ["deploymentKnown", "UNKNOWN_DEPLOYMENT"],
-    ["consistencyOk", "CONSISTENCY_MISMATCH"],
+    ["targetKnown", "TARGET_UNKNOWN"],
+    ["targetValid", "TARGET_INVALID"],
+    ["sourceAuthorized", "TARGET_NOT_AUTHORIZED"],
   ] as const)(
     "X2 does NOT need a dedupe claim (rejection precedes the claim; REJECT#MSG# case): %s failing -> %s",
     (field, reason) => {

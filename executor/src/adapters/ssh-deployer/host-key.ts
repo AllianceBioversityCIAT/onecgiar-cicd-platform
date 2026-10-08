@@ -1,6 +1,7 @@
-// @akili-spec changes/cicd-executor-poc design §6.3 (hostKeyRef mandatory), §7.2, FR-12 scenario "host key", DD-23
-// Pinned host key handling. The pinned value is PUBLIC material resolved from
-// the registry's `hostKeyRef`: one or more OpenSSH public key lines
+// @akili-spec changes/cicd-executor-poc design §6.3 (hostKey mandatory), §7.2, FR-12 scenario "host key", DD-23; tasks R-5 (AC-02 V1)
+// Pinned host key handling. The pinned value is PUBLIC material: the target
+// record's `hostKey` lines (copied into the execution snapshot), joined with
+// newlines by the transport: one or more OpenSSH public key lines
 // (`<type> <base64> [comment]`) or bare base64 blobs.
 import { createHash, timingSafeEqual } from "node:crypto";
 

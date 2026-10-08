@@ -62,6 +62,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ExecutorConfig {
   const queueUrl = value("CICD_QUEUE_URL");
   const region = value("AWS_REGION");
   const principalRefs: PlatformPrincipalRefs = {
+    ciPrincipalRef: ref("CICD_CI_PRINCIPAL_REF"),
     executorPrincipalRef: ref("CICD_EXECUTOR_PRINCIPAL_REF"),
     schedulerPrincipalRef: ref("CICD_SCHEDULER_PRINCIPAL_REF"),
     operatorPrincipalRef: ref("CICD_OPERATOR_PRINCIPAL_REF"),

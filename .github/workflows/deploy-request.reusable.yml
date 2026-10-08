@@ -50,8 +50,8 @@ name: deploy-request
 on:
   workflow_call:
     inputs:
-      deploymentId:
-        description: Semantic deployment identifier (matches a Deployment Definition).
+      targetId:
+        description: Target Registry identifier of the target this repository deploys (AC-02 V1; authorized by the target record).
         type: string
         required: true
       environment:
@@ -77,7 +77,7 @@ jobs:
       - name: Enforce event allowlist and validate inputs
         env:
           EVENT_NAME: ${{ github.event_name }}
-          DEPLOYMENT_ID: ${{ inputs.deploymentId }}
+          TARGET_ID: ${{ inputs.targetId }}
           UNITS: ${{ inputs.units }}
         run: |
           set -euo pipefail
@@ -87,8 +87,8 @@ jobs:
           esac
           # Control characters (a trailing newline included) are rejected explicitly: jq's dollar anchor
           # also matches before a final newline, which would let "a" and "a<newline>" both pass and collide.
-          if [[ "$DEPLOYMENT_ID" == *[[:cntrl:]]* ]] || ! [[ "$DEPLOYMENT_ID" =~ ^[a-z0-9][a-z0-9-]{1,62}$ ]]; then
-            echo "::error::invalid deploymentId"; exit 1
+          if [[ "$TARGET_ID" == *[[:cntrl:]]* ]] || ! [[ "$TARGET_ID" =~ ^[a-z0-9][a-z0-9-]{1,62}$ ]]; then
+            echo "::error::invalid targetId"; exit 1
           fi
           printf '%s' "$UNITS" | jq -e '
             type == "array" and length >= 1 and length <= 8
@@ -252,7 +252,7 @@ jobs:
 
       - name: Build deploy request body
         env:
-          DEPLOYMENT_ID: ${{ inputs.deploymentId }}
+          TARGET_ID: ${{ inputs.targetId }}
           COMMIT_SHA: ${{ github.sha }}
           REPOSITORY_SLUG: ${{ github.repository }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
@@ -264,7 +264,7 @@ jobs:
           artifacts_file="${ARTIFACTS_FILE:-$RUNNER_TEMP/artifacts.json}"
           body_file="${BODY_FILE:-$RUNNER_TEMP/deploy-request.json}"
           jq -n \
-            --arg deploymentId "$DEPLOYMENT_ID" \
+            --arg targetId "$TARGET_ID" \
             --arg requestId "${RUN_ID}-${RUN_ATTEMPT}" \
             --arg commitSha "$COMMIT_SHA" \
             --arg repository "$REPOSITORY_SLUG" \
@@ -277,7 +277,7 @@ jobs:
               specVersion: 1,
               eventType: "DEPLOY_REQUESTED",
               requestId: $requestId,
-              deploymentId: $deploymentId,
+              targetId: $targetId,
               commitSha: $commitSha,
               artifacts: $artifacts[0],
               ci: {

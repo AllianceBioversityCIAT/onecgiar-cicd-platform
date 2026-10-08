@@ -167,12 +167,15 @@ export function collectDeploymentExistenceOnlyRefs(
  * specified by the design, so the caller supplies these refs.
  */
 export interface PlatformPrincipalRefs {
+  /** The CI role shared by the authorized repositories (AC-02 V1, DD-25). */
+  readonly ciPrincipalRef: string;
   readonly executorPrincipalRef: string;
   readonly schedulerPrincipalRef: string;
   readonly operatorPrincipalRef: string;
 }
 
 export function collectPrincipalRefs(refs: PlatformPrincipalRefs, acc: Set<string> = new Set()): Set<string> {
+  addIfLogicalRef(refs.ciPrincipalRef, acc);
   addIfLogicalRef(refs.executorPrincipalRef, acc);
   addIfLogicalRef(refs.schedulerPrincipalRef, acc);
   addIfLogicalRef(refs.operatorPrincipalRef, acc);

@@ -37,6 +37,6 @@ jobs:
       contents: read
     uses: <GITHUB_ORG>/<PLATFORM_REPO>/.github/workflows/deploy-request.reusable.yml@<PINNED_COMMIT_SHA>
     with:
-      deploymentId: "<PRMS_REPORTING_DEV_DEPLOYMENT_ID>"
+      targetId: "<PRMS_REPORTING_DEV_TARGET_ID>"
       environment: "<GITHUB_ENVIRONMENT>"
       units: '[{"unit":"<UNIT_A>","context":"<CONTEXT_A>"},{"unit":"<UNIT_B>","context":"<CONTEXT_B>","dockerfile":"<DOCKERFILE_B>"}]'

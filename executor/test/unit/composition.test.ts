@@ -1,19 +1,17 @@
-// @akili-spec changes/cicd-executor-poc design §6.2, §6.5, §7 (main), DD-19, DD-23; requirements FR-01, FR-21, NFR-01
+// @akili-spec changes/cicd-executor-poc design §1.2, §6.2, §6.5, §7 (main), DD-19, DD-23; requirements FR-01, FR-21, NFR-01; tasks R-4, R-5 (AC-02 V1)
 // Composition units that need no database: configuration fail-fast, startup validation over ALL bundled
-// definitions (an invalid set prevents startup), the plan resolver's NFR-01 and argument-safety behavior, and
-// the router carrying `senderRef` / `sqsMessageId` to the handlers.
+// definitions (an invalid set prevents startup; removed by R-6), the V1 deploy plan built from the execution
+// snapshot (no definition, no secret resolution), and the router carrying `senderRef` / `sqsMessageId` to the handlers.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { stringify as stringifyYaml, parse as parseYaml } from "yaml";
 import { loadConfig, ConfigError } from "../../src/composition/config.js";
 import { bootstrap, type EnumerableDefinitionSource } from "../../src/main/bootstrap.js";
-import { DefinitionValidationError, validateForStartup } from "../../src/application/definition-service/index.js";
-import { createStartupCatalog } from "../../src/composition/catalog.js";
-import { createPlanResolver } from "../../src/composition/plan-resolver.js";
+import { DefinitionValidationError } from "../../src/application/definition-service/index.js";
+import { deployPlanOf } from "../../src/application/deploy-coordinator/index.js";
 import { DeployTransactions } from "../../src/adapters/dynamodb-state-store/deploy-transactions.js";
-import { UnsafeArgumentError } from "../../src/adapters/ssh-deployer/index.js";
 import { createMessageValidators, routeMessage, type MessageHandlers } from "../../src/application/message-router/index.js";
-import { deployRequestSchemaPath, eventSchemaPath, prmsReportingDevDeploymentYamlPath, targetsDevYamlPath, deploymentSchemaPath, targetsSchemaPath } from "../contract/support/schema-paths.js";
+import { deployRequestSchemaPath, eventSchemaPath, prmsReportingDevDeploymentYamlPath, targetsDevYamlPath, deploymentSchemaPath, targetsSchemaPath, targetRecordSchemaPath } from "../contract/support/schema-paths.js";
 import { InMemoryDefinitionSource } from "../support/in-memory-definition-source.js";
 import { FakeSecretProvider } from "../support/fake-secret-provider.js";
 import { KNOWN_REFS, bundledDefinitions, fakeSecrets, validEnv } from "../support/composition-fixtures.js";
@@ -30,6 +28,7 @@ function inMemory(deployment: string): EnumerableDefinitionSource {
       "targets.schema.json": read(targetsSchemaPath),
       "deploy-request.schema.json": read(deployRequestSchemaPath),
       "event.schema.json": read(eventSchemaPath),
+      "target-record.schema.json": read(targetRecordSchemaPath),
     },
   });
   return Object.assign(source, { listDeploymentIds: async () => ["prms-reporting-dev"] });
@@ -89,39 +88,54 @@ describe("startup validation over ALL bundled definitions (design §6.2)", () =>
   });
 });
 
-async function startupCatalog() {
-  const definitions = inMemory(read(prmsReportingDevDeploymentYamlPath));
-  const secrets = fakeSecrets();
-  const startup = await validateForStartup({ definitionSource: definitions, secretProvider: secrets, principalRefs: loadConfig(validEnv()).principalRefs }, ["prms-reporting-dev"]);
-  return { catalog: createStartupCatalog(startup), secrets };
-}
-
 const execution = (over: Partial<ExecutionItem> = {}): ExecutionItem =>
   ({
-    executionId: "prms-reporting-dev-1",
-    deploymentId: "prms-reporting-dev",
-    lockKey: "deployment#<PRMS_REPORTING_DEV_TARGET>#prms-reporting-dev-unit",
+    executionId: "example-app-dev-1",
+    targetId: "example-app-dev",
+    commitSha: "a".repeat(40),
     artifacts: { server: `sha256:${"b".repeat(64)}`, client: `sha256:${"c".repeat(64)}` },
+    targetSnapshot: {
+      version: 1,
+      project: "example",
+      environment: "dev",
+      host: "target.example.internal",
+      user: "deploy",
+      hostKey: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample"],
+      credentialRef: "cicd-poc/dev/example-app-dev/ssh",
+      deployScript: "/opt/cicd/example-app/deploy.sh",
+      deployWindowPolicy: "not-required",
+      sourceRepositoryId: "123456789",
+    },
     ...over,
   }) as ExecutionItem;
 
-describe("plan resolver (design §6.5, NFR-01)", () => {
-  it("builds the argument vector from the VALIDATED definition and never resolves the runtime secret reference", async () => {
-    const { catalog, secrets } = await startupCatalog();
-    const asked: string[] = [];
-    const spying = { getSecret: (r: string) => (asked.push(r), secrets.getSecret(r)), exists: (r: string) => secrets.exists(r) };
-    const plan = await createPlanResolver({ catalog, secrets: spying }).resolve(execution());
-    const args = plan.scriptArgs(7);
-    expect(plan.targetRef).toBe("prms-reporting-dev");
-    expect(args).toEqual(expect.arrayContaining(["--lock-key", "--fencing-token", "7", "--migrate", "server-container", "--port", "server-container=8080:3000"]));
-    expect(asked.some((r) => r.includes("RUNTIME_SECRET") || r.includes("SSH_CREDENTIAL") || r.includes("SLACK_TOKEN"))).toBe(false);
+describe("V1 deploy plan from the execution snapshot (design §6.5, NFR-01)", () => {
+  it("is the fixed argument vector: target, execution, fencing token, commit and one --artifact per unit (sorted); nothing application-specific", () => {
+    const plan = deployPlanOf(execution());
+    expect(plan.scriptPath).toBe("/opt/cicd/example-app/deploy.sh");
+    expect(plan.timeoutMinutes).toBe(20);
+    expect(plan.scriptArgs(7)).toEqual([
+      "--target-id", "example-app-dev",
+      "--execution-id", "example-app-dev-1",
+      "--fencing-token", "7",
+      "--commit-sha", "a".repeat(40),
+      "--artifact", `client=sha256:${"c".repeat(64)}`,
+      "--artifact", `server=sha256:${"b".repeat(64)}`,
+    ]);
+    for (const forbidden of ["--port", "--migrate", "--health", "--runtime-secret", "--lock-key", "--unit"]) {
+      expect(plan.scriptArgs(7)).not.toContain(forbidden);
+    }
   });
 
-  it("rejects an argument with a line break BEFORE any dispatch intent (assertSafeScriptArgs at resolve time)", async () => {
-    const { catalog, secrets } = await startupCatalog();
-    const hostile = new FakeSecretProvider({ ...KNOWN_REFS, "<PRMS_REPORTING_SERVER_HEALTH_URL_REF>": "http://x\nrm -rf" });
-    await expect(createPlanResolver({ catalog, secrets: hostile }).resolve(execution())).rejects.toBeInstanceOf(UnsafeArgumentError);
-    expect(secrets).toBeDefined();
+  it("connects with the snapshot's values and a credential REFERENCE (port absent -> left to the transport default)", () => {
+    expect(deployPlanOf(execution()).target).toEqual({
+      targetId: "example-app-dev",
+      host: "target.example.internal",
+      user: "deploy",
+      hostKey: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample"],
+      credentialRef: "cicd-poc/dev/example-app-dev/ssh",
+    });
+    expect(deployPlanOf(execution()).window).toEqual({ targetId: "example-app-dev", deployWindowPolicy: "not-required" });
   });
 });
 
@@ -131,19 +145,17 @@ describe("router carries audit data to the handlers (FR-21)", () => {
     const rejections: unknown[] = [];
     const handlers = { rejected: async (r: unknown) => void rejections.push(r) } as unknown as MessageHandlers;
     await routeMessage(
-      { body: JSON.stringify({ eventType: "DEPLOY_REQUESTED", deploymentId: "x" }), senderId: "ROLEX:session", messageId: "sqs-1" },
-      { validators, handlers, sources: { resolveSource: async () => undefined }, authorizer: { decide: () => ({ authorized: false, senderRef: "ROLEX" }) } },
+      { body: JSON.stringify({ eventType: "DEPLOY_REQUESTED", targetId: "x" }), senderId: "ROLEX:session", messageId: "sqs-1" },
+      {
+        validators,
+        handlers,
+        targets: { getTarget: async () => ({ kind: "missing" }) },
+        dedupe: { get: async () => undefined },
+        clock: { now: () => new Date(0) },
+        authorizer: { decide: () => ({ authorized: false, senderRef: "ROLEX" }) },
+      },
     );
     expect(rejections[0]).toMatchObject({ senderRef: "ROLEX", sqsMessageId: "sqs-1" });
-  });
-});
-
-describe("startup refuses an unsafe resolved script argument (design §6.2)", () => {
-  it("a resolved identifier with a trailing newline prevents startup, naming no value", async () => {
-    const hostile = new FakeSecretProvider({ ...KNOWN_REFS, "<PRMS_REPORTING_SERVER_HEALTH_URL_REF>": "http://health.example.invalid/\n" });
-    const attempt = bootstrap({ env: validEnv(), secrets: hostile, definitions: inMemory(read(prmsReportingDevDeploymentYamlPath)), documentClient: {} as never });
-    await expect(attempt).rejects.toThrow(/refusing to start: deployment "prms-reporting-dev" cannot produce a safe deploy plan/);
-    await expect(attempt).rejects.not.toThrow(/health\.example/);
   });
 });
 

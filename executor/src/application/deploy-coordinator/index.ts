@@ -1,4 +1,4 @@
-// @akili-spec changes/cicd-executor-poc design §7 (deploy-coordinator row), §7.1, §7.2, §7.3 (X4-X16), §7.5, §7.6, DD-04, DD-09, DD-22, DD-27, DD-28; requirements FR-11, FR-12, FR-16, FR-23, FR-24, RL-1, RL-4, RL-7
+// @akili-spec changes/cicd-executor-poc design §1.2, §6.5, §7 (deploy-coordinator row), §7.1, §7.2, §7.3 (X4-X16), §7.5, §7.6, DD-04, DD-09, DD-22, DD-27, DD-28; requirements FR-11, FR-12, FR-13, FR-16, FR-23, FR-24, RL-1, RL-4, RL-7; tasks R-5 (AC-02 V1)
 // Deploy coordinator (N-12). Drives an execution from QUEUED to a terminal
 // state through X4-X16 of the closed state machine (every decision is
 // `applyTransition`; this module supplies the facts and performs the writes).
@@ -11,8 +11,15 @@
 //     lock wait) followed by the first LOCK_RETRY_REQUESTED.
 //   - handleLockRetry(event): one lock attempt. Order of §7.5:
 //       window (V2) -> distributed lock -> S2 -> intent (X9) -> SSH semaphore ->
-//       session -> SFTP -> V4 -> execStartedAt -> exec -> (target mutex: the script)
+//       session -> V4 -> execStartedAt -> exec of the target's deployScript ->
+//       (target mutex: the script)
 //     and everything is released in reverse on EVERY exit path.
+//
+// AC-02 V1: everything about the target comes from the execution's snapshot
+// (design §5.1, §6.3): host, port, user, host key, credential reference, script
+// path and window policy. The lock key is the `targetId` (design §1.2). The
+// script lives on the target; nothing is delivered (no SFTP, no checksum), and
+// it runs with the fixed argument vector of design §6.5.
 //
 // Crash safety (DD-28): X9 writes the intent and `highestDispatched`
 // atomically; `execStartedAt` is written for the current dispatchToken
@@ -49,12 +56,12 @@ import type { QueuePublisher } from "../../ports/queue-publisher.js";
 import type { Clock } from "../../ports/clock.js";
 import type { ExecutionUpdatePatch } from "../../adapters/dynamodb-state-store/execution-repository.js";
 import type { ExecutionItem } from "../../adapters/dynamodb-state-store/types.js";
+import type { SshTarget } from "../../ports/deploy-transport.js";
+import type { WindowTarget } from "../deploy-window-service/index.js";
 import { OrderingSourceMismatchError } from "../execution-service/index.js";
 import type {
   DeployExecutionStore,
   DeployLockPort,
-  DeployPlan,
-  DeployPlanResolver,
   DeployTargetPort,
   DeployTransactionPort,
   WindowRevalidator,
@@ -67,8 +74,6 @@ export { toExecutionSnapshot } from "./snapshot.js";
 export type {
   DeployExecutionStore,
   DeployLockPort,
-  DeployPlan,
-  DeployPlanResolver,
   DeployTargetPort,
   DeployTransactionPort,
   WindowRevalidator,
@@ -84,6 +89,58 @@ export const DEPLOYING_GRACE_MS = 5 * 60 * 1000;
 export const SSH_CONNECT_RETRIES = 2;
 /** Largest `logTail` persisted (the transport is expected to redact; this only bounds the item size). */
 export const LOG_TAIL_MAX_CHARS = 4096;
+/** Platform deploy timeout (design §1.2: `deployTimeoutMinutes` = 20, at most 60). */
+export const DEFAULT_DEPLOY_TIMEOUT_MINUTES = 20;
+export const MAX_DEPLOY_TIMEOUT_MINUTES = 60;
+
+/** What the coordinator needs to run one deployment, built from the execution's snapshot (design §6.5). */
+export interface DeployPlan {
+  readonly target: SshTarget;
+  readonly window: WindowTarget;
+  readonly scriptPath: string;
+  readonly timeoutMinutes: number;
+  /** Script arguments (design §6.5), one element per argument; the fencing token is the lock's. */
+  scriptArgs(fencingToken: number): readonly string[];
+}
+
+/**
+ * The deploy plan of an execution (design §6.5): the fixed argument vector
+ * `--target-id --execution-id --fencing-token --commit-sha` and one
+ * `--artifact <unit>=sha256:<64-hex>` per request artifact (sorted by unit, so the
+ * vector is deterministic). Every value was validated by the request schema or
+ * is Executor-generated; the transport also refuses line breaks and quotes every
+ * element. Nothing application-specific is added here.
+ */
+export function deployPlanOf(item: ExecutionItem, timeoutMinutes: number = DEFAULT_DEPLOY_TIMEOUT_MINUTES): DeployPlan {
+  const s = item.targetSnapshot;
+  const artifacts = Object.keys(item.artifacts)
+    .sort()
+    .flatMap((unit) => ["--artifact", `${unit}=${item.artifacts[unit] as string}`]);
+  return {
+    target: {
+      targetId: item.targetId,
+      host: s.host,
+      ...(s.port === undefined ? {} : { port: s.port }),
+      user: s.user,
+      hostKey: s.hostKey,
+      credentialRef: s.credentialRef,
+    },
+    window: { targetId: item.targetId, deployWindowPolicy: s.deployWindowPolicy },
+    scriptPath: s.deployScript,
+    timeoutMinutes,
+    scriptArgs: (fencingToken) => [
+      "--target-id",
+      item.targetId,
+      "--execution-id",
+      item.executionId,
+      "--fencing-token",
+      String(fencingToken),
+      "--commit-sha",
+      item.commitSha,
+      ...artifacts,
+    ],
+  };
+}
 
 export type DeployOutcome =
   | { readonly outcome: "NOOP"; readonly reason: "NOT_FOUND" | "STALE" | "CONFLICT" }
@@ -96,8 +153,9 @@ export interface DeployCoordinatorDeps {
   readonly locks: DeployLockPort;
   readonly target: DeployTargetPort;
   readonly windows: WindowRevalidator;
-  readonly plans: DeployPlanResolver;
   readonly transport: DeployTransport;
+  /** Platform `deployTimeoutMinutes` (design §1.2); default 20, at most 60. */
+  readonly deployTimeoutMinutes?: number;
   readonly queue: QueuePublisher;
   readonly clock: Clock;
   readonly semaphore: Semaphore;
@@ -183,6 +241,11 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
   const newDispatchToken = deps.newDispatchToken ?? randomUUID;
   const newEventId = deps.newEventId ?? randomUUID;
   const renewalIntervalMs = deps.renewalIntervalMs ?? LOCK_RENEWAL_INTERVAL_SECONDS * 1000;
+  const timeoutMinutes = deps.deployTimeoutMinutes ?? DEFAULT_DEPLOY_TIMEOUT_MINUTES;
+  if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > MAX_DEPLOY_TIMEOUT_MINUTES) {
+    throw new Error(`deploy-coordinator: deployTimeoutMinutes must be an integer in [1, ${String(MAX_DEPLOY_TIMEOUT_MINUTES)}]`);
+  }
+  const planFor = (item: ExecutionItem): DeployPlan => deployPlanOf(item, timeoutMinutes);
   const nowMs = (): number => deps.clock.now().getTime();
 
   const transitioned = (t: Accepted): DeployOutcome => ({
@@ -213,9 +276,9 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
     const item = await deps.executions.get(executionId);
     if (item === undefined) return { outcome: "NOOP", reason: "NOT_FOUND" };
     if (item.status !== "QUEUED") return { outcome: "NOOP", reason: "STALE" };
-    const plan = await deps.plans.resolve(item);
+    const plan = planFor(item);
     const now = nowMs();
-    const v1 = await deps.windows.revalidate("V1", item.lockKey, now + plan.timeoutMinutes * 60_000);
+    const v1 = await deps.windows.revalidate("V1", plan.window, now + plan.timeoutMinutes * 60_000);
     const t = accept(applyTransition(toExecutionSnapshot(item), { kind: "EVALUATE_QUEUED", v1Valid: v1.ok, now }));
     const patch = buildPatch(t, now, {
       deadlineAt: now + WAITING_LOCK_GRACE_MS,
@@ -235,7 +298,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
     // A redelivered or duplicated message with a stale attempt, or an execution that moved on, is a no-op (design §7.3).
     if (item.status !== "WAITING_LOCK" || event.attempt !== item.attempt + 1) return { outcome: "NOOP", reason: "STALE" };
 
-    const plan = await deps.plans.resolve(item);
+    const plan = planFor(item);
     const now = nowMs();
     const snapshot = toExecutionSnapshot(item);
     const waitingExpected = { status: "WAITING_LOCK", version: item.version } as const;
@@ -248,14 +311,14 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
     }
 
     // V2 on every lock attempt (X8).
-    const v2 = await deps.windows.revalidate("V2", item.lockKey, now + plan.timeoutMinutes * 60_000);
+    const v2 = await deps.windows.revalidate("V2", plan.window, now + plan.timeoutMinutes * 60_000);
     if (!v2.ok) {
       const x8 = accept(applyTransition(snapshot, { kind: "WAITING_WINDOW_CLOSED", v2Valid: false }));
       const done = await deps.executions.update(item.executionId, waitingExpected, buildPatch(x8, now));
       return done ? transitioned(x8) : conflict;
     }
 
-    const lock = await deps.locks.acquire(item.lockKey, item.executionId, now, LOCK_LEASE_SECONDS);
+    const lock = await deps.locks.acquire(item.targetId, item.executionId, now, LOCK_LEASE_SECONDS);
     if (lock.outcome !== "ACQUIRED") return failedLockAttempt(item, now);
 
     // A re-entrant acquisition (a duplicate or concurrent attempt of this same execution) did not take the lock
@@ -330,7 +393,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
     if (res.lockHeld && !res.keepLock) {
       res.lockHeld = false;
       try {
-        await deps.locks.release(item.lockKey, item.executionId, nowMs());
+        await deps.locks.release(item.targetId, item.executionId, nowMs());
       } catch (error) {
         deps.onCleanupError?.(error, "lock");
       }
@@ -345,7 +408,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
       inflight = inflight.then(async () => {
         if (lost) return;
         try {
-          if (!(await deps.locks.renew(item.lockKey, item.executionId, nowMs(), LOCK_LEASE_SECONDS))) {
+          if (!(await deps.locks.renew(item.targetId, item.executionId, nowMs(), LOCK_LEASE_SECONDS))) {
             lost = true;
             clearInterval(timer);
           }
@@ -369,7 +432,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
    */
   async function windowClosedDuringRun(item: ExecutionItem): Promise<boolean> {
     try {
-      return !(await deps.windows.revalidate("V3", item.lockKey, nowMs())).ok;
+      return !(await deps.windows.revalidate("V3", planFor(item).window, nowMs())).ok;
     } catch (error) {
       deps.onCleanupError?.(error, "window");
       return false;
@@ -378,7 +441,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
 
   /** Coordinator half of the §5.1 condition on `lastDeployed`: we still own the lock with the fencing token we hold. */
   async function ownsLock(item: ExecutionItem, fencingToken: number): Promise<boolean> {
-    const lock = await deps.locks.get(item.lockKey);
+    const lock = await deps.locks.get(item.targetId);
     return lock !== undefined && lock.owner === item.executionId && lock.fencingToken === fencingToken;
   }
 
@@ -390,7 +453,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
     const ordering: OrderingValue = { sourceRef: item.order.sourceRef, runNumber: item.order.runNumber };
 
     // S2 (authoritative): against max(lastDeployed, highestDispatched).
-    const s2 = evaluateS2(ordering, (await deps.target.get(item.lockKey)) ?? {});
+    const s2 = evaluateS2(ordering, (await deps.target.get(item.targetId)) ?? {});
     if (s2.decision === "REJECTED_SOURCE_MISMATCH") throw new OrderingSourceMismatchError(item.executionId);
     if (s2.decision === "SUPERSEDED") return supersedeUnderLock(item, res);
 
@@ -405,7 +468,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
       executionId: item.executionId,
       expected: { status: "WAITING_LOCK", version: item.version },
       patch: buildPatch(x9, now, { deadlineAt, extra: { fencingToken } }),
-      lockKey: item.lockKey,
+      lockKey: item.targetId,
       dispatched: { ...ordering, executionId: item.executionId },
       now,
     });
@@ -471,7 +534,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
     let connectError: DeployTransportError | undefined;
     for (let tries = 0; tries <= SSH_CONNECT_RETRIES; tries += 1) {
       try {
-        res.session = await deps.transport.connect(plan.targetRef);
+        res.session = await deps.transport.connect(plan.target);
         connectError = undefined;
         break;
       } catch (error) {
@@ -485,16 +548,8 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
       const x11 = accept(applyTransition(a.current, { kind: "FAIL_BEFORE_EXEC", dispatchToken: a.token, code }));
       return commitDeploying(a, x11, nowMs());
     }
-    try {
-      await res.session.deliverScript(item.executionId);
-    } catch (error) {
-      if (!(error instanceof DeployTransportError)) throw error;
-      const x11 = accept(applyTransition(a.current, { kind: "FAIL_BEFORE_EXEC", dispatchToken: a.token, code: error.code }));
-      return commitDeploying(a, x11, nowMs());
-    }
-
     // V4 immediately before exec (X10).
-    const v4 = await deps.windows.revalidate("V4", item.lockKey, nowMs() + plan.timeoutMinutes * 60_000);
+    const v4 = await deps.windows.revalidate("V4", plan.window, nowMs() + plan.timeoutMinutes * 60_000);
     if (!v4.ok) {
       const x10 = accept(applyTransition(a.current, { kind: "WINDOW_CLOSED_BEFORE_EXEC", dispatchToken: a.token, v4Valid: false }));
       return commitDeploying(a, x10, nowMs());
@@ -515,6 +570,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
     try {
       outcome = await res.session.exec({
         executionId: item.executionId,
+        scriptPath: plan.scriptPath,
         args: plan.scriptArgs(a.fencingToken),
         timeoutMs: plan.timeoutMinutes * 60_000,
       });
@@ -577,7 +633,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
     let targetWriteRejected = ownershipLost;
     if (!ownershipLost) {
       const written = await deps.target.recordDeployed({
-        lockKey: item.lockKey,
+        lockKey: item.targetId,
         fencingToken: a.fencingToken,
         lastDeployed: {
           sourceRef: item.order.sourceRef,
@@ -604,7 +660,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
     const { item, plan, res } = a;
     const now = nowMs();
     const attempts = (item.lockWaitAttempts ?? 0) + 1;
-    const v3 = await deps.windows.revalidate("V3", item.lockKey, now + plan.timeoutMinutes * 60_000);
+    const v3 = await deps.windows.revalidate("V3", plan.window, now + plan.timeoutMinutes * 60_000);
     const retry = nextLockRetry({
       lockWaitStartedAt: a.current.lockWaitStartedAt ?? now,
       lockWaitAttempts: attempts - 1,
@@ -633,7 +689,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
       executionId: a.item.executionId,
       expected: { status: "DEPLOYING", version: a.version, dispatchToken: a.token },
       patch: buildPatch(t, now, { extra }),
-      lockKey: a.item.lockKey,
+      lockKey: a.item.targetId,
       entry: { executionId: a.item.executionId, since: now },
       now,
     });

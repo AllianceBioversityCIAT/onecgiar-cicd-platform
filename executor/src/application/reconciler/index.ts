@@ -149,7 +149,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
       case "QUEUED": {
         // S1 first (design §7.3 CW-2: re-evaluate X3-X5). Ordering value from the persisted `order`, never rebuilt.
         const value: OrderingValue = { sourceRef: item.order.sourceRef, runNumber: item.order.runNumber };
-        const s1 = evaluateS1(value, (await deps.target.get(item.lockKey)) ?? {});
+        const s1 = evaluateS1(value, (await deps.target.get(item.targetId)) ?? {});
         if (s1.decision === "REJECTED_SOURCE_MISMATCH") throw new OrderingSourceMismatchError(item.executionId);
         if (s1.decision === "SUPERSEDED") {
           const x3 = applyTransition(toExecutionSnapshot(item), { kind: "SUPERSEDE_QUEUED", superseded: true });
@@ -184,7 +184,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
             executionId: item.executionId,
             expected,
             patch: buildPatch(t, now),
-            lockKey: item.lockKey,
+            lockKey: item.targetId,
             entry: { executionId: item.executionId, since: now },
             now,
           });

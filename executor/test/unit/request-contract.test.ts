@@ -1,8 +1,7 @@
-// @akili-spec changes/cicd-executor-poc design §6.1; requirements FR-03, FR-04, RL-3
+// @akili-spec changes/cicd-executor-poc design §6.1; requirements FR-03, FR-04, RL-3; tasks R-4 (AC-02 V1)
 import { describe, expect, it } from "vitest";
 import {
   MAX_BODY_BYTES,
-  consistentWithSource,
   parseMessageBody,
   requestIdMatches,
 } from "../../src/domain/request-contract/index.js";
@@ -16,11 +15,9 @@ describe("request-contract", () => {
     expect(requestIdMatches({ requestId: "1232", ci })).toBe(false);
   });
 
-  it("consistency requires both ci.repository and ci.workflowRef to equal the resolved source", () => {
-    const source = { repository: ci.repository, workflowRef: ci.workflowRef };
-    expect(consistentWithSource({ ci }, source)).toBe(true);
-    expect(consistentWithSource({ ci }, { ...source, repository: "example-org/other" })).toBe(false);
-    expect(consistentWithSource({ ci }, { ...source, workflowRef: "wf@refs/heads/dev" })).toBe(false);
+  it("exposes no source-consistency check: ci.* is audit only in V1 (AC-02, design §6.1)", async () => {
+    const contract = (await import("../../src/domain/request-contract/index.js")) as Record<string, unknown>;
+    expect(contract["consistentWithSource"]).toBeUndefined();
   });
 
   it("parseMessageBody classifies bodies and never throws", () => {

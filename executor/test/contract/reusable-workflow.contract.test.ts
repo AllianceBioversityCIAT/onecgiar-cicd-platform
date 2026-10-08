@@ -66,10 +66,10 @@ const posix = (p: string): string => p.split(path.sep).join("/");
 
 describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD-29)", () => {
   describe("triggers and permissions", () => {
-    it("is a workflow_call-only workflow with deploymentId, environment and units inputs", () => {
+    it("is a workflow_call-only workflow with targetId, environment and units inputs (AC-02 V1)", () => {
       expect(Object.keys(wf.on)).toEqual(["workflow_call"]);
       const inputs = (wf.on["workflow_call"] as { inputs: Record<string, { type: string; required: boolean }> }).inputs;
-      expect(Object.keys(inputs).sort()).toEqual(["deploymentId", "environment", "units"]);
+      expect(Object.keys(inputs).sort()).toEqual(["environment", "targetId", "units"]);
     });
 
     it("grants no permissions at workflow level and none to the guard job", () => {
@@ -305,7 +305,7 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
         const body = posix(path.join(dir, "body.json"));
         writeFileSync(artifacts, JSON.stringify({ server: `sha256:${"a".repeat(64)}`, client: `sha256:${"b".repeat(64)}` }));
         const env: Record<string, string> = {
-          DEPLOYMENT_ID: "example-deployment",
+          TARGET_ID: "example-app-dev",
           COMMIT_SHA: "0123456789abcdef0123456789abcdef01234567",
           REPOSITORY_SLUG: "example-org/example-repo",
           WORKFLOW_REF: "example-org/example-repo/.github/workflows/caller.yml@refs/heads/example",
@@ -321,6 +321,8 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
         const json = JSON.parse(readFileSync(body, "utf8")) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
         expect(validate(json), JSON.stringify(validate.errors)).toBe(true);
         expect(json["requestId"]).toBe("9876543210-2");
+        expect(json["targetId"]).toBe("example-app-dev");
+        expect(json).not.toHaveProperty("deploymentId");
         expect(json["ci"].runId).toBe("9876543210");
         expect(json["ci"].runAttempt).toBe(2);
         expect(json["ci"].runNumber).toBe(42);
@@ -335,7 +337,7 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
     const guardScript = guardJob.steps![0]!.run!;
     const okUnits = JSON.stringify([{ unit: "server", context: "server" }, { unit: "client", context: ".", dockerfile: "client/Dockerfile" }]);
     const run = (over: Record<string, string>) =>
-      runScript(guardScript, { EVENT_NAME: "push", DEPLOYMENT_ID: "example-deployment", UNITS: okUnits, ...over });
+      runScript(guardScript, { EVENT_NAME: "push", TARGET_ID: "example-app-dev", UNITS: okUnits, ...over });
 
     it.skipIf(!canExecute)("accepts push and workflow_dispatch with valid inputs", () => {
       expect(run({}).status).toBe(0);
@@ -348,8 +350,8 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
       }
     });
 
-    it.skipIf(!canExecute)("rejects malformed deploymentId and unsafe or malformed units", () => {
-      expect(run({ DEPLOYMENT_ID: "Bad_Id" }).status).toBe(1);
+    it.skipIf(!canExecute)("rejects malformed targetId and unsafe or malformed units", () => {
+      expect(run({ TARGET_ID: "Bad_Id" }).status).toBe(1);
       const bad = [
         "not json",
         "[]",
@@ -372,7 +374,7 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
     const run = (over: Record<string, string>) =>
       runScript(guardScript, {
         EVENT_NAME: "push",
-        DEPLOYMENT_ID: "example-deployment",
+        TARGET_ID: "example-app-dev",
         UNITS: JSON.stringify([{ unit: "a", context: "app" }]),
         ...over,
       });
@@ -387,13 +389,13 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
       expect(run({ UNITS: JSON.stringify([{ unit: "a\n", context: "app" }]) }).status).toBe(1);
     });
 
-    it.skipIf(!canExecute)("rejects control characters in context, dockerfile and deploymentId", () => {
+    it.skipIf(!canExecute)("rejects control characters in context, dockerfile and targetId", () => {
       for (const bad of ["app\n", "app\r", "ap\tp", "app\u0000x", "app\u007f"]) {
         expect(run({ UNITS: JSON.stringify([{ unit: "a", context: bad }]) }).status, JSON.stringify(bad)).toBe(1);
         expect(run({ UNITS: JSON.stringify([{ unit: "a", context: "app", dockerfile: bad }]) }).status, JSON.stringify(bad)).toBe(1);
       }
       for (const id of ["example-deployment\n", "example-deployment\r", "example\n-deployment"]) {
-        expect(run({ DEPLOYMENT_ID: id }).status, JSON.stringify(id)).toBe(1);
+        expect(run({ TARGET_ID: id }).status, JSON.stringify(id)).toBe(1);
       }
     });
   });
@@ -451,8 +453,9 @@ describe.each([
     expect(callerText.replace(/^\s*#.*$/gm, "")).not.toMatch(/secrets:\s*inherit/);
   });
 
-  it("passes exactly deploymentId, environment and units", () => {
-    expect(Object.keys(deploy.with ?? {}).sort()).toEqual(["deploymentId", "environment", "units"]);
+  it("passes exactly targetId, environment and units (AC-02 V1)", () => {
+    expect(Object.keys(deploy.with ?? {}).sort()).toEqual(["environment", "targetId", "units"]);
+    expect(callerText).not.toContain("deploymentId");
   });
 
   it("grants the deploy job only id-token: write and contents: read", () => {

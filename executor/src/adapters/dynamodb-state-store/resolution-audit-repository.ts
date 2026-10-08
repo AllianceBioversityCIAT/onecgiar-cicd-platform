@@ -1,5 +1,5 @@
 // @akili-spec changes/cicd-executor-poc design §5.1, runbook §12.2 step 6 (LOG# audit entry), DD-25; requirements FR-17
-// Audit entry of an operator target resolution: `TARGET#{lockKey}` / `LOG#RESOLUTION#{eventId}`.
+// Audit entry of an operator target resolution: `TARGET#{targetId}` / `LOG#RESOLUTION#{eventId}` (AC-02 V1: the targetId is the lock key, design §1.2).
 // Idempotent per event id (`attribute_not_exists`): a redelivered
 // TARGET_RESOLUTION_RECORDED never writes a second entry. Written BEFORE the
 // `unresolved[]` removal (the service's order), so a crash leaves an audit
@@ -12,7 +12,7 @@ export const RESOLUTION_AUDIT_TTL_SECONDS = 180 * 24 * 60 * 60;
 
 export interface ResolutionAuditEntry {
   readonly eventId: string;
-  readonly lockKey: string;
+  readonly targetId: string;
   readonly executionId: string;
   readonly resolvedBy: string;
   /** SQS SenderId role-ID prefix of the operator principal (audit only). */
@@ -30,7 +30,7 @@ export class ResolutionAuditRepository {
 
   /** `true` when this call wrote the entry, `false` when it already existed. */
   public async write(entry: ResolutionAuditEntry): Promise<boolean> {
-    const key = targetStateKey(entry.lockKey);
+    const key = targetStateKey(entry.targetId);
     return runConditionalWrite(() =>
       this.client.send(
         new PutCommand({

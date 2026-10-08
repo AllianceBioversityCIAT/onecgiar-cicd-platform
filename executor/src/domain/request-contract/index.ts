@@ -2,10 +2,10 @@
 // Domain side of the message contract (Model B, AC-01). Pure: no I/O, no
 // clock, no randomness, no ajv. It owns the types of DEPLOY_REQUESTED and of
 // the internal events, the 8 KB body limit, message parsing into the
-// "unparseable" vs "parseable" classes (RL-3), and the pure cross-field checks
+// "unparseable" vs "parseable" classes (RL-3), and the pure cross-field check
 // JSON Schema cannot express (requestId == `${ci.runId}-${ci.runAttempt}`,
-// CC-2; consistency of `ci.repository`/`ci.workflowRef` with the resolved
-// source). Schema validation itself runs in application/message-router
+// CC-2). AC-02 V1: the request names a `targetId` (no `deploymentId`) and the
+// `ci.*` fields are audit only; there is no source-consistency check. Schema validation itself runs in application/message-router
 // against schemas/deploy-request.schema.json and schemas/event.schema.json
 // (reuse the schemas, never duplicate their rules).
 //
@@ -42,7 +42,8 @@ export interface DeployRequest {
   readonly specVersion: 1;
   readonly eventType: typeof DEPLOY_REQUESTED;
   readonly requestId: string;
-  readonly deploymentId: string;
+  /** Target Registry key and V1 deploy identity (design §1.2, §6.1). */
+  readonly targetId: string;
   readonly commitSha: string;
   /** Artifact unit -> `sha256:<64 hex>` digest. */
   readonly artifacts: Readonly<Record<string, string>>;
@@ -82,7 +83,7 @@ export interface ReconcileTickEvent extends InternalEventEnvelope {
 export interface DeployWindowOpenRequestedEvent extends IdentifiedEventEnvelope {
   readonly eventType: "DEPLOY_WINDOW_OPEN_REQUESTED";
   readonly source: "operator";
-  readonly lockKey: string;
+  readonly targetId: string;
   readonly openedBy: string;
   readonly externalJobsDisabled: readonly string[];
   readonly closesAt: string;
@@ -92,7 +93,7 @@ export interface DeployWindowOpenRequestedEvent extends IdentifiedEventEnvelope 
 export interface DeployWindowCloseRequestedEvent extends IdentifiedEventEnvelope {
   readonly eventType: "DEPLOY_WINDOW_CLOSE_REQUESTED";
   readonly source: "operator";
-  readonly lockKey: string;
+  readonly targetId: string;
   readonly closedBy: string;
   readonly note?: string;
 }
@@ -100,7 +101,7 @@ export interface DeployWindowCloseRequestedEvent extends IdentifiedEventEnvelope
 export interface TargetResolutionRecordedEvent extends IdentifiedEventEnvelope {
   readonly eventType: "TARGET_RESOLUTION_RECORDED";
   readonly source: "operator";
-  readonly lockKey: string;
+  readonly targetId: string;
   readonly executionId: string;
   readonly resolvedBy: string;
   readonly observedDigests: Readonly<Record<string, string>>;
@@ -151,19 +152,4 @@ export function parseMessageBody(body: string): ParsedMessage {
 /** CC-2: `requestId` must equal `${ci.runId}-${ci.runAttempt}` (mismatch -> X2 REQUEST_ID_MISMATCH). */
 export function requestIdMatches(request: Pick<DeployRequest, "requestId" | "ci">): boolean {
   return request.requestId === `${request.ci.runId}-${request.ci.runAttempt}`;
-}
-
-/** The bound source of a deployment as resolved from its definition (DD-27; logical refs already resolved). */
-export interface ResolvedSource {
-  readonly repository: string;
-  readonly workflowRef: string;
-}
-
-/**
- * Consistency check only (audit fields never authorize, DD-25): the request's
- * `ci.repository` and `ci.workflowRef` must equal the definition's resolved
- * source, by exact string equality (fail closed).
- */
-export function consistentWithSource(request: Pick<DeployRequest, "ci">, source: ResolvedSource): boolean {
-  return request.ci.repository === source.repository && request.ci.workflowRef === source.workflowRef;
 }

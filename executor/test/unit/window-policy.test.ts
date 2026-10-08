@@ -1,4 +1,8 @@
-// @akili-spec changes/cicd-executor-poc design §7.7; requirements FR-18, FR-24, RL-1
+// @akili-spec changes/cicd-executor-poc design §7.7; requirements FR-18, FR-24, RL-1; tasks R-5 (AC-02 V1)
+// AC-02 V1: external deployers are not modeled (V1-R5). The target carries only
+// its `deployWindowPolicy`; opening requires an owner and a non-empty
+// `externalJobsDisabled[]`, recorded for audit; its coverage is attested by the
+// operator, not checked here.
 import { describe, expect, it } from "vitest";
 import {
   isDeployAllowed,
@@ -12,14 +16,14 @@ const HOUR = 3_600_000;
 const EIGHT_HOURS = 8 * HOUR;
 const NOW = Date.parse("2026-10-06T10:00:00.000Z");
 
-const required: TargetWindowPolicy = { deployWindowPolicy: "required", externalDeployers: ["<JOB_A>", "<JOB_B>", "<JOB_C>"] };
-const none: TargetWindowPolicy = { deployWindowPolicy: "not-required", externalDeployers: [] };
+const required: TargetWindowPolicy = { deployWindowPolicy: "required" };
+const none: TargetWindowPolicy = { deployWindowPolicy: "not-required" };
 
 function open(overrides: Partial<Parameters<typeof validateOpenWindow>[0]> = {}) {
   return validateOpenWindow({
     target: required,
     openedBy: "operator-1",
-    externalJobsDisabled: ["<JOB_A>", "<JOB_B>", "<JOB_C>"],
+    externalJobsDisabled: ["<JOB_A>"],
     closesAt: NOW + 2 * HOUR,
     now: NOW,
     ...overrides,
@@ -27,13 +31,8 @@ function open(overrides: Partial<Parameters<typeof validateOpenWindow>[0]> = {})
 }
 
 describe("validateOpenWindow", () => {
-  it("accepts full coverage with an owner and closesAt within 8 h", () => {
+  it("accepts an owner, a non-empty disabled list and closesAt within 8 h", () => {
     expect(open()).toEqual({ valid: true });
-  });
-
-  it("rejects a partial window that misses one external deployer (FR-24)", () => {
-    const result = open({ externalJobsDisabled: ["<JOB_A>", "<JOB_B>"] });
-    expect(result).toMatchObject({ valid: false, violations: ["PARTIAL_COVERAGE"], uncovered: ["<JOB_C>"] });
   });
 
   it("rejects an empty disabled list and a missing owner", () => {
@@ -52,27 +51,25 @@ describe("validateOpenWindow", () => {
     expect(open({ closesAt: Number.NaN })).toMatchObject({ violations: ["CLOSES_AT_INVALID"] });
   });
 
-  it("rejects opening a window on a not-required target (none <=> not-required)", () => {
-    const result = open({ target: none, externalJobsDisabled: ["<JOB_A>"] });
+  it("rejects opening a window on a not-required target (design §7.7)", () => {
+    const result = open({ target: none });
     if (result.valid) throw new Error("expected invalid");
     expect(result.violations).toContain("WINDOW_NOT_REQUIRED");
   });
 
-  it("rejects an inconsistent target policy (required + none)", () => {
-    const result = open({ target: { deployWindowPolicy: "required", externalDeployers: [] } });
-    if (result.valid) throw new Error("expected invalid");
-    expect(result.violations).toContain("TARGET_POLICY_INCONSISTENT");
+  it("does not compare the disabled list with any modeled deployer list (V1-R5)", () => {
+    expect(open({ externalJobsDisabled: ["<ANY_JOB>"] })).toEqual({ valid: true });
   });
 });
 
 function windowRecord(overrides: Partial<WindowRecord> = {}): WindowRecord {
   return {
-    lockKey: "<LOCK_KEY>",
+    lockKey: "example-app-dev",
     state: "OPEN",
     openedBy: "operator-1",
     openedAt: NOW - HOUR,
     closesAt: NOW + 3 * HOUR,
-    externalJobsDisabled: ["<JOB_A>", "<JOB_B>", "<JOB_C>"],
+    externalJobsDisabled: ["<JOB_A>"],
     version: 1,
     ...overrides,
   };
@@ -105,26 +102,16 @@ describe("isDeployAllowed", () => {
     expect(decide(windowRecord({ closesAt: needUntil }))).toEqual({ allowed: true, windowRequired: true });
   });
 
-  it("denies a window that no longer covers all current external deployers", () => {
-    expect(decide(windowRecord({ externalJobsDisabled: ["<JOB_A>", "<JOB_B>"] }))).toEqual({
-      allowed: false,
-      reason: "COVERAGE_INCOMPLETE",
-    });
-  });
-
-  it("denies an OPEN window without an owner", () => {
+  it("denies an OPEN window without an owner or with an empty disabled list", () => {
     expect(decide(windowRecord({ openedBy: undefined }))).toEqual({ allowed: false, reason: "WINDOW_INVALID" });
+    expect(decide(windowRecord({ externalJobsDisabled: [] }))).toEqual({ allowed: false, reason: "WINDOW_INVALID" });
   });
 
   it("allows a not-required target without any window", () => {
     expect(decide(undefined, none)).toEqual({ allowed: true, windowRequired: false });
   });
 
-  it("fails closed on an unknown target and on an inconsistent policy", () => {
+  it("fails closed on an unknown target", () => {
     expect(isDeployAllowed({ target: undefined, window: windowRecord(), needUntil, now: NOW })).toEqual({ allowed: false, reason: "UNKNOWN_TARGET" });
-    expect(decide(windowRecord(), { deployWindowPolicy: "not-required", externalDeployers: ["<JOB_A>"] })).toEqual({
-      allowed: false,
-      reason: "TARGET_POLICY_INCONSISTENT",
-    });
   });
 });

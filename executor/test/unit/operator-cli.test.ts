@@ -33,7 +33,7 @@ describe("operator CLI", () => {
   it("open: publishes a schema-valid DEPLOY_WINDOW_OPEN_REQUESTED", async () => {
     const h = harness();
     const code = await runOperatorCli(
-      ["open", "--lock-key", "<LOCK_KEY>", "--opened-by", "operator-1", "--disabled", "<JOB_A>,<JOB_B>", "--disabled", "<JOB_C>", "--hours", "2", "--note", "dev test"],
+      ["open", "--target-id", "example-app-dev", "--opened-by", "operator-1", "--disabled", "<JOB_A>,<JOB_B>", "--disabled", "<JOB_C>", "--hours", "2", "--note", "dev test"],
       h.deps,
     );
     expect(code).toBe(0);
@@ -50,7 +50,7 @@ describe("operator CLI", () => {
 
   it("close: publishes a schema-valid DEPLOY_WINDOW_CLOSE_REQUESTED", async () => {
     const h = harness();
-    expect(await runOperatorCli(["close", "--lock-key", "<LOCK_KEY>", "--closed-by", "operator-1"], h.deps)).toBe(0);
+    expect(await runOperatorCli(["close", "--target-id", "example-app-dev", "--closed-by", "operator-1"], h.deps)).toBe(0);
     expect(validate(h.published[0]), JSON.stringify(validate.errors)).toBe(true);
     expect(h.published[0]).toMatchObject({ eventType: "DEPLOY_WINDOW_CLOSE_REQUESTED", closedBy: "operator-1" });
   });
@@ -58,7 +58,7 @@ describe("operator CLI", () => {
   it("resolve-target: publishes a schema-valid TARGET_RESOLUTION_RECORDED and no ordering fields", async () => {
     const h = harness();
     const code = await runOperatorCli(
-      ["resolve-target", "--lock-key", "<LOCK_KEY>", "--execution-id", "exec-1", "--resolved-by", "operator-1", "--observed", `<UNIT_A>=${DIGEST}`, "--observed", `<UNIT_B>=${DIGEST}`],
+      ["resolve-target", "--target-id", "example-app-dev", "--execution-id", "exec-1", "--resolved-by", "operator-1", "--observed", `<UNIT_A>=${DIGEST}`, "--observed", `<UNIT_B>=${DIGEST}`],
       h.deps,
     );
     expect(code).toBe(0);
@@ -72,21 +72,21 @@ describe("operator CLI", () => {
 
   it("--dry-run prints the event and does not publish", async () => {
     const h = harness();
-    expect(await runOperatorCli(["close", "--lock-key", "k", "--closed-by", "o", "--dry-run"], h.deps)).toBe(0);
+    expect(await runOperatorCli(["close", "--target-id", "example-app-dev", "--closed-by", "o", "--dry-run"], h.deps)).toBe(0);
     expect(h.published).toEqual([]);
     expect(validate(JSON.parse(h.out[0] as string))).toBe(true);
   });
 
   it.each([
-    [["open", "--lock-key", "k", "--opened-by", "o", "--hours", "2"]],
-    [["open", "--lock-key", "k", "--opened-by", "o", "--disabled", "a"]],
-    [["open", "--lock-key", "k", "--opened-by", "o", "--disabled", "a", "--hours", "1", "--closes-at", "2026-10-06T12:00:00Z"]],
-    [["open", "--lock-key", "k", "--disabled", "a", "--hours", "1"]],
-    [["resolve-target", "--lock-key", "k", "--execution-id", "e", "--resolved-by", "o"]],
-    [["resolve-target", "--lock-key", "k", "--execution-id", "e", "--resolved-by", "o", "--observed", "u=notadigest"]],
-    [["resolve-target", "--lock-key", "k", "--execution-id", "e", "--resolved-by", "o", "--observed", `u=${DIGEST}`, "--observed", `u=${DIGEST}`]],
+    [["open", "--target-id", "example-app-dev", "--opened-by", "o", "--hours", "2"]],
+    [["open", "--target-id", "example-app-dev", "--opened-by", "o", "--disabled", "a"]],
+    [["open", "--target-id", "example-app-dev", "--opened-by", "o", "--disabled", "a", "--hours", "1", "--closes-at", "2026-10-06T12:00:00Z"]],
+    [["open", "--target-id", "example-app-dev", "--disabled", "a", "--hours", "1"]],
+    [["resolve-target", "--target-id", "example-app-dev", "--execution-id", "e", "--resolved-by", "o"]],
+    [["resolve-target", "--target-id", "example-app-dev", "--execution-id", "e", "--resolved-by", "o", "--observed", "u=notadigest"]],
+    [["resolve-target", "--target-id", "example-app-dev", "--execution-id", "e", "--resolved-by", "o", "--observed", `u=${DIGEST}`, "--observed", `u=${DIGEST}`]],
     [["bogus"]],
-    [["close", "--lock-key"]],
+    [["close", "--target-id"]],
   ])("rejects bad input %j with exit 2 and publishes nothing", async (argv) => {
     const h = harness();
     expect(await runOperatorCli(argv, h.deps)).toBe(2);
@@ -95,14 +95,14 @@ describe("operator CLI", () => {
 
   it("does not pre-judge Executor-side bounds: an over-8h closesAt is still emitted (the Executor rejects it)", async () => {
     const h = harness();
-    expect(await runOperatorCli(["open", "--lock-key", "k", "--opened-by", "o", "--disabled", "a", "--hours", "9"], h.deps)).toBe(0);
+    expect(await runOperatorCli(["open", "--target-id", "example-app-dev", "--opened-by", "o", "--disabled", "a", "--hours", "9"], h.deps)).toBe(0);
     expect(validate(h.published[0])).toBe(true);
   });
 
   it("returns exit 1 when publishing fails", async () => {
     const h = harness();
     const deps: CliDeps = { ...h.deps, publisher: { publish: async () => Promise.reject(new Error("queue down")) } };
-    expect(await runOperatorCli(["close", "--lock-key", "k", "--closed-by", "o"], deps)).toBe(1);
+    expect(await runOperatorCli(["close", "--target-id", "example-app-dev", "--closed-by", "o"], deps)).toBe(1);
     expect(h.err.join("\n")).toContain("queue down");
   });
 

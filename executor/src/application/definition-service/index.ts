@@ -86,6 +86,8 @@ export interface ResolvedSource {
 
 /** Resolved role IDs of the platform principals (DD-25). */
 export interface ResolvedPrincipals {
+  /** The CI role shared by the authorized repositories (AC-02 V1). */
+  readonly ci: string;
   readonly executor: string;
   readonly scheduler: string;
   readonly operator: string;
@@ -306,6 +308,7 @@ export async function validateForStartup(
     resolvedAllowedSenders,
     resolvedSources,
     resolvedPrincipals: {
+      ci: resolvedOf(resolved, deps.principalRefs.ciPrincipalRef),
       executor: resolvedOf(resolved, deps.principalRefs.executorPrincipalRef),
       scheduler: resolvedOf(resolved, deps.principalRefs.schedulerPrincipalRef),
       operator: resolvedOf(resolved, deps.principalRefs.operatorPrincipalRef),

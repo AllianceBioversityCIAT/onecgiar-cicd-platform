@@ -30,7 +30,8 @@ export interface NotificationDestination {
 
 interface ExecutionNotificationBase {
   readonly executionId: string;
-  readonly deploymentId: string;
+  /** V1 deploy identity (design §1.2, §6.6). */
+  readonly targetId: string;
   readonly commitSha: string;
   readonly runUrl: string;
   readonly logsUrl?: string;
@@ -88,7 +89,7 @@ function markScopeFor(input: NotificationInput): string {
 
 function detailLine(input: ExecutionNotificationBase): string {
   const parts = [
-    `deployment ${input.deploymentId}`,
+    `target ${input.targetId}`,
     `execution ${input.executionId}`,
     `commit ${shortSha(input.commitSha)}`,
     `run ${input.runUrl}`,

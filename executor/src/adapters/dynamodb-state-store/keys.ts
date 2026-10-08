@@ -17,36 +17,33 @@ export function executionKey(executionId: string): TableKey {
 }
 
 /**
- * Dedupe key, scoped by deployment: `requestId` alone is unique only within a
- * repository (P-G9), so the same `requestId` under two `deploymentId`s is two
- * independent claims (CC-2, DD-20).
+ * Dedupe key, scoped by target (AC-02 V1, design §1.2): `requestId` alone is
+ * unique only within a repository (P-G9), so the same `requestId` under two
+ * targets is two independent claims (CC-2, DD-20).
  */
-export function dedupeKey(deploymentId: string, requestId: string): TableKey {
-  return { pk: `DEDUPE#${deploymentId}#${requestId}`, sk: "DEDUPE" };
+export function dedupeKey(targetId: string, requestId: string): TableKey {
+  return { pk: `DEDUPE#${targetId}#${requestId}`, sk: "DEDUPE" };
 }
 
 /**
- * Rejection record key (design §5.1). The scoped form is used when both
- * identifiers are usable; `REJECT#MSG#{sqsMessageId}` is the fallback when
- * either is missing or unusable (e.g. an unparsable body).
+ * Rejection record key (design §5.1, §6.3). AC-02 V1: every DEPLOY_REQUESTED
+ * rejection is recorded under the SQS message identity, so a rejected request
+ * never writes an item keyed by a target or its `requestId`.
  */
-export type RejectionRef =
-  | { readonly deploymentId: string; readonly requestId: string }
-  | { readonly sqsMessageId: string };
+export interface RejectionRef {
+  readonly sqsMessageId: string;
+}
 
 export function rejectionKey(ref: RejectionRef): TableKey {
-  if ("sqsMessageId" in ref) {
-    return { pk: `REJECT#MSG#${ref.sqsMessageId}`, sk: "META" };
-  }
-  return { pk: `REJECT#${ref.deploymentId}#${ref.requestId}`, sk: "META" };
+  return { pk: `REJECT#MSG#${ref.sqsMessageId}`, sk: "META" };
 }
 
 export function deployWindowKey(lockKey: string): TableKey {
   return { pk: `WINDOW#${lockKey}`, sk: "WINDOW" };
 }
 
-export function sequenceKey(deploymentId: string): TableKey {
-  return { pk: `DEPLOYMENT#${deploymentId}`, sk: "SEQ" };
+export function sequenceKey(targetId: string): TableKey {
+  return { pk: `DEPLOYMENT#${targetId}`, sk: "SEQ" };
 }
 
 export function targetStateKey(lockKey: string): TableKey {

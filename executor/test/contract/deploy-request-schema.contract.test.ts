@@ -1,11 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- negative fixtures mutate arbitrary nested JSON */
-// @akili-spec changes/cicd-executor-poc requirements FR-03; design 6.1
+// @akili-spec changes/cicd-executor-poc requirements FR-03; design 6.1; tasks R-4 (AC-02 V1)
 //
 // Contract tests for schemas/deploy-request.schema.json. Negative fixtures
 // assert the offending field, including NESTED objects (artifacts, ci), so
 // removing `additionalProperties: false` from a nested object turns a test red.
 // Cross-field rules (requestId == ci.runId + "-" + ci.runAttempt, unit-set
-// equality with the definition) are NOT schema-expressible and are covered by
+// source authorization against the target record) are NOT schema-expressible and are covered by
 // application-level validation, not here.
 import { beforeAll, describe, expect, it } from "vitest";
 import type { ValidateFunction } from "ajv";
@@ -20,7 +20,7 @@ const validRequest = {
   specVersion: 1,
   eventType: "DEPLOY_REQUESTED",
   requestId: "9876543210-1",
-  deploymentId: "prms-reporting-dev",
+  targetId: "example-app-dev",
   commitSha: "0123456789abcdef0123456789abcdef01234567",
   artifacts: { server: DIGEST_A, client: DIGEST_B } as Record<string, string>,
   ci: {
@@ -72,7 +72,16 @@ describe("schemas/deploy-request.schema.json (FR-03)", () => {
     ],
     ["a wrong eventType", (r) => { r.eventType = "PIPELINE_REQUESTED"; }, "/eventType const"],
     ["a wrong specVersion", (r) => { r.specVersion = 2; }, "/specVersion const"],
-    ["a missing deploymentId", (r) => { delete r.deploymentId; }, " required deploymentId"],
+    ["a missing targetId", (r) => { delete r.targetId; }, " required targetId"],
+    ["a deploymentId (removed by AC-02 V1)", (r) => { r.deploymentId = "example-app-dev"; }, " additionalProperties deploymentId"],
+    ["a deploy script path", (r) => { r.deployScript = "/opt/cicd/deploy.sh"; }, " additionalProperties deployScript"],
+    ["a script field", (r) => { r.script = "deploy.sh"; }, " additionalProperties script"],
+    ["a command field", (r) => { r.command = "id"; }, " additionalProperties command"],
+    ["a user field", (r) => { r.user = "deploy"; }, " additionalProperties user"],
+    ["a credential reference", (r) => { r.credentialRef = "cicd-poc/dev/x"; }, " additionalProperties credentialRef"],
+    ["an uppercase targetId", (r) => { r.targetId = "Example-App"; }, "/targetId pattern"],
+    ["a targetId with a shell metacharacter", (r) => { r.targetId = "app;id"; }, "/targetId pattern"],
+    ["a one-character targetId", (r) => { r.targetId = "a"; }, "/targetId pattern"],
     ["a missing ci block", (r) => { delete r.ci; }, " required ci"],
     ["a missing ci.runNumber", (r) => { delete r.ci.runNumber; }, "/ci required runNumber"],
     ["a runAttempt of 0", (r) => { r.ci.runAttempt = 0; }, "/ci/runAttempt minimum"],

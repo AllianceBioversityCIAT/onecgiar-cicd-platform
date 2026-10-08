@@ -14,8 +14,8 @@ export class SequenceRepository {
   ) {}
 
   /** Returns the post-increment value (DD-20 step 2: the counter is incremented). */
-  public async increment(deploymentId: string): Promise<number> {
-    const key = sequenceKey(deploymentId);
+  public async increment(targetId: string): Promise<number> {
+    const key = sequenceKey(targetId);
     const result = await this.client.send(
       new UpdateCommand({
         TableName: this.tableName,

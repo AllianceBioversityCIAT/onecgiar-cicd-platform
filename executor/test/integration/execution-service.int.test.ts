@@ -1,7 +1,7 @@
-// @akili-spec changes/cicd-executor-poc design §5.1, §7 (execution-service row), §7.3 (X1, X2, X3), DD-20; requirements FR-03, FR-07, CC-2
+// @akili-spec changes/cicd-executor-poc design §1.2, §5.1, §7 (execution-service row), §7.3 (X1, X2, X3), DD-20; requirements FR-03, FR-07, CC-2; tasks R-4 (AC-02 V1)
 // The execution-service on REAL DynamoDB Local repositories (dedupe, sequence,
-// execution, rejection). The catalog and the target-ordering port are in-memory
-// fakes: the TARGET adapter is N-09's. The race tests release every contender
+// execution, rejection), keyed by targetId with the target snapshot (AC-02 V1).
+// The target-ordering port is an in-memory fake. The race tests release every contender
 // through a barrier at the same instant (a single-threaded duplicate test would
 // prove only idempotent replay, not the race the dedupe claim exists for).
 import { randomUUID } from "node:crypto";
@@ -17,25 +17,37 @@ import {
   ClaimInProgressError,
   createExecutionService,
   type AcceptedDeployRequest,
-  type DeploymentCatalog,
-  type DeploymentInfo,
   type ExecutionService,
 } from "../../src/application/execution-service/index.js";
+import type { TargetRecord } from "../../src/ports/target-registry.js";
 import { createBarrier } from "../support/barrier.js";
 import { FakeClock, FakeTarget } from "../support/execution-service-fakes.js";
 import { createTestDocumentClient, dynamoDbLocalAvailable, ensureTestTable, testTableName } from "./setup.js";
 
 const DIGEST = `sha256:${"b".repeat(64)}`;
-const SOURCE = { repository: "example-org/example-app", workflow: "example-org/platform/.github/workflows/deploy.yml@refs/heads/main", environment: "dev" };
+const SOURCE = { repository: "example-org/example-app", workflow: "example-org/example-app/.github/workflows/deploy.yml@refs/heads/main" };
 const SOURCE_REF = buildSourceRef(SOURCE);
 const RACE_REPETITIONS = 50;
 const CONTENDERS = 8;
 
-function infoFor(deploymentId: string): DeploymentInfo {
-  return { definitionRef: "<DEFINITION_REF>", lockKey: `<LOCK_KEY>-${deploymentId}`, units: ["server"], source: SOURCE };
+function targetFor(targetId: string): TargetRecord {
+  return {
+    targetId,
+    project: "example",
+    environment: "dev",
+    host: "target.example.internal",
+    user: "deploy",
+    hostKey: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample"],
+    credentialRef: "cicd-poc/dev/example/ssh",
+    deployScript: "/opt/cicd/example/deploy.sh",
+    deployWindowPolicy: "not-required",
+    sourceRepositoryId: "123456789",
+    schemaVersion: 1,
+    version: 2,
+    updatedAt: "2026-10-07T12:00:00Z",
+    updatedBy: "platform-admin",
+  };
 }
-
-const catalog: DeploymentCatalog = { getDeployment: async (deploymentId) => infoFor(deploymentId) };
 
 /** Name, code and message of an unexpected rejection, so a failure shows WHAT was thrown instead of a bare count mismatch. */
 function describeError(reason: unknown): string {
@@ -46,21 +58,21 @@ function describeError(reason: unknown): string {
   return String(reason);
 }
 
-function uniqueDeploymentId(): string {
-  return `d-${randomUUID().slice(0, 18)}`;
+function uniqueTargetId(): string {
+  return `t-${randomUUID().slice(0, 18)}`;
 }
 
-function accepted(deploymentId: string, over: { runId?: string; runNumber?: number; artifacts?: Record<string, string> } = {}): AcceptedDeployRequest {
+function accepted(targetId: string, over: { runId?: string; runNumber?: number; artifacts?: Record<string, string> } = {}): AcceptedDeployRequest {
   const runId = over.runId ?? String(Date.now());
   return {
     senderRef: "AROA1234",
-    source: { repository: SOURCE.repository, workflowRef: SOURCE.workflow },
-    checks: { senderAuthorized: true, schemaValid: true, requestIdMatches: true, deploymentKnown: true, consistencyOk: true },
+    target: targetFor(targetId),
+    checks: { senderAuthorized: true, schemaValid: true, requestIdMatches: true, targetKnown: true, targetValid: true, sourceAuthorized: true },
     request: {
       specVersion: 1,
       eventType: "DEPLOY_REQUESTED",
       requestId: `${runId}-1`,
-      deploymentId,
+      targetId,
       commitSha: "a".repeat(40),
       artifacts: over.artifacts ?? { server: DIGEST },
       ci: { repository: SOURCE.repository, workflowRef: SOURCE.workflow, runId, runAttempt: 1, runNumber: over.runNumber ?? 1 },
@@ -93,7 +105,6 @@ describe.skipIf(!dynamoDbLocalAvailable())("execution-service (DynamoDB Local)",
     rejections = new RejectionRepository(client, testTableName());
     target = new FakeTarget();
     service = createExecutionService({
-      catalog,
       dedupe,
       sequences: new SequenceRepository(client, testTableName()),
       executions,
@@ -109,7 +120,7 @@ describe.skipIf(!dynamoDbLocalAvailable())("execution-service (DynamoDB Local)",
 
   test(`parallel duplicates (${String(RACE_REPETITIONS)} reps x ${String(CONTENDERS)} contenders, barrier): exactly 1 execution and 0 extra sequence numbers (FR-07)`, async () => {
     for (let rep = 0; rep < RACE_REPETITIONS; rep += 1) {
-      const deploymentId = uniqueDeploymentId();
+      const deploymentId = uniqueTargetId();
       const request = accepted(deploymentId, { runId: String(1_000_000 + rep) });
       const arrive = createBarrier(CONTENDERS);
       const settled = await Promise.allSettled(
@@ -138,30 +149,30 @@ describe.skipIf(!dynamoDbLocalAvailable())("execution-service (DynamoDB Local)",
   }, 180_000);
 
   test("sequential redelivery after the race is a no-op that consumes no sequence", async () => {
-    const deploymentId = uniqueDeploymentId();
+    const deploymentId = uniqueTargetId();
     const request = accepted(deploymentId);
     expect(await service.deployRequested(request)).toMatchObject({ outcome: "CREATED", sequence: 1 });
     expect(await service.deployRequested(request)).toEqual({ outcome: "DUPLICATE", executionId: `${deploymentId}-1` });
     expect(await sequenceValue(deploymentId)).toBe(1);
   });
 
-  test("CC-2: a foreign deployment that pre-claims the victim's requestId does not block the victim", async () => {
-    const victim = uniqueDeploymentId();
-    const attacker = uniqueDeploymentId();
+  test("CC-2: a claim of the same requestId under another target does not block the victim", async () => {
+    const victim = uniqueTargetId();
+    const attacker = uniqueTargetId();
     const requestId = `${String(Date.now())}-1`;
     const runId = requestId.slice(0, -2);
     // The attacker holds a LIVE claim on the very same requestId under its own deployment.
     expect(await dedupe.claim(attacker, requestId, "attacker-token", clock.nowMs + 120_000, Math.floor(clock.nowMs / 1000) + 604_800)).toBe(true);
 
     expect(await service.deployRequested(accepted(victim, { runId }))).toMatchObject({ outcome: "CREATED", executionId: `${victim}-1`, sequence: 1, status: "QUEUED" });
-    expect(await executions.get(`${victim}-1`)).toMatchObject({ requestId, deploymentId: victim });
+    expect(await executions.get(`${victim}-1`)).toMatchObject({ requestId, targetId: victim, targetSnapshot: { version: 2, deployScript: "/opt/cicd/example/deploy.sh" } });
     // The attacker's own claim is untouched and its deployment consumed nothing.
     expect((await dedupe.get(attacker, requestId))?.claimToken).toBe("attacker-token");
     expect(await sequenceValue(attacker)).toBeUndefined();
   });
 
   test("an expired claim left by a crashed owner is taken over: the stored sequence is reused and the execution created once", async () => {
-    const deploymentId = uniqueDeploymentId();
+    const deploymentId = uniqueTargetId();
     const request = accepted(deploymentId);
     const requestId = request.request.requestId;
     expect(await dedupe.claim(deploymentId, requestId, "dead-owner", clock.nowMs - 1, Math.floor(clock.nowMs / 1000) + 604_800)).toBe(true);
@@ -172,14 +183,15 @@ describe.skipIf(!dynamoDbLocalAvailable())("execution-service (DynamoDB Local)",
     expect((await dedupe.get(deploymentId, requestId))?.state).toBe("BOUND");
   });
 
-  test("X2 unit-set mismatch writes the rejection record and consumes no sequence, claim or execution (RL-5)", async () => {
-    const deploymentId = uniqueDeploymentId();
-    const request = accepted(deploymentId, { artifacts: { server: DIGEST, extra: DIGEST } });
-    expect(await service.deployRequested(request)).toEqual({ outcome: "REJECTED", reason: "CONSISTENCY_MISMATCH" });
-    expect(await rejections.get({ deploymentId, requestId: request.request.requestId })).toMatchObject({ reason: "CONSISTENCY_MISMATCH", senderRef: "AROA1234", deploymentId });
-    expect(await sequenceValue(deploymentId)).toBeUndefined();
-    expect(await dedupe.get(deploymentId, request.request.requestId)).toBeUndefined();
-    expect(await executions.get(`${deploymentId}-1`)).toBeUndefined();
+  test("a TARGET_NOT_AUTHORIZED rejection writes only REJECT#MSG#: no dedupe, sequence or execution for the target (option A)", async () => {
+    const targetId = uniqueTargetId();
+    const requestId = `${String(Date.now())}-1`;
+    const sqsMessageId = `msg-${randomUUID()}`;
+    await service.rejected({ transitionId: "X2", reason: "TARGET_NOT_AUTHORIZED", details: [], targetId, requestId, senderRef: "AROA1234", sqsMessageId });
+    expect(await rejections.get({ sqsMessageId })).toMatchObject({ reason: "TARGET_NOT_AUTHORIZED", targetId, requestId });
+    expect(await sequenceValue(targetId)).toBeUndefined();
+    expect(await dedupe.get(targetId, requestId)).toBeUndefined();
+    expect(await executions.get(`${targetId}-1`)).toBeUndefined();
   });
 
   test("a router rejection with unusable ids is keyed by the SQS message id", async () => {
@@ -190,8 +202,8 @@ describe.skipIf(!dynamoDbLocalAvailable())("execution-service (DynamoDB Local)",
   });
 
   test("S1: an older request is superseded by X3 and leaves the sparse index (the real conditional write)", async () => {
-    const deploymentId = uniqueDeploymentId();
-    target.seed(infoFor(deploymentId).lockKey, { highestAccepted: { sourceRef: SOURCE_REF, runNumber: 10 } });
+    const deploymentId = uniqueTargetId();
+    target.seed(deploymentId, { highestAccepted: { sourceRef: SOURCE_REF, runNumber: 10 } });
     const request = accepted(deploymentId, { runNumber: 5 });
     const outcome = await service.deployRequested(request);
     expect(outcome).toMatchObject({ outcome: "CREATED", status: "SUPERSEDED" });

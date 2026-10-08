@@ -17,13 +17,13 @@ import type { ExecutionItem } from "../../src/adapters/dynamodb-state-store/type
 import {
   FakeExecutions,
   FakeLocks,
-  FakePlans,
   FakeQueue,
   FakeTarget,
   FakeTransactions,
   FakeTransport,
   FakeWindows,
   TEST_LOCK_KEY,
+  TEST_SNAPSHOT,
   TEST_SOURCE_REF,
   waitingExecution,
   World,
@@ -64,7 +64,6 @@ function setup(over: Partial<DeployCoordinatorDeps> = {}): Ctx {
     locks: new FakeLocks(world),
     target: new FakeTarget(world),
     windows,
-    plans: new FakePlans(),
     transport,
     queue: new FakeQueue(world),
     clock: world.clock,
@@ -227,7 +226,32 @@ describe("successful deploy (X9, X12) and §7.5 resource release", () => {
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
 
-    expect(ctx.transport.lastExec?.args).toEqual(["--lock-key", TEST_LOCK_KEY, "--fencing-token", "1"]);
+    // Design §6.5: the fixed argument vector, the script installed on the target, the platform timeout.
+    expect(ctx.transport.lastExec).toEqual({
+      executionId: "exec-1",
+      scriptPath: "/opt/cicd/example-app/deploy.sh",
+      args: [
+        "--target-id", TEST_LOCK_KEY,
+        "--execution-id", "exec-1",
+        "--fencing-token", "1",
+        "--commit-sha", "0123456789abcdef0123456789abcdef01234567",
+        "--artifact", "app=sha256:<DIGEST>",
+      ],
+      timeoutMs: 20 * 60_000,
+    });
+    // The SSH target comes from the snapshot (host, port, user, host key, credential REFERENCE), never from the request.
+    expect(ctx.transport.targets).toEqual([
+      {
+        targetId: TEST_LOCK_KEY,
+        host: "target.example.internal",
+        port: 2222,
+        user: "deploy",
+        hostKey: TEST_SNAPSHOT.hostKey,
+        credentialRef: "cicd-poc/dev/example-app-dev/ssh",
+      },
+    ]);
+    // Every revalidation carries the snapshot's window policy.
+    expect(new Set(ctx.windows.targets.map((t) => JSON.stringify(t)))).toEqual(new Set([JSON.stringify({ targetId: TEST_LOCK_KEY, deployWindowPolicy: "required" })]));
     expect(ctx.world.target.lastDeployed).toMatchObject({ sourceRef: TEST_SOURCE_REF, runNumber: 5, executionId: "exec-1" });
     expect(ctx.world.target.highestDispatched).toMatchObject({ runNumber: 5, executionId: "exec-1" });
     const done = ctx.world.item();
@@ -528,7 +552,7 @@ describe("failures before exec (X10, X11)", () => {
     expect(out).toMatchObject({ transitionId: "X10", status: "FAILED" });
     expect(ctx.world.item().error?.code).toBe("DEPLOY_WINDOW_CLOSED");
     expect(ctx.world.item().execStartedAt).toBeUndefined();
-    expect(ctx.transport.delivers).toBe(1);
+    expect(ctx.transport.connects).toBe(1);
     expect(ctx.transport.execs).toBe(0);
     expectAllReleased(ctx);
   });
@@ -669,5 +693,18 @@ describe("Semaphore (design §7.5: bounded SSH concurrency, default 4)", () => {
     (await third)();
     expect(s.inUse).toBe(0);
     expect(order).toEqual(["second", "third"]);
+  });
+});
+
+describe("deploy-coordinator: platform deploy timeout (design §1.2, AC-02 V1)", () => {
+  test.each([0, 61, 1.5, Number.NaN])("refuses deployTimeoutMinutes %s (integer in [1, 60])", (minutes) => {
+    expect(() => setup({ deployTimeoutMinutes: minutes })).toThrow(/deployTimeoutMinutes/);
+  });
+
+  test("a configured timeout bounds the exec and the DEPLOYING deadline", async () => {
+    const ctx = setup({ deployTimeoutMinutes: 30 });
+    ctx.world.add(waitingExecution());
+    await ctx.coordinator.handleLockRetry({ executionId: "exec-1", attempt: 1 });
+    expect(ctx.transport.lastExec?.timeoutMs).toBe(30 * 60_000);
   });
 });

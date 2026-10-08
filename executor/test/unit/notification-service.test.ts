@@ -54,20 +54,20 @@ function setup() {
 
 const base = {
   executionId: "exec-1",
-  deploymentId: "<PRMS_REPORTING_DEV>",
+  targetId: "example-app-dev",
   commitSha: "0123456789abcdef0123456789abcdef01234567",
   runUrl: "https://github.com/<ORG>/<REPO>/actions/runs/1",
   destination: { channelRef: "<DEPLOY_CHANNEL>", tokenRef: "<SLACK_TOKEN>" },
 } as const;
 
 describe("notification-service (FR-14, design §6.6)", () => {
-  it("posts the root on ACCEPTED with deploymentId, executionId, short commit and run link, and returns the thread ref", async () => {
+  it("posts the root on ACCEPTED with targetId, executionId, short commit and run link, and returns the thread ref", async () => {
     const { service, provider } = setup();
     const result = await service.notify({ ...base, kind: "ACCEPTED" });
 
     expect(provider.sent).toHaveLength(1);
     const text = provider.sent[0]!.message;
-    expect(text).toContain("<PRMS_REPORTING_DEV>");
+    expect(text).toContain("target example-app-dev");
     expect(text).toContain("exec-1");
     expect(text).toContain("0123456");
     expect(text).not.toContain(base.commitSha);

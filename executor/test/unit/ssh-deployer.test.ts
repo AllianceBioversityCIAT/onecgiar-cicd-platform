@@ -1,29 +1,24 @@
-// @akili-spec changes/cicd-executor-poc design §6.5, §7.2, §7.5, DD-10, DD-23, DD-28; requirements FR-12, FR-13
-// N-13: the ssh2 deploy transport against a REAL in-process ssh2 server (no mocks of ssh2).
+// @akili-spec changes/cicd-executor-poc design §6.3, §6.5, §7.2, §7.5, DD-23, DD-28; requirements FR-12, FR-13; tasks R-5 (AC-02 V1)
+// The ssh2 deploy transport against a REAL in-process ssh2 server (no mocks of ssh2).
+// AC-02 V1: the target comes from the execution snapshot (host, port, user,
+// pinned host-key lines, credential REFERENCE); the deploy script is INSTALLED on
+// the target and run by path: nothing is uploaded (no SFTP, no checksum, no
+// remote temporary directory and no remote cleanup).
 import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   Ssh2DeployTransport,
   UnsafeArgumentError,
   assertSafeScriptArgs,
-  remoteDirFor,
-  type TargetConnectionDetails,
 } from "../../src/adapters/ssh-deployer/index.js";
-import { DeployTransportError, type DeploySession } from "../../src/ports/deploy-transport.js";
+import { DeployTransportError, type DeploySession, type SshTarget } from "../../src/ports/deploy-transport.js";
 import type { SecretProvider } from "../../src/ports/secret-provider.js";
 import { FakeSecretProvider } from "../support/fake-secret-provider.js";
-import { InMemoryDefinitionSource } from "../support/in-memory-definition-source.js";
 import { SshTestServer, generateTestKeyPair, reply, type ExecContext, type TestKeyPair } from "../support/ssh-test-server.js";
 
-const SCRIPT_NAME = "deploy-container.sh";
-const SCRIPT_BODY = "#!/usr/bin/env bash\necho fake bundled script\n";
-const EXECUTION_ID = "exec-0001";
-const SCRIPT_PATH = `${remoteDirFor(EXECUTION_ID)}/${SCRIPT_NAME}`;
-const TARGET: TargetConnectionDetails = {
-  connectionRef: "<TEST_CONNECTION>",
-  hostKeyRef: "<TEST_HOST_KEY>",
-  credentialRef: "<TEST_CREDENTIAL>",
-};
+const SCRIPT_PATH = "/opt/cicd/example-app/deploy.sh";
+const EXECUTION_ID = "example-app-dev-1";
+const CREDENTIAL_REF = "cicd-poc/dev/example-app-dev/ssh";
 
 class SpySecrets implements SecretProvider {
   public readonly reads: string[] = [];
@@ -64,66 +59,40 @@ function parseQuotedWords(command: string): string[] {
   return words;
 }
 
-function scriptExec(handler: (ctx: ExecContext) => void): (ctx: ExecContext) => void {
-  return (ctx) => {
-    if (ctx.command.startsWith("rm -rf")) {
-      ctx.server.files.clear();
-      return reply(ctx.stream, { code: 0 });
-    }
-    handler(ctx);
-  };
-}
-
-describe("Ssh2DeployTransport against a real ssh2 server", () => {
+describe("Ssh2DeployTransport against a real ssh2 server (AC-02 V1)", () => {
   let hostKey: TestKeyPair;
   let clientKey: TestKeyPair;
   let server: SshTestServer;
   let secrets: SpySecrets;
   let logs: string[];
   let logger: { info(m: string, f?: Record<string, unknown>): void; warn(m: string, f?: Record<string, unknown>): void };
+  let port: number;
   const open: DeploySession[] = [];
-  let delivered: { executionId: string; sha256: string; definitionRef: string }[];
 
-  async function start(opts: {
-    onExec?: (ctx: ExecContext) => void;
-    corruptWritesWith?: Buffer;
-    pinnedKey?: string;
-    password?: string;
-    temporaryPassword?: boolean;
-    port?: number;
-  } = {}): Promise<Ssh2DeployTransport> {
+  const target = (over: Partial<SshTarget> = {}): SshTarget => ({
+    targetId: "example-app-dev",
+    host: "127.0.0.1",
+    port,
+    user: "deployer",
+    hostKey: [hostKey.publicKey],
+    credentialRef: CREDENTIAL_REF,
+    ...over,
+  });
+
+  async function start(opts: { onExec?: (ctx: ExecContext) => void; credential?: string; password?: string } = {}): Promise<Ssh2DeployTransport> {
     server = new SshTestServer({
       hostKey,
       ...(opts.password === undefined ? { authorizedPublicKey: clientKey.publicKey } : { authorizedPassword: opts.password }),
-      onExec: opts.onExec ?? scriptExec(({ stream }) => reply(stream, { code: 0 })),
-      ...(opts.corruptWritesWith === undefined ? {} : { corruptWritesWith: opts.corruptWritesWith }),
+      onExec: opts.onExec ?? (({ stream }) => reply(stream, { code: 0 })),
     });
-    const port = await server.listen();
-    const connectPort = opts.port ?? port;
-    secrets = new SpySecrets(
-      new FakeSecretProvider({
-        "<TEST_CONNECTION>": JSON.stringify({ host: "127.0.0.1", port: connectPort, user: "deployer" }),
-        "<TEST_HOST_KEY>": opts.pinnedKey ?? hostKey.publicKey,
-        "<TEST_CREDENTIAL>": opts.password ?? clientKey.privateKey,
-      }),
-    );
-    delivered = [];
-    return new Ssh2DeployTransport({
-      secrets,
-      definitions: new InMemoryDefinitionSource({ deployScripts: { [SCRIPT_NAME]: SCRIPT_BODY }, definitionRef: "test-ref" }),
-      targets: {
-        resolve: async () => ({ ...TARGET, ...(opts.temporaryPassword === true ? { temporaryPassword: true } : {}) }),
-      },
-      logger,
-      onScriptDelivered: (info) => delivered.push(info),
-      readyTimeoutMs: 5_000,
-    });
+    port = await server.listen();
+    secrets = new SpySecrets(new FakeSecretProvider({ [CREDENTIAL_REF]: opts.credential ?? clientKey.privateKey }));
+    return new Ssh2DeployTransport({ secrets, logger, readyTimeoutMs: 5_000 });
   }
 
-  async function connectAndDeliver(transport: Ssh2DeployTransport): Promise<DeploySession> {
-    const session = await transport.connect("target-a");
+  async function connect(transport: Ssh2DeployTransport, over: Partial<SshTarget> = {}): Promise<DeploySession> {
+    const session = await transport.connect(target(over));
     open.push(session);
-    await session.deliverScript(EXECUTION_ID);
     return session;
   }
 
@@ -142,60 +111,62 @@ describe("Ssh2DeployTransport against a real ssh2 server", () => {
     await server?.close();
   });
 
-  it("verifies the pinned host key, delivers the script (0700, checksum recorded) and runs it", async () => {
+  it("verifies the pinned host key and runs the script installed at deployScript, uploading nothing", async () => {
     const transport = await start({
-      onExec: scriptExec(({ stream }) =>
+      onExec: ({ stream }) =>
         reply(stream, {
           stdout: 'noise\nCICD_RESULT {"status":"SUCCESS","deployedImages":{"app":"repo@sha256:abc"},"migrations":"NONE","healthy":true}\n',
           code: 0,
         }),
-      ),
     });
-    const session = await connectAndDeliver(transport);
-    expect(server.files.get(SCRIPT_PATH)?.toString("utf8")).toBe(SCRIPT_BODY);
-    expect((server.fileModes.get(SCRIPT_PATH) ?? 0) & 0o777).toBe(0o500); // owner read/exec only: not writable after delivery
-    expect(delivered).toHaveLength(1);
-    expect(delivered[0]?.sha256).toMatch(/^[0-9a-f]{64}$/);
-
-    const outcome = await session.exec({ executionId: EXECUTION_ID, args: ["--execution-id", EXECUTION_ID], timeoutMs: 10_000 });
+    const session = await connect(transport);
+    const outcome = await session.exec({ executionId: EXECUTION_ID, scriptPath: SCRIPT_PATH, args: ["--execution-id", EXECUTION_ID], timeoutMs: 10_000 });
     expect(outcome).toMatchObject({
       kind: "EXIT",
       exitCode: 0,
       cicdResult: { status: "SUCCESS", migrations: "NONE", healthy: true, deployedImages: { app: "repo@sha256:abc" } },
     });
-    expect(server.execCommands[0]).toBe(`'${SCRIPT_PATH}' '--execution-id' '${EXECUTION_ID}'`);
+    expect(server.execCommands).toEqual([`'${SCRIPT_PATH}' '--execution-id' '${EXECUTION_ID}'`]);
+    expect(server.files.size).toBe(0);
+    expect(server.directories.size).toBe(0);
+  });
+
+  it("connects to the snapshot's port (default 22 only when absent) and user", async () => {
+    const transport = await start();
+    await connect(transport);
+    expect(server.connectionCount).toBe(1);
   });
 
   it("HOST_KEY_MISMATCH: an unregistered host key is never accepted, never retried, and nothing runs (FR-12)", async () => {
-    const other = generateTestKeyPair();
-    const transport = await start({ pinnedKey: other.publicKey });
-    await expect(transport.connect("target-a")).rejects.toMatchObject({ name: "DeployTransportError", code: "HOST_KEY_MISMATCH" });
-    expect(server.authAttempts).toEqual([]); // the handshake was aborted before authentication: no credential reached the host
+    const transport = await start();
+    await expect(transport.connect(target({ hostKey: [generateTestKeyPair().publicKey] }))).rejects.toMatchObject({
+      name: "DeployTransportError",
+      code: "HOST_KEY_MISMATCH",
+    });
+    expect(server.authAttempts).toEqual([]); // aborted before authentication: no credential reached the host
     expect(server.execCommands).toEqual([]);
-    expect(server.files.size).toBe(0);
     expect(server.connectionCount).toBe(1); // a single attempt: never retried
-    expect(secrets.reads.filter((r) => r === TARGET.credentialRef)).toHaveLength(1);
   });
 
-  it("fails closed when the pinned host key resolves to nothing usable", async () => {
-    const transport = await start({ pinnedKey: "# empty\n" });
-    await expect(transport.connect("target-a")).rejects.toMatchObject({ code: "HOST_KEY_MISMATCH" });
+  it("fails closed, without connecting or reading the credential, when no pinned host-key line is usable", async () => {
+    const transport = await start();
+    await expect(transport.connect(target({ hostKey: ["# not a key"] }))).rejects.toMatchObject({ code: "HOST_KEY_MISMATCH" });
     expect(server.connectionCount).toBe(0);
+    expect(secrets.reads).toEqual([]);
   });
 
   it("accepts any one of several pinned keys (rotation)", async () => {
-    const transport = await start({ pinnedKey: `${generateTestKeyPair().publicKey}\n${hostKey.publicKey} comment\n` });
-    const session = await transport.connect("target-a");
-    open.push(session);
+    const transport = await start();
+    await connect(transport, { hostKey: [generateTestKeyPair().publicKey, `${hostKey.publicKey} comment`] });
     expect(server.connectionCount).toBe(1);
   });
 
   it("passes hostile arguments to the remote command literally (FR-12 arguments)", async () => {
     const transport = await start();
-    const session = await connectAndDeliver(transport);
+    const session = await connect(transport);
     const hostile = [
       "--artifact",
-      "app=repo@sha256:" + "a".repeat(64),
+      "app=sha256:" + "a".repeat(64),
       "x; touch /tmp/pwned",
       "$(touch /tmp/pwned)",
       "`touch /tmp/pwned`",
@@ -206,7 +177,7 @@ describe("Ssh2DeployTransport against a real ssh2 server", () => {
       "--flag=-rf /",
       "'; rm -rf / #",
     ];
-    await session.exec({ executionId: EXECUTION_ID, args: hostile, timeoutMs: 10_000 });
+    await session.exec({ executionId: EXECUTION_ID, scriptPath: SCRIPT_PATH, args: hostile, timeoutMs: 10_000 });
     const received = server.execCommands.find((c) => c.startsWith(`'${SCRIPT_PATH}'`));
     expect(received).toBeDefined();
     expect(parseQuotedWords(received!)).toEqual([SCRIPT_PATH, ...hostile]);
@@ -220,118 +191,86 @@ describe("Ssh2DeployTransport against a real ssh2 server", () => {
     }
   });
 
-  it("rejects an argument containing a line break before sending anything (forward pointer from T-13)", async () => {
+  it("rejects an argument containing a line break before sending anything", async () => {
     expect(() => assertSafeScriptArgs(["ok", "bad\nvalue"])).toThrow(UnsafeArgumentError);
     expect(() => assertSafeScriptArgs(["bad\rvalue"])).toThrow(UnsafeArgumentError);
     expect(() => assertSafeScriptArgs(["bad\0value"])).toThrow(UnsafeArgumentError);
 
     const transport = await start();
-    const session = await connectAndDeliver(transport);
+    const session = await connect(transport);
     await expect(
-      session.exec({ executionId: EXECUTION_ID, args: ["--unit", "a\nrm -rf /"], timeoutMs: 10_000 }),
+      session.exec({ executionId: EXECUTION_ID, scriptPath: SCRIPT_PATH, args: ["--target-id", "a\nrm -rf /"], timeoutMs: 10_000 }),
     ).rejects.toBeInstanceOf(UnsafeArgumentError);
-    expect(server.execCommands.filter((c) => c.includes(SCRIPT_NAME))).toEqual([]);
+    expect(server.execCommands).toEqual([]);
   });
 
-  it("rejects an unsafe executionId before touching the remote filesystem", async () => {
-    const transport = await start();
-    const session = await transport.connect("target-a");
-    open.push(session);
-    await expect(session.deliverScript("../../etc")).rejects.toBeInstanceOf(DeployTransportError);
-    expect(server.files.size).toBe(0);
-    expect(server.directories.size).toBe(0);
-  });
+  it.each(["relative/deploy.sh", "/opt/../bin/sh", "/opt/./x.sh", "/opt/cicd/", "/opt/cicd/deploy.sh;id", "/opt/cicd/deploy sh", "/"])(
+    "refuses the unsafe script path %j before sending anything (defense in depth behind the record schema)",
+    async (scriptPath) => {
+      const transport = await start();
+      const session = await connect(transport);
+      await expect(session.exec({ executionId: EXECUTION_ID, scriptPath, args: [], timeoutMs: 10_000 })).rejects.toBeInstanceOf(UnsafeArgumentError);
+      expect(server.execCommands).toEqual([]);
+    },
+  );
 
   describe("connect failures", () => {
     it("makes ONE attempt per connect() (the coordinator owns the §7.2 retry loop) and its error carries no host, IP or port (DD-23)", async () => {
-      const probe = new SshTestServer({ hostKey });
-      const port = await probe.listen();
-      await probe.close();
-      const spy = new SpySecrets(
-        new FakeSecretProvider({
-          "<TEST_CONNECTION>": JSON.stringify({ host: "127.0.0.1", port, user: "deployer" }),
-          "<TEST_HOST_KEY>": hostKey.publicKey,
-          "<TEST_CREDENTIAL>": clientKey.privateKey,
-        }),
-      );
-      const transport = new Ssh2DeployTransport({
-        secrets: spy,
-        definitions: new InMemoryDefinitionSource({ deployScripts: { [SCRIPT_NAME]: SCRIPT_BODY } }),
-        targets: { resolve: async () => TARGET },
-        readyTimeoutMs: 2_000,
-        logger,
-      });
-      const error = (await transport.connect("target-a").catch((e: unknown) => e)) as Error;
+      const transport = await start();
+      const closedPort = port;
+      await server.close();
+      const error = (await transport.connect(target({ port: closedPort })).catch((e: unknown) => e)) as Error;
       expect(error).toMatchObject({ name: "DeployTransportError", code: "SSH_CONNECT" });
-      expect(spy.reads.filter((r) => r === TARGET.credentialRef)).toHaveLength(1);
+      expect(secrets.reads.filter((r) => r === CREDENTIAL_REF)).toHaveLength(1);
       for (const text of [error.message, logs.join(" ")]) {
         expect(text).not.toContain("127.0.0.1");
-        expect(text).not.toContain(String(port));
+        expect(text).not.toContain(String(closedPort));
         expect(text).not.toMatch(/ECONNREFUSED|ENOTFOUND/);
       }
     });
-  });
 
-  describe("temporary directory hijack (FR-12: the script executed is the one delivered)", () => {
-    const DIR = remoteDirFor(EXECUTION_ID);
-
-    it.each([
-      ["world-writable (0777) directory owned by another user", 0o777, 1001],
-      ["private directory owned by another user", 0o700, 1001],
-      ["open (0777) directory even if owned by the SSH user", 0o777, 1000],
-      ["private directory owned by the SSH user (not created by this attempt)", 0o700, 1000],
-    ])("refuses a pre-existing %s, fails before exec and removes nothing", async (_name, mode, uid) => {
-      const transport = await start();
-      server.seedDirectory(DIR, mode, uid);
-      const session = await transport.connect("target-a");
-      open.push(session);
-      await expect(session.deliverScript(EXECUTION_ID)).rejects.toMatchObject({ name: "DeployTransportError", code: "SSH_CONNECT" });
-      expect(server.files.size).toBe(0);
-      expect(server.execCommands).toEqual([]);
-      await session.close();
-      expect(server.execCommands).toEqual([]); // the foreign directory is not ours to remove
-    });
-
-    it("creates a fresh private (0700) directory and a non-writable script", async () => {
-      const transport = await start();
-      const session = await connectAndDeliver(transport);
-      void session;
-      expect(server.directories.get(DIR)).toEqual({ mode: 0o700, uid: 1000 });
-      expect((server.fileModes.get(SCRIPT_PATH) ?? 0) & 0o222).toBe(0);
+    it("an unreadable credential fails as SSH_CONNECT without connecting", async () => {
+      server = new SshTestServer({ hostKey, authorizedPublicKey: clientKey.publicKey });
+      port = await server.listen();
+      const transport = new Ssh2DeployTransport({ secrets: new FakeSecretProvider({}), logger, readyTimeoutMs: 2_000 });
+      await expect(transport.connect(target())).rejects.toMatchObject({ code: "SSH_CONNECT" });
+      expect(server.connectionCount).toBe(0);
     });
   });
 
   it("does not retry after exec started: a dropped session is SESSION_LOST and the script is not re-run (DD-28)", async () => {
-    const transport = await start({
-      onExec: scriptExec(({ server: s }) => {
-        s.dropConnections();
-      }),
-    });
-    const session = await connectAndDeliver(transport);
-    const outcome = await session.exec({ executionId: EXECUTION_ID, args: ["--unit", "u"], timeoutMs: 10_000 });
+    const transport = await start({ onExec: ({ server: s }) => s.dropConnections() });
+    const session = await connect(transport);
+    const outcome = await session.exec({ executionId: EXECUTION_ID, scriptPath: SCRIPT_PATH, args: ["--target-id", "t"], timeoutMs: 10_000 });
     expect(outcome).toEqual({ kind: "SESSION_LOST" });
-    expect(server.execCommands.filter((c) => c.includes(SCRIPT_NAME))).toHaveLength(1);
+    expect(server.execCommands).toHaveLength(1);
     expect(server.connectionCount).toBe(1);
-    await expect(session.exec({ executionId: EXECUTION_ID, args: [], timeoutMs: 1_000 })).rejects.toThrow(/never run twice/);
-    await session.close();
-    expect(server.execCommands.some((c) => c.startsWith("rm -rf"))).toBe(false); // the script may still be running: nothing is removed
+    await expect(session.exec({ executionId: EXECUTION_ID, scriptPath: SCRIPT_PATH, args: [], timeoutMs: 1_000 })).rejects.toThrow(/never run twice/);
   });
 
-  it("reports TIMEOUT without aborting the script or removing its files", async () => {
-    const transport = await start({ onExec: scriptExec(() => undefined) }); // never replies
-    const session = await connectAndDeliver(transport);
-    const outcome = await session.exec({ executionId: EXECUTION_ID, args: [], timeoutMs: 150 });
+  it("reports TIMEOUT without aborting the script and runs nothing else on close", async () => {
+    const transport = await start({ onExec: () => undefined }); // never replies
+    const session = await connect(transport);
+    const outcome = await session.exec({ executionId: EXECUTION_ID, scriptPath: SCRIPT_PATH, args: [], timeoutMs: 150 });
     expect(outcome).toEqual({ kind: "TIMEOUT" });
     await session.close();
-    expect(server.execCommands.some((c) => c.startsWith("rm -rf"))).toBe(false);
-    expect(server.files.has(SCRIPT_PATH)).toBe(true);
+    expect(server.execCommands).toHaveLength(1);
+  });
+
+  it("closing a session runs no remote cleanup command (nothing was delivered) and is idempotent", async () => {
+    const transport = await start({ onExec: ({ stream }) => reply(stream, { code: 10 }) });
+    const session = await connect(transport);
+    expect(await session.exec({ executionId: EXECUTION_ID, scriptPath: SCRIPT_PATH, args: [], timeoutMs: 10_000 })).toMatchObject({ kind: "EXIT", exitCode: 10 });
+    await expect(session.close()).resolves.toBeUndefined();
+    await expect(session.close()).resolves.toBeUndefined();
+    expect(server.execCommands).toEqual([`'${SCRIPT_PATH}'`]);
   });
 
   describe("CICD_RESULT (design §6.5)", () => {
     const run = async (stdout: string, code: number) => {
-      const transport = await start({ onExec: scriptExec(({ stream }) => reply(stream, { stdout, stderr: "warn\n", code })) });
-      const session = await connectAndDeliver(transport);
-      return session.exec({ executionId: EXECUTION_ID, args: [], timeoutMs: 10_000 });
+      const transport = await start({ onExec: ({ stream }) => reply(stream, { stdout, stderr: "warn\n", code }) });
+      const session = await connect(transport);
+      return session.exec({ executionId: EXECUTION_ID, scriptPath: SCRIPT_PATH, args: [], timeoutMs: 10_000 });
     };
 
     it("is parsed from the last stdout line", async () => {
@@ -362,78 +301,27 @@ describe("Ssh2DeployTransport against a real ssh2 server", () => {
     });
   });
 
-  it("SFTP checksum mismatch fails before exec and removes the temporary directory", async () => {
-    const transport = await start({ corruptWritesWith: Buffer.from("tampered") });
-    const session = await transport.connect("target-a");
-    open.push(session);
-    await expect(session.deliverScript(EXECUTION_ID)).rejects.toMatchObject({ name: "DeployTransportError", code: "SSH_CONNECT" });
-    expect(delivered).toEqual([]);
-    expect(server.execCommands.filter((c) => c.includes(SCRIPT_NAME))).toEqual([]);
-    await session.close();
-    expect(server.execCommands).toEqual([`rm -rf -- '${remoteDirFor(EXECUTION_ID)}' '${remoteDirFor(EXECUTION_ID)}.result.json'`]);
-  });
-
-  it("removes /tmp/cicd-{executionId} at the end, best effort, without masking the result", async () => {
-    const transport = await start({
-      onExec: (ctx) => (ctx.command.startsWith("rm -rf") ? reply(ctx.stream, { code: 1, stderr: "cannot remove" }) : reply(ctx.stream, { code: 10 })),
-    });
-    const session = await connectAndDeliver(transport);
-    const outcome = await session.exec({ executionId: EXECUTION_ID, args: [], timeoutMs: 10_000 });
-    expect(outcome).toMatchObject({ kind: "EXIT", exitCode: 10 }); // cleanup failure below must not change this
-    await expect(session.close()).resolves.toBeUndefined();
-    expect(server.execCommands.at(-1)).toBe(`rm -rf -- '${remoteDirFor(EXECUTION_ID)}' '${remoteDirFor(EXECUTION_ID)}.result.json'`);
-    await expect(session.close()).resolves.toBeUndefined(); // idempotent
-  });
-
   describe("credentials (FR-12, DD-23)", () => {
-    it("never appear in logs, results or errors; the key is read at the point of use only", async () => {
+    it("never appear in logs, results or errors; the key is read at the point of use only, through credentialRef", async () => {
       const transport = await start();
-      const session = await connectAndDeliver(transport);
-      const outcome = await session.exec({ executionId: EXECUTION_ID, args: ["--unit", "u"], timeoutMs: 10_000 });
+      const session = await connect(transport);
+      const outcome = await session.exec({ executionId: EXECUTION_ID, scriptPath: SCRIPT_PATH, args: ["--target-id", "t"], timeoutMs: 10_000 });
       await session.close();
       const keyBody = clientKey.privateKey.split("\n").filter((l) => l.length > 20 && !l.startsWith("-----"));
       const everything = logs.join("\n") + JSON.stringify(outcome);
       for (const line of keyBody) expect(everything).not.toContain(line);
       expect(everything).not.toContain("PRIVATE KEY");
-      expect(secrets.reads.filter((r) => r === TARGET.credentialRef)).toHaveLength(1);
+      expect(secrets.reads).toEqual([CREDENTIAL_REF]);
     });
 
-    it("a wrong password fails as SSH_CONNECT without echoing the password anywhere", async () => {
-      const transport = await start({ password: "S3cretPassw0rd-for-test", temporaryPassword: true });
-      // Make the server expect a different password than the one the secret provider returns.
-      await server.close();
-      server = new SshTestServer({ hostKey, authorizedPassword: "another-password" });
-      const port = await server.listen();
-      const wrong = new Ssh2DeployTransport({
-        secrets: new FakeSecretProvider({
-          "<TEST_CONNECTION>": JSON.stringify({ host: "127.0.0.1", port, user: "deployer" }),
-          "<TEST_HOST_KEY>": hostKey.publicKey,
-          "<TEST_CREDENTIAL>": "S3cretPassw0rd-for-test",
-        }),
-        definitions: new InMemoryDefinitionSource({ deployScripts: { [SCRIPT_NAME]: SCRIPT_BODY } }),
-        targets: { resolve: async () => ({ ...TARGET, temporaryPassword: true }) },
-        logger,
-        readyTimeoutMs: 3_000,
-      });
-      void transport;
-      const error = (await wrong.connect("target-a").catch((e: unknown) => e)) as Error;
+    it("authenticates with the private key only: a password secret is never offered as a password (V1 record has no temporary-password marker)", async () => {
+      const transport = await start({ password: "S3cretPassw0rd-for-test", credential: "S3cretPassw0rd-for-test" });
+      const error = (await transport.connect(target()).catch((e: unknown) => e)) as Error;
       expect(error).toBeInstanceOf(DeployTransportError);
       expect((error as DeployTransportError).code).toBe("SSH_CONNECT");
+      expect(server.authAttempts).not.toContain("password");
       expect(error.message).not.toContain("S3cretPassw0rd-for-test");
       expect(logs.join("\n")).not.toContain("S3cretPassw0rd-for-test");
-    });
-
-    it("uses a password only when the target is marked temporary", async () => {
-      const transport = await start({ password: "S3cretPassw0rd-for-test", temporaryPassword: true });
-      const session = await transport.connect("target-a");
-      open.push(session);
-      expect(server.authAttempts).toContain("password");
-    });
-
-    it("does not fall back to a password for a target not marked temporary", async () => {
-      const transport = await start({ password: "S3cretPassw0rd-for-test" }); // key auth attempted with a non-key secret
-      await expect(transport.connect("target-a")).rejects.toMatchObject({ code: "SSH_CONNECT" });
-      expect(server.authAttempts).not.toContain("password");
     });
   });
 });

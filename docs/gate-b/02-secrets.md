@@ -104,7 +104,7 @@ Map each output to its ref:
 
 | Stack output | Referenced as |
 |---|---|
-| `CiRoleId` | The deployment definition's `allowedSenderRef` |
+| `CiRoleId` | The deployment definition's `allowedSenderRef` (startup validation until R-6) and `CICD_CI_PRINCIPAL_REF` ([05](05-run-executor-node22.md); AC-02 V1: the request path authorizes `DEPLOY_REQUESTED` by this reference) |
 | `ExecutorRoleId` | `CICD_EXECUTOR_PRINCIPAL_REF` |
 | `SchedulerRoleId` | `CICD_SCHEDULER_PRINCIPAL_REF` |
 | `OperatorRoleId` | `CICD_OPERATOR_PRINCIPAL_REF` |

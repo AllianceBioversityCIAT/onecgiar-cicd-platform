@@ -32,13 +32,20 @@ export const FAILURE_CODES = [
 ] as const;
 export type FailureCode = (typeof FAILURE_CODES)[number];
 
-/** X2 rejection reasons (design §7.2 first rows; FR-16 F3/F4). */
+/**
+ * X2 rejection reasons (design §7.2 first rows, §6.3; FR-16 F3/F4). AC-02 V1:
+ * `UNKNOWN_DEPLOYMENT` and `CONSISTENCY_MISMATCH` are removed with the
+ * Deployment Definitions; the target reasons are `TARGET_UNKNOWN`,
+ * `TARGET_INVALID` and `TARGET_NOT_AUTHORIZED` (source repository mismatch,
+ * option A, DD-25).
+ */
 export const REJECT_REASONS = [
   "UNAUTHORIZED_SENDER",
   "SCHEMA_INVALID",
   "REQUEST_ID_MISMATCH",
-  "UNKNOWN_DEPLOYMENT",
-  "CONSISTENCY_MISMATCH",
+  "TARGET_UNKNOWN",
+  "TARGET_INVALID",
+  "TARGET_NOT_AUTHORIZED",
 ] as const;
 export type RejectReason = (typeof REJECT_REASONS)[number];
 

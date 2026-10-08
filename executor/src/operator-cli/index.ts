@@ -1,4 +1,4 @@
-// @akili-spec changes/cicd-executor-poc design §4.2 (tools/), §6.4, §7.7, DD-21, runbook §12.2; requirements FR-18, FR-24
+// @akili-spec changes/cicd-executor-poc design §4.2 (tools/), §6.4, §7.7, DD-21, runbook §12.2; requirements FR-18, FR-24; tasks R-5 (AC-02 V1: events name the targetId)
 // Operator CLI core: turns arguments into schema-valid internal events
 // (DEPLOY_WINDOW_OPEN_REQUESTED, DEPLOY_WINDOW_CLOSE_REQUESTED,
 // TARGET_RESOLUTION_RECORDED) and hands them to a QueuePublisher port. It
@@ -20,9 +20,9 @@ export interface CliDeps {
 
 export const USAGE = [
   "Usage:",
-  "  tools/deploy-window open  --lock-key <k> --opened-by <who> --disabled <id>[,<id>…] (--closes-at <ISO-8601> | --hours <n>) [--note <text>] [--dry-run]",
-  "  tools/deploy-window close --lock-key <k> --closed-by <who> [--note <text>] [--dry-run]",
-  "  tools/resolve-target --lock-key <k> --execution-id <id> --resolved-by <who> --observed <unit>=<sha256:digest> [--observed …] [--note <text>] [--dry-run]",
+  "  tools/deploy-window open  --target-id <targetId> --opened-by <who> --disabled <id>[,<id>…] (--closes-at <ISO-8601> | --hours <n>) [--note <text>] [--dry-run]",
+  "  tools/deploy-window close --target-id <targetId> --closed-by <who> [--note <text>] [--dry-run]",
+  "  tools/resolve-target --target-id <targetId> --execution-id <id> --resolved-by <who> --observed <unit>=<sha256:digest> [--observed …] [--note <text>] [--dry-run]",
 ].join("\n");
 
 interface ParsedArgs {
@@ -83,7 +83,7 @@ function withNote(event: Record<string, unknown>, args: ParsedArgs): Record<stri
 }
 
 function buildOpen(args: ParsedArgs, deps: CliDeps): BuildResult {
-  const absent = missing(args, ["lock-key", "opened-by"]);
+  const absent = missing(args, ["target-id", "opened-by"]);
   if (absent !== undefined) return { error: absent };
   const disabled = (args.flags.get("disabled") ?? []).flatMap((v) => v.split(",")).map((v) => v.trim()).filter((v) => v !== "");
   if (disabled.length === 0) return { error: "At least one --disabled external job identifier is required" };
@@ -107,7 +107,7 @@ function buildOpen(args: ParsedArgs, deps: CliDeps): BuildResult {
     event: withNote(
       {
         ...envelope(deps, "DEPLOY_WINDOW_OPEN_REQUESTED"),
-        lockKey: single(args, "lock-key"),
+        targetId: single(args, "target-id"),
         openedBy: single(args, "opened-by"),
         externalJobsDisabled: disabled,
         closesAt,
@@ -118,13 +118,13 @@ function buildOpen(args: ParsedArgs, deps: CliDeps): BuildResult {
 }
 
 function buildClose(args: ParsedArgs, deps: CliDeps): BuildResult {
-  const absent = missing(args, ["lock-key", "closed-by"]);
+  const absent = missing(args, ["target-id", "closed-by"]);
   if (absent !== undefined) return { error: absent };
   return {
     event: withNote(
       {
         ...envelope(deps, "DEPLOY_WINDOW_CLOSE_REQUESTED"),
-        lockKey: single(args, "lock-key"),
+        targetId: single(args, "target-id"),
         closedBy: single(args, "closed-by"),
       },
       args,
@@ -133,7 +133,7 @@ function buildClose(args: ParsedArgs, deps: CliDeps): BuildResult {
 }
 
 function buildResolve(args: ParsedArgs, deps: CliDeps): BuildResult {
-  const absent = missing(args, ["lock-key", "execution-id", "resolved-by"]);
+  const absent = missing(args, ["target-id", "execution-id", "resolved-by"]);
   if (absent !== undefined) return { error: absent };
   const observed = args.flags.get("observed") ?? [];
   if (observed.length === 0) return { error: "At least one --observed <unit>=<digest> is required" };
@@ -152,7 +152,7 @@ function buildResolve(args: ParsedArgs, deps: CliDeps): BuildResult {
     event: withNote(
       {
         ...envelope(deps, "TARGET_RESOLUTION_RECORDED"),
-        lockKey: single(args, "lock-key"),
+        targetId: single(args, "target-id"),
         executionId: single(args, "execution-id"),
         resolvedBy: single(args, "resolved-by"),
         observedDigests: digests,

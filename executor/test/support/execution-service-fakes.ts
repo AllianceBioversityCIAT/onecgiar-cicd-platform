@@ -9,8 +9,6 @@ import type { RejectionRef } from "../../src/adapters/dynamodb-state-store/keys.
 import type { ExecutionTransitionExpected, ExecutionUpdatePatch } from "../../src/adapters/dynamodb-state-store/execution-repository.js";
 import type {
   DedupePort,
-  DeploymentCatalog,
-  DeploymentInfo,
   ExecutionStorePort,
   RejectionStorePort,
   SequencePort,
@@ -26,13 +24,6 @@ export class FakeClock implements Clock {
   }
 }
 
-export class FakeCatalog implements DeploymentCatalog {
-  public constructor(private readonly deployments: Readonly<Record<string, DeploymentInfo>>) {}
-  public async getDeployment(deploymentId: string): Promise<DeploymentInfo | undefined> {
-    return this.deployments[deploymentId];
-  }
-}
-
 export class FakeDedupe implements DedupePort {
   public readonly items = new Map<string, DedupeItem>();
   private key(d: string, r: string): string {
@@ -43,7 +34,7 @@ export class FakeDedupe implements DedupePort {
   }
   public async claim(d: string, r: string, claimToken: string, claimLeaseExpiresAt: number, expiresAt: number): Promise<boolean> {
     if (this.items.has(this.key(d, r))) return false;
-    this.items.set(this.key(d, r), { deploymentId: d, requestId: r, state: "CLAIMED", claimToken, claimLeaseExpiresAt, expiresAt });
+    this.items.set(this.key(d, r), { targetId: d, requestId: r, state: "CLAIMED", claimToken, claimLeaseExpiresAt, expiresAt });
     return true;
   }
   public async takeOverExpiredClaim(d: string, r: string, previous: string, next: string, lease: number, now: number): Promise<boolean> {
@@ -68,9 +59,9 @@ export class FakeDedupe implements DedupePort {
 
 export class FakeSequence implements SequencePort {
   public readonly counters = new Map<string, number>();
-  public async increment(deploymentId: string): Promise<number> {
-    const next = (this.counters.get(deploymentId) ?? 0) + 1;
-    this.counters.set(deploymentId, next);
+  public async increment(targetId: string): Promise<number> {
+    const next = (this.counters.get(targetId) ?? 0) + 1;
+    this.counters.set(targetId, next);
     return next;
   }
 }
@@ -101,7 +92,7 @@ export class FakeExecutions implements ExecutionStorePort {
 export class FakeRejections implements RejectionStorePort {
   public readonly items = new Map<string, Omit<RejectionItem, "expiresAt">>();
   public static keyOf(ref: RejectionRef): string {
-    return "sqsMessageId" in ref ? `REJECT#MSG#${ref.sqsMessageId}` : `REJECT#${ref.deploymentId}#${ref.requestId}`;
+    return `REJECT#MSG#${ref.sqsMessageId}`;
   }
   public async record(ref: RejectionRef, item: Omit<RejectionItem, "expiresAt">): Promise<boolean> {
     const key = FakeRejections.keyOf(ref);
