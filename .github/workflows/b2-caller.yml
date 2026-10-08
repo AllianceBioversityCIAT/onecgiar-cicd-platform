@@ -1,14 +1,15 @@
 # THROWAWAY B2 CALLER (docs/gate-b/03-github.md sections 6 to 8). Lives only on the bound branch
 # b2-session-probe; never merged into main.
 #
-# It calls the reusable workflow path pinned in the CI role trust, at the SHA the stack pins
-# (PinnedWorkflowSha), with the full owner/repo/path@SHA form so job_workflow_ref matches.
-# At 3840f99 that file is the session-name probe: it records the OIDC claims and calls
-# AssumeRoleWithWebIdentity with three session names. It pushes no image, sends no SQS
-# message and changes no AWS resource. The inputs are required by the reusable workflow
-# interface; the probe ignores them.
+# L9 (first live flow, stage 1): calls the trusted R-8 reusable workflow at the SHA the CI role
+# trust pins (PinnedWorkflowSha), with the full owner/repo/path@SHA form so job_workflow_ref
+# matches. The run builds and pushes one minimal image (b2/Dockerfile, FROM scratch), assumes the
+# CI role through OIDC with the session name = repository id, and sends exactly ONE
+# DEPLOY_REQUESTED for targetId "b2-probe", which is NOT registered: the Executor must reject it
+# with TARGET_UNKNOWN. No target exists, so nothing is deployed and no SSH connection is possible.
 #
 # Trigger: push to b2-session-probe only (workflow_dispatch needs the file on the default branch).
+# Each push starts one run; a GitHub re-run would send a second request with a new request id.
 name: b2-caller
 
 on:
@@ -22,7 +23,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions: {}
     steps:
-      - run: echo "B2 probe run; no lint or tests"
+      - run: echo "B2 first live flow; no lint or tests"
 
   deploy:
     needs: ci
@@ -30,8 +31,8 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    uses: AllianceBioversityCIAT/onecgiar-cicd-platform/.github/workflows/deploy-request.reusable.yml@3840f99a2d217f5c4342c45935e3e26cb055ade5
+    uses: AllianceBioversityCIAT/onecgiar-cicd-platform/.github/workflows/deploy-request.reusable.yml@7f148ceb90e494edd4b87a161524936c4f7ded94
     with:
       targetId: "b2-probe"
       environment: "cicd-poc-dev"
-      units: '[{"unit":"probe","context":"."}]'
+      units: '[{"unit":"probe","context":"b2","dockerfile":"b2/Dockerfile"}]'
