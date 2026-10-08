@@ -11,7 +11,7 @@ the probe only run scripts that are already on the target.
 
 The tools, their guarantees and cleanup are described in [`../../tools/gate-b/probe/README.md`](../../tools/gate-b/probe/README.md); read it first. They are never a target's `deployScript` and are never copied into the image. Claude did not run them against any host.
 
-**Prerequisites.** A target `<TARGET_HOST>` with a dedicated deploy user `<DEPLOY_USER>`, SSH port `<TARGET_PORT>`, the out-of-band host-key fingerprint, the deploy user's authorized key, the SSH credential secret (private key) under the Executor's secret prefix, the deployed Target Registry table (stack output `RegistryTableName`, task R-2), the target's record in it (`targetId`, host, port, user, host key, `credentialRef`, `deployScript`, window policy, `sourceRepositoryId`; written with your administrative principal, never with the Executor profile), and the Executor built ([05](05-run-executor-node22.md)).
+**Prerequisites.** A target `<TARGET_HOST>` with a dedicated deploy user `<DEPLOY_USER>`, SSH port `<TARGET_PORT>`, the out-of-band host-key fingerprint, the deploy user's authorized key, the SSH credential secret (private key) under the Executor's secret prefix, the deployed Target Registry table (stack output `RegistryTableName`, task R-2), the target's record in it (`targetId`, host, port, user, host key, `credentialRef`, `deployScript`, window policy, `sourceRepositoryId`; written with your administrative principal through `tools/target-registry` ([09](09-target-registry.md)), never with the Executor profile), and the Executor built ([05](05-run-executor-node22.md)).
 
 ## 1. Preflight: host key and strict login
 
@@ -68,13 +68,13 @@ Exit codes: 0 probe OK, 1 failure (`TARGET_UNKNOWN`, `TARGET_INVALID`, host key,
 
 The host key lives in the target record, so the negative check uses a **scratch target record**, never an edit of the real one.
 
-1. With your administrative principal, write a scratch record `<TARGET_ID>-hkcheck` that is a copy of the real record except for `targetId` and `hostKey`, which holds a **different but valid** public key line (for example from a freshly generated `ssh-keygen -t ed25519`). Use a conditional put so nothing existing is overwritten:
+1. With your administrative principal, write a scratch record `<TARGET_ID>-hkcheck` that is a copy of the real record except for `targetId` and `hostKey`, which holds a **different but valid** public key line (for example from a freshly generated `ssh-keygen -t ed25519`). Write it with the Target Registry tool ([09](09-target-registry.md)): a create is conditional, so nothing existing is overwritten, and the record is schema-validated:
 
-   ```powershell
-   aws dynamodb put-item --table-name <REGISTRY_TABLE_NAME> --item file://<SCRATCH_RECORD_JSON> --condition-expression "attribute_not_exists(pk)" --profile <AWS_PROFILE_ADMIN> --region <AWS_REGION>
+   ```bash
+   tools/target-registry put --file <SCRATCH_RECORD_JSON> --updated-by <YOUR_NAME> --secret-id-prefix <SECRET_ID_PREFIX> --registry-table <REGISTRY_TABLE_NAME> --region <AWS_REGION> --profile <AWS_PROFILE_ADMIN> --checklist-confirmed
    ```
 
-   `<SCRATCH_RECORD_JSON>` is a local DynamoDB JSON file you keep out of the repository (keys `pk` = `TARGET#<TARGET_ID>-hkcheck`, `sk` = `META`).
+   `<SCRATCH_RECORD_JSON>` is a local file you keep out of the repository (for example under `executor/.local/targets/`), in the plain JSON form of [09](09-target-registry.md) section 2.
 2. Run the real probe with `--target-id '<TARGET_ID>-hkcheck'`.
 
 Expected: `probe FAILED: HOST_KEY_MISMATCH`, exit 1. The handshake is aborted before authentication, so the SSH credential is never sent.

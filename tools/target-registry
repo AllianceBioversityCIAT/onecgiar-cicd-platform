@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Owner-run Target Registry tool (AC-02 V1, task R-7): validate and write target records with the
+# administrative profile, never the Executor's. Requires `npm run build` in executor/.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec node "$here/../executor/dist/src/tools/target-registry/main.js" "$@"

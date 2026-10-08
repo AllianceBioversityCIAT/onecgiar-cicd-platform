@@ -26,7 +26,7 @@ ran **none** of it. Every command here is for you to run, one step at a time, st
 | **B1** AWS foundation | Stack deployed, secrets created, Executor starts under Node 22 with a role it assumes | [01](01-aws-sam.md), [02](02-secrets.md), [04](04-definitions-and-target.md), [05](05-run-executor-node22.md), [07](07-verification.md) |
 | **B2** GitHub OIDC to SQS to local Executor | A `workflow_dispatch` run assumes the CI role, enqueues one request, the Executor accepts it and ends `FAILED (DEPLOY_WINDOW_CLOSED)` with the window closed (no SSH); untrusted triggers fail | [03](03-github.md), [07](07-verification.md) |
 | **B3** State, dedupe, locks | Re-run behavior, `SUPERSEDED` for an older build, poison message to the DLQ with the alarm | [07](07-verification.md) |
-| **B4** SSH (non-destructive) | Host key pinned and a mismatch rejected, `flock` busy detection, fresh 0700 directory, checksum, parsed `CICD_RESULT` | [06](06-target-validation.md) |
+| **B4** SSH (non-destructive) | Host key pinned and a mismatch rejected, `flock` busy detection, fresh 0700 directory, checksum, parsed `CICD_RESULT` | [09](09-target-registry.md) (register the target), [06](06-target-validation.md) |
 | **B5** One controlled deployment (optional; needs OD-Q5) | `SUCCEEDED`, Slack thread, `lastDeployed` fenced | [07](07-verification.md) |
 | Teardown (optional) | Everything removed in a safe order | [08](08-teardown.md) |
 

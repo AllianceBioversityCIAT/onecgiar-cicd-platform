@@ -80,6 +80,8 @@ Copy the key you generated for the dedicated deploy user to `executor/.local/sec
 aws secretsmanager create-secret --name "<PREFIX><REF_NAME>" --secret-string file://executor/.local/secrets-tmp/ssh-key
 ```
 
+The target record's `credentialRef` (AC-02 V1) is this **full secret name**, `<PREFIX><REF_NAME>`, not a `<PLACEHOLDER>` reference. It must lie under the prefix: the Target Registry tool ([09](09-target-registry.md)) refuses any other name, and the Executor refuses to read it.
+
 ### 4. Slack token and channel id
 
 ```powershell
