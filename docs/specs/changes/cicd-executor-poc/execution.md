@@ -913,3 +913,29 @@ Validation (Node 22.23.3, Git Bash): `npm run check:local` exit 0, `npm run test
 - **Docs:** runbooks 01, 03, 07 (V1 key shapes, `REJECT#MSG#` lookup, `error.code`, B2 evidence table, wrong-sender body with `targetId`), the caller examples (session-name note), README (first live flow sequence L1–L12 and the real Slack requirement).
 
 Validation (Node 22.23.3, Git Bash): `npm run check:local` exit 0 (54 files, 1475 passed, 89 skipped, 1 todo, guards 8/8, 0 vulnerabilities). Review: **PASS** (attempt 1; no blocker for the first live flow; four non-blockers applied: 17 stack outputs incl. `RegistryTableName`, `UPDATE_COMPLETE` end state, full `put` commands in 03 section 10, the probe prints the real denial code). No GitHub, AWS, secret or SSH change.
+
+## B2 first live flow — L1 to L6: OIDC trust validated on AWS (2026-10-08): **PASS for the OIDC part only**
+
+Executed by the owner (AWS, GitHub); prepared and checked by Claude. Real identifiers are kept out of Git: the numeric repository and owner ids appear below as `<GITHUB_REPOSITORY_ID>` / `<GITHUB_OWNER_ID>`; the account id and role names are not recorded.
+
+| Step | What happened | Evidence |
+|---|---|---|
+| L1 | Owner identity and stack state read | Stack `cicd-poc-dev` (`us-east-1`) `CREATE_COMPLETE` with the pre-AC-02 template and placeholder parameters |
+| L2 | Caller repository chosen: the platform repository `AllianceBioversityCIAT/onecgiar-cicd-platform` itself (public; created 2026-10-05, so the immutable `sub` form applies) | Ids read through the public GitHub API |
+| L3 | Probe published on the throwaway bound branch `b2-session-probe`, based on the published `origin/main` | Probe commit **`3840f99a2d217f5c4342c45935e3e26cb055ade5`** (only the reusable workflow path replaced); remote SHA verified through the GitHub API; no run triggered |
+| L4 | Stack updated with the R-2 template, `PinnedWorkflowSha` = probe SHA, repository / owner ids, Environment `cicd-poc-dev`, `GitHubBoundRef` `refs/heads/b2-session-probe`, immutable-form `GitHubOidcSub`; omitted parameters kept their empty defaults | `sam validate --lint` exit 0; change set reviewed before execution: `Add RegistryTable`, `Modify CiRole` / `ExecutorRole` (no replacement), `Modify DeployQueuePolicy` dynamic only (semantic comparison of the deployed and local templates: the policy is identical; it is re-evaluated because it references the role ARNs); `UPDATE_COMPLETE` |
+| L5 | Environment `cicd-poc-dev` with one branch rule `b2-session-probe`, no secrets; throwaway caller **`b0e9b5a`** on the bound branch calling the reusable workflow path `@3840f99…` (full form); run triggered by its push | Real GitHub Actions run (see below) |
+| L6.1 | Only the R-8 commit **`7f148ceb90e494edd4b87a161524936c4f7ded94`** published to `main` (fast-forward from `7abf95b`; `b557cc5` kept local) | Remote `main` SHA verified through the GitHub API; no run triggered |
+| L6.2–L6.3 | `PinnedWorkflowSha` changed from the probe SHA to the R-8 SHA only; change set reviewed and executed | `UPDATE_COMPLETE`; `aws iam get-role` shows the trust pinned to `7f148ce…` with the other conditions unchanged |
+
+**L5 real run (probe at `3840f99`, not the R-8 workflow).** Observed claims: `repository_id` = `<GITHUB_REPOSITORY_ID>`, `repository_owner_id` = `<GITHUB_OWNER_ID>`, `environment` = `cicd-poc-dev`, `ref` = `refs/heads/b2-session-probe`, `job_workflow_ref` = `AllianceBioversityCIAT/onecgiar-cicd-platform/.github/workflows/deploy-request.reusable.yml@3840f99a2d217f5c4342c45935e3e26cb055ade5`. `AssumeRoleWithWebIdentity` results: session = repository id → **ALLOWED**; `wrong-session` → **DENIED (AccessDenied)**; another numeric id → **DENIED (AccessDenied)**.
+
+| Premise | Status | Basis |
+|---|---|---|
+| P-R1 (`sts:RoleSessionName` evaluated for `AssumeRoleWithWebIdentity`) | **VERIFIED on AWS** | Two wrong session names denied with every other claim matching |
+| P-R2 (the claim resolves as an IAM policy variable) | **VERIFIED on AWS** | The repository id as session name allowed |
+| P-G11 (`job_workflow_ref` form for a SHA-pinned call) | **VERIFIED** | `path@<40-hex SHA>`, as the template builds it |
+| P-G10 (`sub` form) | **VERIFIED (indirectly)** | The assumption succeeded against the immutable-form `GitHubOidcSub` parameter; all eight `StringEquals` conditions matched |
+| Trust pinned to the R-8 workflow | **DEPLOYED and read back** (`get-role`) | Not yet exercised by a run: the first run with the R-8 workflow happens at L9 |
+
+**Still pending (not validated):** P-A4 (the real SQS `SenderId` suffix equals the repository id), the R-8 workflow end to end (build, ECR push, one `SendMessage`), SQS delivery to the Executor, the Executor started against AWS (L7 platform secrets incl. a real Slack token, L8 startup), the router outcomes on AWS (`TARGET_UNKNOWN` without a record, accepted request ending `FAILED (DEPLOY_WINDOW_CLOSED)` with no lock or SSH, `TARGET_NOT_AUTHORIZED` with no target state change, `UNAUTHORIZED_SENDER`), and B3–B5. The caller on `b2-session-probe` still points at `@3840f99`; a push to that branch now runs the probe and is denied by the trust (harmless, no message sent). It is moved to `@7f148ce…` only at L9, after L7 and L8, because that push runs the real flow. A second repository is not added to the trust (option A gate).
