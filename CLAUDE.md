@@ -2,6 +2,8 @@
 
 Event-driven CI/CD platform that replaces Jenkins responsibilities in phases. Its core is a **lightweight Executor** that **coordinates**: it does not compile, does not build images and must never become another Jenkins.
 
+**Start here:** [`docs/STATUS.md`](docs/STATUS.md) holds the current state, the approved architecture, risks, the next activity and the restrictions in force. Since AC-03 (2026-10-08) the Executor is a generic remote-script CD: it safely runs the deploy script installed on each target; no deploy technology is a requirement of the Executor.
+
 ## Language
 
 **Everything committed to this repository is written in English**: identifiers, code comments, JSDoc, test titles, error and log messages, schema `$comment`s, Dockerfile comments, READMEs, runbooks, agent guides and commit messages. When a test maps to a spec scenario written in Spanish, translate the title (optionally append the reference, e.g. `FR-05`). The AKILI spec documents under `docs/specs/` are also maintained in English (owner decision, 2026-10-05; translation in progress).
@@ -15,6 +17,9 @@ Event-driven CI/CD platform that replaces Jenkins responsibilities in phases. It
 | `docs/specs/changes/cicd-executor-poc/design.md` | Approved design (Judgment Day APPROVED; acts as the PoC TRD) |
 | `docs/specs/changes/cicd-executor-poc/tasks.md` | Plan by gate (A/B/C/D) |
 | `docs/specs/changes/cicd-executor-poc/execution.md` | Execution log |
+| `docs/specs/changes/cicd-executor-poc/architecture-change-02.md` | AC-02 V1: Target Registry, deploy script on the target |
+| `docs/specs/changes/cicd-executor-poc/architecture-change-03.md` | AC-03: generic remote-script contract (`scriptArguments`, optional artifacts, exit codes, `CICD_RESULT`, version check) |
+| `docs/STATUS.md` | Continuity: current state and next activity |
 
 There is no `docs/prd.md`, `docs/trd/trd.md` or `docs/ux-ui/design.md` (minimal constitution); the spec documents play those roles. There is no UI.
 
@@ -32,7 +37,7 @@ There is no `docs/prd.md`, `docs/trd/trd.md` or `docs/ux-ui/design.md` (minimal 
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | Lint |
 | `npm test` | Local unit and integration tests |
-| `npm run validate` | Validates definitions and registry and runs the boundary guards (T-21); after AC-02 V1 task R-9, schemas and guards only |
+| `npm run validate` | Validates definitions and registry and runs the boundary guards (T-21); after AC-02 V1 task R-9b (postponed until after the first real deployment), schemas and guards only |
 | `npm run check:local` | Local gate without Docker: typecheck, lint, build, tests, `check:deps` |
 | `npm run inspect:image` | Real image inspection (**requires Docker**; environment-dependent deferred validation, mandatory before deployment) |
 
@@ -42,7 +47,7 @@ There is no `docs/prd.md`, `docs/trd/trd.md` or `docs/ux-ui/design.md` (minimal 
 2. **Closed state machine** (design §7.3, T1–T13). No transition outside the list.
 3. **Correctness through conditional writes** in DynamoDB (DD-03). No in-memory state as source of truth.
 4. **Two lock layers:** distributed DynamoDB lock plus target-side local mutex. Neither replaces the other (DD-09, DD-22).
-5. **`DefinitionSource`** is the core's only path to definitions (DD-19). **AC-02 V1 (owner, 2026-10-07):** definitions are removed by tasks R-1…R-9; from then on the read-only **`TargetRegistry`** port (`GetItem` only) is the core's only path to target configuration, and the deploy script lives on the target.
+5. **`DefinitionSource`** is the core's only path to definitions (DD-19). **AC-02 V1 (owner, 2026-10-07):** definitions are removed by tasks R-1…R-9 (R-9b postponed); from then on the read-only **`TargetRegistry`** port (`GetItem` only) is the core's only path to target configuration, and the deploy script lives on the target. **AC-03:** the script follows the technology-neutral contract of `architecture-change-03.md` (Docker is one specialization, `deploy-scripts/deploy-container.sh`; new scripts start from `deploy-scripts/templates/deploy-script-template.sh`).
 6. **Publication policy** (design §4.1, DD-23): never commit account IDs, hosts, IPs, credential IDs, revealing secret names, Jenkins job names or sensitive values. Use logical references (`<AWS_ACCOUNT_ID>`, `<PRMS_REPORTING_DEV_TARGET>`, …).
 7. **Local-only files:** `JENKINS_REPLACEMENT_AKILI_CONTEXT.md` and `JENKINS_REPLACEMENT_FEASIBILITY_ANALYSIS.md` are in `.gitignore`. Before every commit run `git status` and `git ls-files` and confirm neither appears.
 8. **Open decisions** (OD-Q5, OD-Q7, OD-Q11–Q15, OD-N1) are never resolved by assumption.

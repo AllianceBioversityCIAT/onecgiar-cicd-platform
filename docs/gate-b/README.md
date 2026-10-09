@@ -11,6 +11,9 @@ ran **none** of it. Every command here is for you to run, one step at a time, st
 > `<TARGET_HOST>`, `<GITHUB_ORG>/<APP_REPO>`, ...) are values only you hold. Never commit them
 > and never paste them into a public issue, log or chat (publication policy, design DD-23).
 
+> **Current status (2026-10-08):** B1 and B2 are done up to `TARGET_UNKNOWN` (L1–L9); the next activity is E2
+> (first platform script from its Jenkins stages). See [`docs/STATUS.md`](../STATUS.md) before running anything here.
+
 ## Who does what
 
 | Claude (B0, done, committed after review) | You (B1 to B5, now) |
