@@ -17,6 +17,8 @@ export interface CicdResult {
   readonly migrations?: "APPLIED" | "NONE" | "FAILED";
   readonly healthy?: boolean;
   readonly mutexHolder?: string;
+  /** The commit the script actually deployed (AC-03 G-D6), 40 lowercase hex. */
+  readonly deployedCommit?: string;
 }
 
 /** Where to connect, from the execution's target snapshot (design §5.1, §6.3). Non-secret values plus a credential REFERENCE. */

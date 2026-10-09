@@ -66,10 +66,15 @@ const posix = (p: string): string => p.split(path.sep).join("/");
 
 describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD-29)", () => {
   describe("triggers and permissions", () => {
-    it("is a workflow_call-only workflow with targetId, environment and units inputs (AC-02 V1)", () => {
+    it("is a workflow_call-only workflow with targetId, environment, units and artifacts inputs (AC-02 V1, AC-03 G-D4)", () => {
       expect(Object.keys(wf.on)).toEqual(["workflow_call"]);
-      const inputs = (wf.on["workflow_call"] as { inputs: Record<string, { type: string; required: boolean }> }).inputs;
-      expect(Object.keys(inputs).sort()).toEqual(["environment", "targetId", "units"]);
+      const inputs = (wf.on["workflow_call"] as { inputs: Record<string, { type: string; required: boolean; default?: string }> }).inputs;
+      expect(Object.keys(inputs).sort()).toEqual(["artifacts", "environment", "targetId", "units"]);
+      // AC-03 G-D4: Docker build and push are optional (units may be empty) and caller-computed immutable references are optional.
+      expect(inputs["units"]).toMatchObject({ type: "string", required: false, default: "[]" });
+      expect(inputs["artifacts"]).toMatchObject({ type: "string", required: false, default: "{}" });
+      expect(inputs["targetId"]?.required).toBe(true);
+      expect(inputs["environment"]?.required).toBe(true);
     });
 
     it("grants no permissions at workflow level and none to the guard job", () => {
@@ -295,6 +300,60 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
     });
   });
 
+  describe("AC-03 G-D4: request body with optional artifacts (executed body step)", () => {
+    const bodyStep = envSteps.find((s) => s.run?.includes("jq -n"))!;
+    let validate: ValidateFunction;
+    beforeAll(() => {
+      validate = createAjv().compile(readJsonSchema(deployRequestSchemaPath));
+    });
+    const runBody = (pushed: Record<string, string> | undefined, given: string) => {
+      const dir = mkdtempSync(path.join(tmpdir(), "reusable-wf-ac03-"));
+      try {
+        const artifactsFile = posix(path.join(dir, "artifacts.json"));
+        if (pushed !== undefined) writeFileSync(artifactsFile, JSON.stringify(pushed));
+        const body = posix(path.join(dir, "body.json"));
+        const r = runScript(bodyStep.run!, {
+          TARGET_ID: "example-app-dev",
+          COMMIT_SHA: "0123456789abcdef0123456789abcdef01234567",
+          REPOSITORY_SLUG: "example-org/example-repo",
+          WORKFLOW_REF: "example-org/example-repo/.github/workflows/caller.yml@refs/heads/example",
+          RUN_ID: "9876543210",
+          RUN_ATTEMPT: "1",
+          RUN_NUMBER: "42",
+          RUNNER_TEMP: posix(dir),
+          ARTIFACTS_FILE: artifactsFile,
+          ARTIFACTS_INPUT: given,
+          BODY_FILE: body,
+        });
+        return { status: r.status, body: r.status === 0 ? (JSON.parse(readFileSync(body, "utf8")) as Record<string, unknown>) : undefined };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+
+    it("passes the caller's artifacts input to the body step only through env", () => {
+      expect(bodyStep.env?.["ARTIFACTS_INPUT"]).toBe("${{ inputs.artifacts }}");
+    });
+
+    it.skipIf(!canExecute)("no units and no artifacts: the body has no artifacts key and validates", () => {
+      const { status, body } = runBody({}, "{}");
+      expect(status).toBe(0);
+      expect(body).not.toHaveProperty("artifacts");
+      expect(validate(body)).toBe(true);
+    });
+
+    it.skipIf(!canExecute)("caller artifacts only, or merged with pushed image digests", () => {
+      const given = { war: `sha256:${"d".repeat(64)}` };
+      const pushed = { server: `sha256:${"e".repeat(64)}` };
+      const only = runBody(undefined, JSON.stringify(given));
+      expect(only.body?.["artifacts"]).toEqual(given);
+      expect(validate(only.body)).toBe(true);
+      const merged = runBody(pushed, JSON.stringify(given));
+      expect(merged.body?.["artifacts"]).toEqual({ ...pushed, ...given });
+      expect(validate(merged.body)).toBe(true);
+    });
+  });
+
   describe("deploy request body (design 6.1)", () => {
     const bodyStep = envSteps.find((s) => s.run?.includes("jq -n"))!;
     let validate: ValidateFunction;
@@ -375,7 +434,6 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
       expect(run({ TARGET_ID: "Bad_Id" }).status).toBe(1);
       const bad = [
         "not json",
-        "[]",
         JSON.stringify([{ unit: "server", context: "../outside" }]),
         JSON.stringify([{ unit: "server", context: "/abs" }]),
         JSON.stringify([{ unit: "Server", context: "." }]),
@@ -387,6 +445,45 @@ describe(".github/workflows/deploy-request.reusable.yml (FR-22, FR-25, DD-24, DD
         JSON.stringify([{ unit: "a", context: ".", dockerfile: "-f" }]),
       ];
       for (const u of bad) expect(run({ UNITS: u }).status, u).toBe(1);
+    });
+  });
+
+  describe("AC-03 G-D4: optional units and caller-computed artifacts (executed guard)", () => {
+    const guardScript = guardJob.steps![0]!.run!;
+    const digest = (c: string) => `sha256:${c.repeat(64)}`;
+    const run = (over: Record<string, string>) =>
+      runScript(guardScript, { EVENT_NAME: "push", TARGET_ID: "example-app-dev", UNITS: "[]", ARTIFACTS: "{}", ...over });
+
+    it.skipIf(!canExecute)("accepts no units and no artifacts (a platform whose version is the commit)", () => {
+      expect(run({}).status).toBe(0);
+    });
+
+    it.skipIf(!canExecute)("accepts caller-computed immutable artifacts, alone or next to units with other names", () => {
+      expect(run({ ARTIFACTS: JSON.stringify({ app: digest("a") }) }).status).toBe(0);
+      expect(run({ ARTIFACTS: JSON.stringify({ war: digest("b") }), UNITS: JSON.stringify([{ unit: "web", context: "." }]) }).status).toBe(0);
+    });
+
+    it.skipIf(!canExecute)("rejects malformed, oversized, mutable or colliding artifacts", () => {
+      const nine = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`a${i}`, digest("c")]));
+      const bad = [
+        "not json",
+        "[]",
+        JSON.stringify({ app: "v1.2.3" }),
+        JSON.stringify({ app: `registry.example.invalid/app@${digest("a")}` }),
+        JSON.stringify({ App: digest("a") }),
+        JSON.stringify({ "a\n": digest("a") }),
+        JSON.stringify({ app: `${digest("a")}\n` }),
+        JSON.stringify(nine),
+      ];
+      for (const a of bad) expect(run({ ARTIFACTS: a }).status, a).toBe(1);
+      expect(run({ ARTIFACTS: JSON.stringify({ web: digest("a") }), UNITS: JSON.stringify([{ unit: "web", context: "." }]) }).status).toBe(1);
+    });
+
+    it.skipIf(!canExecute)("caps units + artifacts at 8 together (the request schema allows 8 artifacts in total)", () => {
+      const units = (n: number) => JSON.stringify(Array.from({ length: n }, (_, i) => ({ unit: `u${i}`, context: "." })));
+      const artifacts = (n: number) => JSON.stringify(Object.fromEntries(Array.from({ length: n }, (_, i) => [`a${i}`, digest("f")])));
+      expect(run({ UNITS: units(4), ARTIFACTS: artifacts(4) }).status).toBe(0);
+      expect(run({ UNITS: units(5), ARTIFACTS: artifacts(4) }).status).toBe(1);
     });
   });
 

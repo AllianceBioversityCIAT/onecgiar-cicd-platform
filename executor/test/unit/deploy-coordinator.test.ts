@@ -393,6 +393,36 @@ describe("FR-24: window closed during the run, and a missing CICD_RESULT", () =>
     expect(ctx.world.target.lastDeployed).toMatchObject({ runNumber: 5 });
   });
 
+  test("AC-03 G-D7: a success records the version check; a MISMATCH keeps SUCCEEDED and the fenced lastDeployed", async () => {
+    const verified = setup();
+    verified.world.add(waitingExecution());
+    verified.transport.execScript = [{ kind: "EXIT", exitCode: 0, cicdResult: { status: "SUCCESS", deployedImages: { app: "<REPOSITORY_REF>@sha256:<DIGEST>" } } }];
+    await verified.coordinator.handleLockRetry(retry());
+    expect(verified.world.item()).toMatchObject({ status: "SUCCEEDED", versionCheck: "VERIFIED", versionGuaranteed: true });
+
+    const mismatch = setup();
+    mismatch.world.add(waitingExecution());
+    mismatch.transport.execScript = [{ kind: "EXIT", exitCode: 0, cicdResult: { status: "SUCCESS", deployedCommit: "f".repeat(40) } }];
+    expect(await mismatch.coordinator.handleLockRetry(retry())).toMatchObject({ transitionId: "X12", status: "SUCCEEDED" });
+    expect(mismatch.world.item()).toMatchObject({ versionCheck: "MISMATCH", versionGuaranteed: true });
+    expect(mismatch.world.target.lastDeployed).toMatchObject({ runNumber: 5 });
+
+    const none = setup();
+    none.world.add(waitingExecution({ targetSnapshot: { ...TEST_SNAPSHOT, hostKey: [...TEST_SNAPSHOT.hostKey], scriptArguments: "none" } }));
+    none.transport.execScript = [{ kind: "EXIT", exitCode: 0 }];
+    await none.coordinator.handleLockRetry(retry());
+    expect(none.world.item()).toMatchObject({ status: "SUCCEEDED", versionCheck: "NOT_REPORTED", versionGuaranteed: false });
+    expect(none.transport.lastExec?.args).toEqual([]);
+  });
+
+  test("AC-03 G-D7: a failed run records no version check", async () => {
+    const ctx = setup();
+    ctx.world.add(waitingExecution());
+    ctx.transport.execScript = [{ kind: "EXIT", exitCode: 10, cicdResult: { status: "PULL_FAILED" } }];
+    await ctx.coordinator.handleLockRetry(retry());
+    expect(ctx.world.item().versionCheck).toBeUndefined();
+  });
+
   test("a present CICD_RESULT is not flagged", async () => {
     const ctx = setup();
     ctx.world.add(waitingExecution());

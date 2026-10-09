@@ -94,6 +94,18 @@ describe("notification-service (FR-14, design §6.6)", () => {
   });
 
   it.each([
+    [{ versionCheck: "VERIFIED", versionGuaranteed: true } as const, "version verified"],
+    [{ versionCheck: "MISMATCH", versionGuaranteed: true } as const, "VERSION MISMATCH"],
+    [{ versionCheck: "NOT_REPORTED", versionGuaranteed: true } as const, "version not verified"],
+    [{ versionCheck: "VERIFIED", versionGuaranteed: false } as const, "not guaranteed"],
+  ])("AC-03 G-D7: a success says whether the deployed version was verified (%j)", async (check, text) => {
+    const { service, provider } = setup();
+    await service.notify({ ...base, kind: "SUCCEEDED", threadRef: "17.1", durationMs: 1_000, ...check });
+    expect(provider.sent[0]!.message).toContain(text);
+    expect(provider.sent[0]!.rootText).toContain(text);
+  });
+
+  it.each([
     [{ kind: "SUPERSEDED", supersededByExecutionId: "exec-2" } as const, "Superseded by execution exec-2"],
     [{ kind: "DEPLOY_WINDOW_CLOSED" } as const, "DEPLOY_WINDOW_CLOSED"],
     [{ kind: "LOCK_TIMEOUT" } as const, "LOCK_TIMEOUT"],

@@ -45,6 +45,7 @@ Create `executor/.local/targets/<TARGET_ID>.json` (ignored by Git). The tool set
   "credentialRef": "<SECRET_ID_PREFIX><TARGET_ID>/ssh",
   "deployScript": "<ABSOLUTE_SCRIPT_PATH>",
   "deployWindowPolicy": "required",
+  "scriptArguments": "standard",
   "sourceRepositoryId": "<GITHUB_REPOSITORY_ID>"
 }
 ```
@@ -55,6 +56,7 @@ Create `executor/.local/targets/<TARGET_ID>.json` (ignored by Git). The tool set
 | `credentialRef` | The full name of the SSH private key secret you created under `<SECRET_ID_PREFIX>` ([02](02-secrets.md)) |
 | `deployScript` | The absolute path where the target's administrator installed the deploy script |
 | `deployWindowPolicy` | `required` when another deployer (for example a Jenkins job) still targets the same server |
+| `scriptArguments` | Optional (architecture-change-03). `standard` (the default when omitted): the script receives `--target-id --execution-id --fencing-token --commit-sha [--artifact …]` and can deploy exactly the requested version. `none`: the script runs with no argument and decides itself what it deploys; the execution then records `versionGuaranteed: false`. Use `none` only for scripts whose source is fixed outside the request. A Docker target (`deploy-container.sh`) needs `standard` and at least one artifact in every request |
 | `sourceRepositoryId` | `gh api repos/<GITHUB_ORG>/<APP_REPO> --jq .id` (the numeric id, not the name) |
 
 ## 3. Read the checklist and dry run (no AWS call)

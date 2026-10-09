@@ -32,6 +32,7 @@ export function parseCicdResultLine(line: string): CicdResult | undefined {
   if (o.migrations !== undefined && (typeof o.migrations !== "string" || !MIGRATIONS.has(o.migrations))) return undefined;
   if (o.healthy !== undefined && typeof o.healthy !== "boolean") return undefined;
   if (o.mutexHolder !== undefined && typeof o.mutexHolder !== "string") return undefined;
+  if (o.deployedCommit !== undefined && (typeof o.deployedCommit !== "string" || !/^[0-9a-f]{40}$/.test(o.deployedCommit))) return undefined;
   return {
     status: o.status,
     ...(o.deployedImages === undefined ? {} : { deployedImages: o.deployedImages as Record<string, string> }),
@@ -39,6 +40,7 @@ export function parseCicdResultLine(line: string): CicdResult | undefined {
     ...(o.migrations === undefined ? {} : { migrations: o.migrations as "APPLIED" | "NONE" | "FAILED" }),
     ...(o.healthy === undefined ? {} : { healthy: o.healthy }),
     ...(o.mutexHolder === undefined ? {} : { mutexHolder: o.mutexHolder }),
+    ...(o.deployedCommit === undefined ? {} : { deployedCommit: o.deployedCommit as string }),
   };
 }
 

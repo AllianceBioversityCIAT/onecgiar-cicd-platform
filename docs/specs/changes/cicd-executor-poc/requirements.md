@@ -401,15 +401,15 @@ The system SHALL deploy by executing, over SSH on the target resolved by the reg
 
 ### FR-13 — Deploy script contract (target side)
 
-Every deploy script SHALL honor the interface (design §6.5): take the target mutex for the `targetId` before any effect; pull images **by digest** from its own trusted repositories only; exit with the codes below and end with a `CICD_RESULT` line; be idempotent for digests already in service. Its internal procedure is the target administrator's responsibility. **The PRMS Reporting DEV script (reference implementation) SHALL additionally**, in this order: materialize the runtime configuration temporarily; run migrations (when enabled) with the new image **while the previous version remains in service**; replace the containers; health-check; clean up, retaining the previous image; the scenarios below on migration, health, previous image and temporary configuration apply to it.
+Every deploy script SHALL honor the interface (design §6.5; AC-03: technology-neutral, invoked with no argument or with the standard vector per the target's `scriptArguments`): take the target mutex for its target before any effect; obtain the version only from the contract arguments or its own admin-owned configuration, by immutable reference whenever artifacts are sent; exit with the codes below (neutral meaning in AC-03 §3) and end with a `CICD_RESULT` line; be idempotent for a version already in service. Its internal procedure is the target administrator's responsibility. **The PRMS Reporting DEV script (reference implementation) SHALL additionally**, in this order: materialize the runtime configuration temporarily; run migrations (when enabled) with the new image **while the previous version remains in service**; replace the containers; health-check; clean up, retaining the previous image; the scenarios below on migration, health, previous image and temporary configuration apply to it.
 
 | Code | Meaning | Previous version |
 |---|---|---|
 | 0 | Success (including "already running these digests") | Replaced or unchanged |
-| 10 | Login or pull failed | Intact |
-| 20 | Migration failed | Intact (not stopped) |
-| 30 | Startup failed; the previous one was restored | Restored |
-| 40 | Health check failed; the previous one was restored | Restored |
+| 10 | Failed before any change (login, pull, download, prepare) | Intact |
+| 20 | Pre-switch step failed (e.g. migration) | Intact (not stopped) |
+| 30 | Switch failed; the script confirms the previous one was restored | Restored |
+| 40 | Verification (health) failed; the script confirms the previous one was restored | Restored |
 | 50 | Target busy: the target mutex is held; **nothing was done** | Intact |
 | other / lost session | Unknown | `UNKNOWN_TARGET_STATE` |
 
@@ -598,7 +598,7 @@ The system SHALL accept each message only from a sender identity authorized for 
 
 ### FR-22 — CI contract (NEW)
 
-The reusable workflow SHALL be the only producer of deploy requests in the normal path, and SHALL: run the push-and-send job in a GitHub Environment; obtain AWS credentials only via OIDC; push images and capture their **digests**; send **exactly one** `DEPLOY_REQUESTED` after every CI step has succeeded; keep internal identifiers out of logs; contain no deploy logic.
+The reusable workflow SHALL be the only producer of deploy requests in the normal path, and SHALL: run the push-and-send job in a GitHub Environment; obtain AWS credentials only via OIDC; when units are given, push their images and capture their **digests** (AC-03: optional; the caller may instead pass already computed immutable digests, and platform builds stay in the caller's jobs); send **exactly one** `DEPLOY_REQUESTED` after every CI step has succeeded; keep internal identifiers out of logs; contain no deploy logic.
 
 #### Scenario: CI success
 - GIVEN lint, tests, builds and pushes all succeed

@@ -18,6 +18,8 @@ export interface TargetRecord {
   readonly credentialRef: string;
   readonly deployScript: string;
   readonly deployWindowPolicy: "required" | "not-required";
+  /** How the script is invoked (AC-03 G-D1); absent means `standard`. */
+  readonly scriptArguments?: "standard" | "none";
   readonly sourceRepositoryId: string;
   readonly schemaVersion: 1;
   readonly version: number;

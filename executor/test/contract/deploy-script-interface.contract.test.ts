@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ExecutionItem } from "../../src/adapters/dynamodb-state-store/types.js";
 import { buildRemoteCommand, parseCicdResult } from "../../src/adapters/ssh-deployer/index.js";
 import { deployPlanOf } from "../../src/application/deploy-coordinator/index.js";
+import { versionCheckOf } from "../../src/domain/version-check/index.js";
 import { repoRoot } from "./support/schema-paths.js";
 
 /** A POSIX bash that can run the script with its shims (Git Bash on Windows, bash on Linux); not a WSL stub. */
@@ -128,6 +129,56 @@ describe.skipIf(shellDeployScripts === undefined)("Executor ↔ reference deploy
     const run = runRemote(buildRemoteCommand(plan.scriptPath, plan.scriptArgs(7)), env);
     expect(run.status).toBe(2);
     expect(parseCicdResult(run.stdout)).toBeUndefined();
+    expect(readFileSync(path.join(dir, "docker.log"), "utf8")).toBe("");
+  });
+});
+
+
+// AC-03 G-4: a NON-Docker script generated from the technology-neutral template (only its PLATFORM
+// block replaced, the way platform scripts are produced from Jenkins stages) driven by the Executor's
+// own plan in both argument modes. The phases only write marker files: no docker, aws or ECR involved.
+describe.skipIf(shellDeployScripts === undefined)("Executor ↔ template-generated non-Docker script (AC-03, G-4)", () => {
+  const FIXED_COMMIT = "c".repeat(40);
+  const platformBlock = [
+    'TARGET_LOCK_NAME="example-app-dev"',
+    'phase_prepare() { : > "$CICD_MARKERS/prepared"; }',
+    `phase_switch() { : > "$CICD_MARKERS/switched"; DEPLOYED_COMMIT="\${REQUESTED_COMMIT:-${FIXED_COMMIT}}"; }`,
+    "phase_restore() { return 1; }",
+  ].join("\n");
+
+  function generate(dir: string): string {
+    const template = readFileSync(path.join(deployScriptsDir, "templates", "deploy-script-template.sh"), "utf8");
+    const begin = template.indexOf("# ===== BEGIN PLATFORM");
+    const end = template.indexOf("# ===== END PLATFORM");
+    expect(begin).toBeGreaterThan(0);
+    const beginLineEnd = template.indexOf("\n", begin) + 1;
+    const generated = template.slice(0, beginLineEnd) + platformBlock + "\n" + template.slice(end);
+    writeFileSync(path.join(dir, "deploy-example-dev.sh"), generated);
+    return `${shellPath(dir) as string}/deploy-example-dev.sh`;
+  }
+
+  it.each(["none", "standard"] as const)("%s mode: the plan's exact SSH command line runs the script, and the result is version-checked", (mode) => {
+    const { dir, env } = sandbox();
+    mkdirSync(path.join(dir, "markers"));
+    const scriptPath = generate(dir);
+    const base = execution(scriptPath);
+    const item = { ...base, artifacts: {}, targetSnapshot: { ...base.targetSnapshot, scriptArguments: mode } } as ExecutionItem;
+    const plan = deployPlanOf(item);
+    expect(plan.scriptArgs(7)).toEqual(
+      mode === "none" ? [] : ["--target-id", "example-app-dev", "--execution-id", "example-app-dev-7", "--fencing-token", "7", "--commit-sha", "a".repeat(40)],
+    );
+    const run = runRemote(buildRemoteCommand(plan.scriptPath, plan.scriptArgs(7)), { ...env, CICD_MARKERS: path.join(dir, "markers") });
+    expect(run.status).toBe(0);
+    const result = parseCicdResult(run.stdout);
+    expect(result?.status).toBe("SUCCESS");
+    if (mode === "standard") {
+      expect(result?.deployedCommit).toBe("a".repeat(40));
+      expect(versionCheckOf(item, result)).toEqual({ versionCheck: "VERIFIED", versionGuaranteed: true });
+    } else {
+      // The script was never told the version and deployed its own fixed commit: reported, never confirmed.
+      expect(result?.deployedCommit).toBe(FIXED_COMMIT);
+      expect(versionCheckOf(item, result)).toEqual({ versionCheck: "MISMATCH", versionGuaranteed: false });
+    }
     expect(readFileSync(path.join(dir, "docker.log"), "utf8")).toBe("");
   });
 });

@@ -45,8 +45,8 @@ export interface DeployRequest {
   /** Target Registry key and V1 deploy identity (design §1.2, §6.1). */
   readonly targetId: string;
   readonly commitSha: string;
-  /** Artifact unit -> `sha256:<64 hex>` digest. */
-  readonly artifacts: Readonly<Record<string, string>>;
+  /** Optional (AC-03 G-D3): component name -> `sha256:<64 hex>` immutable content digest. */
+  readonly artifacts?: Readonly<Record<string, string>>;
   /** Audit-only (DD-25): never an authorization input; `runNumber` is the DD-27 ordering input. */
   readonly ci: {
     readonly repository: string;

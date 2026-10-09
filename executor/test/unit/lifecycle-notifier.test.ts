@@ -73,6 +73,12 @@ describe("lifecycle notifier: terminal outcomes (FR-15, FR-14, design §6.6)", (
     expect(sent[0]).toEqual({ kind: "REJECTED", rejectionId: "MSG#abc", reason: "SCHEMA_INVALID", senderRef: "ROLEX", destination: { channelRef: "<PLATFORM_CH>", tokenRef: "<PLATFORM_TOK>" } });
   });
 
+  it("AC-03 G-D7: passes the version check of a successful execution to the notification", async () => {
+    const { notifier, sent } = setup({ status: "SUCCEEDED", versionCheck: "MISMATCH", versionGuaranteed: false });
+    await notifier.outcome("dep-1-7");
+    expect(sent[0]).toMatchObject({ kind: "SUCCEEDED", versionCheck: "MISMATCH", versionGuaranteed: false });
+  });
+
   it("counts success and failure metrics", async () => {
     const ok = setup({ status: "SUCCEEDED" });
     await ok.notifier.outcome("dep-1-7");

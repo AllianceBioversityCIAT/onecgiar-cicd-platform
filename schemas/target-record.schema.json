@@ -80,6 +80,10 @@
       "enum": ["required", "not-required"],
       "$comment": "Mandatory, no default (design 7.7, FR-24)."
     },
+    "scriptArguments": {
+      "enum": ["standard", "none"],
+      "$comment": "AC-03 G-D1: how the Executor invokes deployScript. standard (default when absent; every pre-AC-03 record keeps it): the design §6.5 vector. none: no argument at all. Never a template, never free text, never taken from the request."
+    },
     "sourceRepositoryId": {
       "type": "string",
       "pattern": "^[0-9]{1,20}$",

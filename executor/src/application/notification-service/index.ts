@@ -48,7 +48,12 @@ export type NotificationInput =
   | (ExecutionNotificationBase & { readonly kind: "LOCK_TIMEOUT" })
   | (ExecutionNotificationBase & { readonly kind: "DEPLOY_FAILED"; readonly code: string })
   | (ExecutionNotificationBase & { readonly kind: "UNKNOWN_TARGET_STATE"; readonly runbookUrl: string })
-  | (ExecutionNotificationBase & { readonly kind: "SUCCEEDED" })
+  | (ExecutionNotificationBase & {
+      readonly kind: "SUCCEEDED";
+      /** AC-03 G-D7: whether the script's report proves the requested version (absent on executions finished before AC-03). */
+      readonly versionCheck?: "VERIFIED" | "MISMATCH" | "NOT_REPORTED";
+      readonly versionGuaranteed?: boolean;
+    })
   | {
       /** Goes to the platform channel: reason and sender REFERENCE only (design §6.6). */
       readonly kind: "REJECTED";
@@ -98,6 +103,12 @@ function detailLine(input: ExecutionNotificationBase): string {
   return parts.join(" | ");
 }
 
+function versionLabel(check: "VERIFIED" | "MISMATCH" | "NOT_REPORTED" | undefined, guaranteed: boolean | undefined): string {
+  if (check === undefined) return "";
+  const text = check === "VERIFIED" ? "version verified" : check === "MISMATCH" ? "VERSION MISMATCH: the deployed version differs from the request" : "version not verified";
+  return ` | ${text}${guaranteed === false ? " (not guaranteed: the script runs without arguments)" : ""}`;
+}
+
 function buildMessage(input: NotificationInput): { message: string; rootText?: string } {
   if (input.kind === "REJECTED") {
     return { message: `Request rejected: ${input.reason} (sender ref ${input.senderRef})` };
@@ -125,8 +136,11 @@ function buildMessage(input: NotificationInput): { message: string; rootText?: s
         message: `UNKNOWN_TARGET_STATE: target state needs operator review, see ${input.runbookUrl} | ${details}`,
         rootText: `Deploy failed: UNKNOWN_TARGET_STATE${duration} | ${details}`,
       };
-    case "SUCCEEDED":
-      return { message: `Deploy succeeded${duration} | ${details}`, rootText: `Deploy succeeded${duration} | ${details}` };
+    case "SUCCEEDED": {
+      // AC-03 G-D7: "script succeeded" is never presented as "version verified" without evidence.
+      const version = versionLabel(input.versionCheck, input.versionGuaranteed);
+      return { message: `Deploy succeeded${duration}${version} | ${details}`, rootText: `Deploy succeeded${duration}${version} | ${details}` };
+    }
   }
 }
 

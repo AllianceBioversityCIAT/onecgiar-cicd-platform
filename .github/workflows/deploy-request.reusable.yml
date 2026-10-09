@@ -15,6 +15,13 @@
 # and the Executor checks it against the target record's sourceRepositoryId. It is never an input:
 # a caller cannot choose it. Premises P-R1/P-R2 stay UNVERIFIED until the real B2 tests.
 #
+# Common CD request mechanism (AC-03 G-D4): each platform builds in its own caller jobs. This
+# workflow builds and pushes container images only when units are given (`units` may be []),
+# accepts caller-computed immutable references (`artifacts`: name -> sha256:<64-hex>, e.g. an
+# archive or WAR digest), and always sends exactly one request. A request without artifacts
+# identifies its version by the commit alone. No step is conditional: with no units the build and
+# push loops do nothing.
+#
 # Values (gate-b-plan section 12; AWS auth is GitHub OIDC only: no static access keys and
 # NO secrets at all; owner decision 2026-10-06):
 #   Environment secrets: none (0).
@@ -66,10 +73,20 @@ on:
         required: true
       units:
         description: >-
-          JSON array of build units, each {"unit": "<unit id>", "context": "<relative build context>",
-          "dockerfile": "<optional path relative to the repository root>"}. 1 to 8 units.
+          JSON array of container build units, each {"unit": "<unit id>", "context": "<relative build
+          context>", "dockerfile": "<optional path relative to the repository root>"}. 0 to 8 units
+          (AC-03: [] means no image is built or pushed).
         type: string
-        required: true
+        required: false
+        default: "[]"
+      artifacts:
+        description: >-
+          JSON object of caller-computed immutable artifact references, {"<name>": "sha256:<64-hex>"},
+          0 to 8 entries, names disjoint from the unit names; units + artifacts together at most 8
+          (the request schema's limit; AC-03 G-D4).
+        type: string
+        required: false
+        default: "{}"
 
 permissions: {}
 
@@ -85,6 +102,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           TARGET_ID: ${{ inputs.targetId }}
           UNITS: ${{ inputs.units }}
+          ARTIFACTS: ${{ inputs.artifacts }}
         run: |
           set -euo pipefail
           case "$EVENT_NAME" in
@@ -97,7 +115,7 @@ jobs:
             echo "::error::invalid targetId"; exit 1
           fi
           printf '%s' "$UNITS" | jq -e '
-            type == "array" and length >= 1 and length <= 8
+            type == "array" and length >= 0 and length <= 8
             and all(.[];
               type == "object"
               and ((keys - ["unit", "context", "dockerfile"]) | length) == 0
@@ -111,6 +129,19 @@ jobs:
                    and (test("[\u0000-\u001f\u007f]") | not)))
             and (([.[].unit] | unique | length) == length)' > /dev/null \
             || { echo "::error::invalid units input"; exit 1; }
+          # AC-03 G-D4: caller-computed immutable references, validated like the request schema; names
+          # must not collide with unit names (a pushed digest is never silently replaced).
+          # An omitted input arrives as its default; an explicitly empty one means "none".
+          artifacts_json="${ARTIFACTS:-}"
+          [ -n "$artifacts_json" ] || artifacts_json='{}'
+          printf '%s' "$artifacts_json" | jq -e --argjson units "$UNITS" '
+            type == "object" and length <= 8
+            and all(to_entries[];
+              (.key | test("^[a-z0-9][a-z0-9-]{0,31}$") and (test("[\u0000-\u001f\u007f]") | not))
+              and (.value | type == "string" and test("^sha256:[0-9a-f]{64}$") and (test("[\u0000-\u001f\u007f]") | not)))
+            and ((keys - ($units | map(.unit))) | length) == length
+            and (length + ($units | length)) <= 8' > /dev/null \
+            || { echo "::error::invalid artifacts input"; exit 1; }
 
   push-and-send:
     name: push-and-send
@@ -260,6 +291,7 @@ jobs:
       - name: Build deploy request body
         env:
           TARGET_ID: ${{ inputs.targetId }}
+          ARTIFACTS_INPUT: ${{ inputs.artifacts }}
           COMMIT_SHA: ${{ github.sha }}
           REPOSITORY_SLUG: ${{ github.repository }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
@@ -270,6 +302,11 @@ jobs:
           set -euo pipefail
           artifacts_file="${ARTIFACTS_FILE:-$RUNNER_TEMP/artifacts.json}"
           body_file="${BODY_FILE:-$RUNNER_TEMP/deploy-request.json}"
+          # Pushed image digests (absent when no unit was given) merged with the caller's validated references;
+          # a pushed digest always wins (the guard already refuses colliding names).
+          [ -f "$artifacts_file" ] || echo '{}' > "$artifacts_file"
+          merged_file="$RUNNER_TEMP/artifacts-merged.json"
+          jq -n --argjson given "${ARTIFACTS_INPUT:-"{}"}" --slurpfile pushed "$artifacts_file" '$given + $pushed[0]' > "$merged_file"
           jq -n \
             --arg targetId "$TARGET_ID" \
             --arg requestId "${RUN_ID}-${RUN_ATTEMPT}" \
@@ -279,14 +316,13 @@ jobs:
             --arg runId "$RUN_ID" \
             --argjson runAttempt "$RUN_ATTEMPT" \
             --argjson runNumber "$RUN_NUMBER" \
-            --slurpfile artifacts "$artifacts_file" \
+            --slurpfile artifacts "$merged_file" \
             '{
               specVersion: 1,
               eventType: "DEPLOY_REQUESTED",
               requestId: $requestId,
               targetId: $targetId,
               commitSha: $commitSha,
-              artifacts: $artifacts[0],
               ci: {
                 repository: $repository,
                 workflowRef: $workflowRef,
@@ -294,7 +330,7 @@ jobs:
                 runAttempt: $runAttempt,
                 runNumber: $runNumber
               }
-            }' > "$body_file"
+            } + (if ($artifacts[0] | length) > 0 then {artifacts: $artifacts[0]} else {} end)' > "$body_file"
 
       - name: Send deploy request
         env:

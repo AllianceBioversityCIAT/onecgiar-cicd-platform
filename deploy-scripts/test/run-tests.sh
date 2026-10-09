@@ -88,6 +88,10 @@ run_test "§6.5: removed CLI flags are usage errors with no effect"             
 run_test "§6.5: missing or malformed arguments and unknown units are usage errors with no effect" test_v65_bad_arguments_rejected
 run_test "§6.5: a missing or invalid target configuration is a usage error with no effect" test_v65_config_errors_rejected
 run_test "§6.5: works over a non-interactive SSH exec (no TTY or stdin, minimal env, CRLF config)" test_v65_non_interactive_minimal_env
+run_test "AC-03 template: no-argument run deploys, reports the commit and takes the mutex" test_template_none_mode
+run_test "AC-03 template: standard vector deploys with the target-id mutex and fencing token" test_template_standard_mode
+run_test "AC-03 template: phase failures map to 10/20/30/40, unrestorable failures to unknown" test_template_failure_mapping
+run_test "AC-03 template: busy mutex -> 50 with no effect; usage errors -> 2" test_template_busy_and_usage
 
 echo
 echo "== summary =="

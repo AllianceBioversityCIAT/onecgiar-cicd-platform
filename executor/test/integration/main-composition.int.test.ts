@@ -235,6 +235,28 @@ describe.skipIf(!dynamoDbLocalAvailable())("composition root on DynamoDB Local (
     expect(h.metricLines.join("\n")).toContain("ExecutionsSucceeded");
   });
 
+  test("AC-03: a target in scriptArguments none runs its script with NO argument for a request without artifacts; the version is recorded as not guaranteed (G-D1, G-D3, G-D7)", async () => {
+    const table = await freshTable();
+    const h = await boot(undefined, table);
+    const target = "example-noargs-dev";
+    await putTarget(h.client, targetRecord({ targetId: target, scriptArguments: "none", deployWindowPolicy: "not-required", deployScript: "/opt/cicd/scripts/deploy-example-noargs-dev.sh" }));
+    const runId = String(Date.now() + 21);
+    const body = deployRequest(runId, Math.floor(Date.now() / 1000), target);
+    delete body["artifacts"];
+    expect((await h.executor.handle(message("m-none-1", body, CI_SENDER))).ack).toBe(true);
+    await h.queue.drain(h.executor.handle);
+
+    const dedupe = await new DedupeRepository(h.client, table).get(target, `${runId}-1`);
+    const item = await new ExecutionRepository(h.client, table).get(dedupe!.executionId!);
+    expect(item).toMatchObject({ status: "SUCCEEDED", artifacts: {}, versionCheck: "NOT_REPORTED", versionGuaranteed: false });
+    expect(item?.targetSnapshot.scriptArguments).toBe("none");
+    expect(h.execCalls).toHaveLength(1);
+    expect(h.execCalls[0]).toMatchObject({ scriptPath: "/opt/cicd/scripts/deploy-example-noargs-dev.sh", args: [] });
+    const success = h.provider.events.find((e) => e.kind === "SUCCEEDED");
+    expect(success?.message).toContain("version not verified");
+    expect(success?.message).toContain("not guaranteed");
+  });
+
   test("a DEPLOY_REQUESTED from the wrong principal is REJECTED once under REJECT#MSG#: senderRef, platform channel, single count (FR-21)", async () => {
     const h = await boot();
     const runId = String(Date.now() + 1);

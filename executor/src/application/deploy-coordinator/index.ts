@@ -43,6 +43,7 @@ import {
   type TransitionResult,
 } from "../../domain/state-machine/index.js";
 import { classifyExitCode } from "../../domain/errors/index.js";
+import { versionCheckOf } from "../../domain/version-check/index.js";
 import { LOCK_RENEWAL_INTERVAL_SECONDS, nextLockRetry } from "../../domain/lock-policy/index.js";
 import { evaluateS2, type OrderingValue } from "../../domain/supersede-policy/index.js";
 import type { LockRetryRequestedEvent } from "../../domain/request-contract/index.js";
@@ -113,9 +114,12 @@ export interface DeployPlan {
  */
 export function deployPlanOf(item: ExecutionItem, timeoutMinutes: number = DEFAULT_DEPLOY_TIMEOUT_MINUTES): DeployPlan {
   const s = item.targetSnapshot;
-  const artifacts = Object.keys(item.artifacts)
+  const requested = item.artifacts ?? {};
+  const artifacts = Object.keys(requested)
     .sort()
-    .flatMap((unit) => ["--artifact", `${unit}=${item.artifacts[unit] as string}`]);
+    .flatMap((unit) => ["--artifact", `${unit}=${requested[unit] as string}`]);
+  // AC-03 G-D1: the target record, never the request, decides whether the script gets arguments.
+  const noArguments = s.scriptArguments === "none";
   return {
     target: {
       targetId: item.targetId,
@@ -128,7 +132,7 @@ export function deployPlanOf(item: ExecutionItem, timeoutMinutes: number = DEFAU
     window: { targetId: item.targetId, deployWindowPolicy: s.deployWindowPolicy },
     scriptPath: s.deployScript,
     timeoutMinutes,
-    scriptArgs: (fencingToken) => [
+    scriptArgs: (fencingToken) => noArguments ? [] : [
       "--target-id",
       item.targetId,
       "--execution-id",
@@ -652,6 +656,8 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
       ...lostFlag,
       result,
       ...(targetWriteRejected ? { targetWriteRejected: true } : {}),
+      // AC-03 G-D7: "script succeeded" is recorded together with whether its report proves the requested version.
+      ...versionCheckOf(item, outcome.cicdResult),
     });
   }
 

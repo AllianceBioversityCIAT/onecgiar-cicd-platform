@@ -134,6 +134,8 @@ export function snapshotOf(target: TargetRecord): TargetSnapshot {
     deployScript: target.deployScript,
     deployWindowPolicy: target.deployWindowPolicy,
     sourceRepositoryId: target.sourceRepositoryId,
+    // The effective mode is recorded, so the audit shows how the script was invoked (AC-03 G-D1).
+    scriptArguments: target.scriptArguments ?? "standard",
   };
 }
 
@@ -219,7 +221,7 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
       targetSnapshot: snapshotOf(target),
       requestId,
       commitSha: request.commitSha,
-      artifacts: request.artifacts,
+      artifacts: request.artifacts ?? {},
       order,
       ci: { repository: request.ci.repository, runId: request.ci.runId, workflowRef: request.ci.workflowRef },
       senderRef,

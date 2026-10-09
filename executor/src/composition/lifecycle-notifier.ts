@@ -62,7 +62,12 @@ export function createLifecycleNotifier(deps: LifecycleNotifierDeps): LifecycleN
     const b = base(item);
     switch (item.status) {
       case "SUCCEEDED":
-        return { ...b, kind: "SUCCEEDED" };
+        return {
+          ...b,
+          kind: "SUCCEEDED",
+          ...(item.versionCheck === undefined ? {} : { versionCheck: item.versionCheck }),
+          ...(item.versionGuaranteed === undefined ? {} : { versionGuaranteed: item.versionGuaranteed }),
+        };
       case "SUPERSEDED":
         return { ...b, kind: "SUPERSEDED" };
       case "UNKNOWN_TARGET_STATE":

@@ -28,6 +28,8 @@ export interface TargetSnapshot {
   readonly deployScript: string;
   readonly deployWindowPolicy: "required" | "not-required";
   readonly sourceRepositoryId: string;
+  /** Effective invocation mode (AC-03 G-D1); absent on executions accepted before AC-03, which are `standard`. */
+  readonly scriptArguments?: "standard" | "none";
 }
 
 /** Execution item (`EXEC#{executionId}` / `META`), design §5.1. */
@@ -38,7 +40,7 @@ export interface ExecutionItem {
   readonly targetSnapshot: TargetSnapshot;
   readonly requestId: string;
   readonly commitSha: string;
-  /** Immutable artifact identity: unit name to image digest (DD-26). */
+  /** Requested immutable artifacts: component name to content digest (DD-26, AC-03 G-D3); empty when the request carried none. */
   readonly artifacts: Readonly<Record<string, string>>;
   /** Supersede ordering key (DD-27). */
   readonly order: { readonly sourceRef: string; readonly runNumber: number; readonly runAttempt: number };
@@ -69,6 +71,10 @@ export interface ExecutionItem {
   readonly windowClosedDuringRun?: boolean;
   /** The script exited with a code that guarantees `CICD_RESULT` (0/10/20/30/40) but none was parsed (design §6.5, §7.2). */
   readonly cicdResultMissing?: boolean;
+  /** On a successful run only (AC-03 G-D7): whether the script's report proves the requested version. */
+  readonly versionCheck?: "VERIFIED" | "MISMATCH" | "NOT_REPORTED";
+  /** False when the script ran with no arguments (`scriptArguments: none`): it was never told the version. */
+  readonly versionGuaranteed?: boolean;
   readonly result?: { readonly code: number; readonly cicdResult?: string; readonly logTail?: string };
   readonly error?: { readonly code: DomainErrorCode; readonly message?: string };
   readonly slackThreadTs?: string;
