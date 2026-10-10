@@ -1,0 +1,139 @@
+# @akili-spec changes/cicd-executor-poc design DD-24, DD-25; owner decision D2 (2026-10-10, multi-repository CI)
+#
+# One CI role per GitHub repository (multi-repository CI). Deploy ONE stack of this template per repository,
+# for example `cicd-ci-<repository>-<stage>`; then list its `RoleArn` in the main stack parameter
+# `AdditionalCiRoleArns` (queue policy) and declare the binding to the Executor with
+# `CICD_CI_REPOSITORY_BINDINGS=<repository_id>=<LOGICAL_REF>`, the reference resolving to `RoleId`.
+#
+# The trust is the same exact-match shape as the main stack's CiRole (DD-24): every claim is a StringEquals,
+# the job must run the platform's reusable workflow at a pinned commit, and the role session name must be
+# the token's repository_id (option A). A role created here can be assumed by ONE repository, ONE GitHub
+# Environment and ONE branch only; the Executor additionally refuses it for any other repository_id.
+#
+# Publication policy (DD-23): no account ID, host or secret name here; every value is a parameter.
+AWSTemplateFormatVersion: "2010-09-09"
+Description: ONECGIAR CI/CD Platform - repository-bound CI role (OIDC, one per repository).
+
+Parameters:
+  Stage:
+    Type: String
+    AllowedPattern: "^[a-z][a-z0-9-]{0,15}$"
+    ConstraintDescription: Lowercase letters, digits and hyphens; starts with a letter; at most 16 characters.
+    Description: Environment stage of the platform stack this role sends to.
+  GitHubRepositoryId:
+    Type: String
+    AllowedPattern: "^[0-9]{1,20}$"
+    Description: Immutable numeric ID of the ONE repository allowed to assume this role (claim repository_id).
+  GitHubRepositoryOwnerId:
+    Type: String
+    AllowedPattern: "^[0-9]{1,20}$"
+    Description: Immutable numeric ID of the repository owner (claim repository_owner_id).
+  GitHubEnvironment:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9._-]{1,255}$"
+    Description: GitHub Environment the deploy-request job runs in (claim environment).
+  GitHubOidcSub:
+    Type: String
+    AllowedPattern: "^repo:[A-Za-z0-9._@/-]+:environment:[A-Za-z0-9._-]{1,255}$"
+    ConstraintDescription: Exact sub value (classic repo:OWNER/REPO:environment:NAME or immutable repo:OWNER@OWNER-ID/REPO@REPO-ID:environment:NAME), no wildcard characters.
+    Description: Environment-form sub claim value of this repository (read the repository's OIDC subject template).
+  GitHubBoundRef:
+    Type: String
+    AllowedPattern: "^refs/heads/[A-Za-z0-9._/-]+$"
+    ConstraintDescription: Exact branch ref starting with refs/heads/, no wildcard characters.
+    Description: Exact branch ref the caller workflow must run on (claim ref). Must equal CICD_BOUND_REF of the Environment.
+  PlatformWorkflowRepository:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+    Description: owner/repo of the platform repository that hosts the reusable workflow.
+  PinnedWorkflowSha:
+    Type: String
+    AllowedPattern: "^[0-9a-f]{40}$"
+    ConstraintDescription: Exactly 40 lowercase hexadecimal characters (a full commit SHA, never a tag or branch).
+    Description: Commit SHA of the platform reusable workflow this repository calls (claim job_workflow_ref).
+  GitHubOidcProviderArn:
+    Type: String
+    AllowedPattern: "^arn:aws[a-z-]*:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$"
+    Description: ARN of the account's GitHub OIDC provider (main stack output OidcProviderArn).
+  DeployQueueArn:
+    Type: String
+    AllowedPattern: "^arn:aws[a-z-]*:sqs:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]{1,80}$"
+    Description: ARN of the platform deploy queue (main stack output DeployQueueArn).
+  CiEcrRepositoryArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:ecr:[a-z0-9-]+:[0-9]{12}:repository/[a-z0-9._/-]+$"
+    Description: Optional ECR repository the reusable workflow may push units to. Empty grants no push (callers that build their own images send `artifacts`).
+
+Conditions:
+  GrantEcrPush: !Not [!Equals [!Ref CiEcrRepositoryArn, ""]]
+
+Resources:
+  RepositoryCiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            # Every operator is an exact StringEquals: no StringLike, no wildcard (DD-24, FR-25).
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:repository_id: !Ref GitHubRepositoryId
+                token.actions.githubusercontent.com:repository_owner_id: !Ref GitHubRepositoryOwnerId
+                token.actions.githubusercontent.com:environment: !Ref GitHubEnvironment
+                token.actions.githubusercontent.com:job_workflow_ref: !Sub "${PlatformWorkflowRepository}/.github/workflows/deploy-request.reusable.yml@${PinnedWorkflowSha}"
+                token.actions.githubusercontent.com:sub: !Ref GitHubOidcSub
+                token.actions.githubusercontent.com:ref: !Ref GitHubBoundRef
+                # Option A (DD-24): the session name must be the token's repository_id; a literal IAM policy
+                # variable, not a CloudFormation one (no Fn::Sub).
+                sts:RoleSessionName: "${token.actions.githubusercontent.com:repository_id}"
+      Policies:
+        - PolicyName: ci-request
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # ACCEPTED EXCEPTION: AWS does not scope ecr:GetAuthorizationToken by resource; the reusable
+              # workflow always logs in to the registry, even with no unit to push.
+              - Sid: EcrAuthorizationToken
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - !If
+                - GrantEcrPush
+                - Sid: EcrPushSelectedRepository
+                  Effect: Allow
+                  Action:
+                    - ecr:BatchCheckLayerAvailability
+                    - ecr:InitiateLayerUpload
+                    - ecr:UploadLayerPart
+                    - ecr:CompleteLayerUpload
+                    - ecr:PutImage
+                  Resource: !Ref CiEcrRepositoryArn
+                - !Ref AWS::NoValue
+              - Sid: SendDeployRequest
+                Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:GetQueueUrl
+                Resource: !Ref DeployQueueArn
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+        - Key: Stage
+          Value: !Ref Stage
+        - Key: GitHubRepositoryId
+          Value: !Ref GitHubRepositoryId
+
+Outputs:
+  RoleArn:
+    Description: Value for the caller Environment variable CICD_ROLE_ARN and for the main stack parameter AdditionalCiRoleArns.
+    Value: !GetAtt RepositoryCiRole.Arn
+  RoleId:
+    Description: Value of the Executor secret behind this repository's CICD_CI_REPOSITORY_BINDINGS reference.
+    Value: !GetAtt RepositoryCiRole.RoleId

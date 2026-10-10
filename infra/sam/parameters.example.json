@@ -14,5 +14,6 @@
   { "ParameterKey": "SecretIdPrefix", "ParameterValue": "<SECRET_ID_PREFIX_ENDING_WITH_SLASH>" },
   { "ParameterKey": "ReconcileScheduleState", "ParameterValue": "DISABLED" },
   { "ParameterKey": "AlarmTopicArn", "ParameterValue": "" },
-  { "ParameterKey": "EnablePointInTimeRecovery", "ParameterValue": "false" }
+  { "ParameterKey": "EnablePointInTimeRecovery", "ParameterValue": "false" },
+  { "ParameterKey": "AdditionalCiRoleArns", "ParameterValue": "" }
 ]

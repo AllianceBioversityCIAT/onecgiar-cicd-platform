@@ -454,11 +454,37 @@ describe("deploy queue (DD-14, DD-25)", () => {
     expect(template.Resources.DeployQueuePolicy!.Properties.Queues).toEqual([{ Ref: "DeployQueue" }]);
   });
 
-  it("allows SendMessage to exactly the four platform roles", () => {
+  // Multi-repository CI (D2): the principal list is `Fn::If HasAdditionalCiRoles`; without additional roles it is
+  // exactly the four platform roles (the previous policy), with them the same four plus the parameter's ARNs.
+  const principalBranches = (value: Json): { without: string[]; withJoined: Json[] } => {
+    const branches = (value as { "Fn::If": [string, Json, Json] })["Fn::If"];
+    expect(branches[0]).toBe("HasAdditionalCiRoles");
+    const split = (branches[1] as { "Fn::Split": [string, { "Fn::Join": [string, Json[]] }] })["Fn::Split"];
+    expect(split[0]).toBe(",");
+    expect(split[1]["Fn::Join"][0]).toBe(",");
+    return { without: asArray(branches[2] as Json[]).map(key).sort(), withJoined: split[1]["Fn::Join"][1] };
+  };
+
+  it("allows SendMessage to exactly the four platform roles, plus only the listed repository-bound CI roles", () => {
     const allow = statements().filter((s) => s.Effect === "Allow" && asArray(s.Action).includes("sqs:SendMessage"));
     expect(allow).toHaveLength(1);
     expect(allow[0]!.Action).toBe("sqs:SendMessage");
-    expect(asArray((allow[0]!.Principal as { AWS: Json[] }).AWS).map(key).sort()).toEqual(expectedRoles);
+    const { without, withJoined } = principalBranches((allow[0]!.Principal as { AWS: Json }).AWS);
+    expect(without).toEqual(expectedRoles);
+    expect(withJoined.map(key).sort()).toEqual([...expectedRoles, key({ Ref: "AdditionalCiRoleArns" })].sort());
+  });
+
+  it("AdditionalCiRoleArns is optional, comma-separated IAM role ARNs only, guarded by HasAdditionalCiRoles", () => {
+    const p = template.Parameters.AdditionalCiRoleArns!;
+    expect(p.Default).toBe("");
+    const pattern = new RegExp(p.AllowedPattern as string);
+    expect(pattern.test("")).toBe(true);
+    expect(pattern.test("arn:aws:iam::<12-digit>:role/x".replace("<12-digit>", "1".repeat(12)))).toBe(true);
+    expect(pattern.test(["a", "b"].map((n) => `arn:aws:iam::${"1".repeat(12)}:role/${n}`).join(","))).toBe(true);
+    expect(pattern.test(`arn:aws:iam::${"1".repeat(12)}:role/x, arn:aws:iam::${"1".repeat(12)}:role/y`)).toBe(false);
+    expect(pattern.test(`arn:aws:iam::${"1".repeat(12)}:user/x`)).toBe(false);
+    expect(pattern.test("*")).toBe(false);
+    expect(template.Conditions!.HasAdditionalCiRoles).toEqual({ "Fn::Not": [{ "Fn::Equals": [{ Ref: "AdditionalCiRoleArns" }, ""] }] });
   });
 
   it("allows receive, delete and visibility changes only to the Executor role", () => {
@@ -468,14 +494,22 @@ describe("deploy queue (DD-14, DD-25)", () => {
     expect(consume[0]!.Principal).toEqual({ AWS: getAttArn("ExecutorRole") });
   });
 
-  it("explicitly denies SendMessage to every principal outside the four roles", () => {
+  it("explicitly denies SendMessage to every principal outside the four roles and the listed CI roles", () => {
     const deny = statements().filter((s) => s.Effect === "Deny");
     expect(deny).toHaveLength(1);
     expect(deny[0]!.Principal).toBe("*");
     expect(deny[0]!.Action).toBe("sqs:SendMessage");
     expect(Object.keys(deny[0]!.Condition!)).toEqual(["ArnNotEquals"]);
     expect(Object.keys(deny[0]!.Condition!.ArnNotEquals!)).toEqual(["aws:PrincipalArn"]);
-    expect(asArray(deny[0]!.Condition!.ArnNotEquals!["aws:PrincipalArn"] as Json[]).map(key).sort()).toEqual(expectedRoles);
+    const { without, withJoined } = principalBranches(deny[0]!.Condition!.ArnNotEquals!["aws:PrincipalArn"] as Json);
+    expect(without).toEqual(expectedRoles);
+    expect(withJoined.map(key).sort()).toEqual([...expectedRoles, key({ Ref: "AdditionalCiRoleArns" })].sort());
+  });
+
+  it("the Allow and Deny principal lists are identical (no principal allowed but not exempted, or the reverse)", () => {
+    const allow = statements().find((s) => s.Effect === "Allow" && asArray(s.Action).includes("sqs:SendMessage"))!;
+    const deny = statements().find((s) => s.Effect === "Deny")!;
+    expect(key((allow.Principal as { AWS: Json }).AWS)).toBe(key(deny.Condition!.ArnNotEquals!["aws:PrincipalArn"] as Json));
   });
 });
 

@@ -97,12 +97,22 @@ Parameters:
     Default: "false"
     AllowedValues: ["true", "false"]
     Description: Enable DynamoDB point-in-time recovery on the executions table.
+  # Multi-repository CI (owner decision D2): each further repository gets its own CI role from
+  # infra/sam/ci-repository-role.yaml (one stack per repository); its ARN is listed here only so the
+  # deploy queue policy lets it send. Empty keeps the queue policy exactly as before.
+  AdditionalCiRoleArns:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=.@_/-]+(,arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=.@_/-]+){0,19}$"
+    ConstraintDescription: Comma-separated IAM role ARNs (no spaces, at most 20, role names without commas).
+    Description: ARNs of the repository-bound CI roles (ci-repository-role.yaml stacks) allowed to send deploy requests. Empty means none.
 
 Conditions:
   CreateOidcProvider: !Equals [!Ref ExistingGitHubOidcProviderArn, ""]
   UseExistingEcrRepository: !Not [!Equals [!Ref CiEcrRepositoryArn, ""]]
   CreateProbeRepository: !Equals [!Ref CiEcrRepositoryArn, ""]
   HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, ""]]
+  HasAdditionalCiRoles: !Not [!Equals [!Ref AdditionalCiRoleArns, ""]]
 
 Resources:
   # ---------------------------------------------------------------- Queues (DD-14, DD-25)
@@ -135,7 +145,8 @@ Resources:
           Value: ONECGIAR-CICD-Platform
 
   # Defense in depth behind the consumer's per-type sender binding (DD-25): SendMessage is
-  # allowed only to the four platform roles and explicitly denied to every other principal.
+  # allowed only to the four platform roles (plus the repository-bound CI roles listed in
+  # AdditionalCiRoleArns, D2) and explicitly denied to every other principal.
   DeployQueuePolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
@@ -147,11 +158,21 @@ Resources:
           - Sid: AllowSendFromPlatformRoles
             Effect: Allow
             Principal:
-              AWS:
-                - !GetAtt CiRole.Arn
-                - !GetAtt ExecutorRole.Arn
-                - !GetAtt SchedulerRole.Arn
-                - !GetAtt OperatorRole.Arn
+              AWS: !If
+                - HasAdditionalCiRoles
+                - !Split
+                  - ","
+                  - !Join
+                    - ","
+                    - - !GetAtt CiRole.Arn
+                      - !GetAtt ExecutorRole.Arn
+                      - !GetAtt SchedulerRole.Arn
+                      - !GetAtt OperatorRole.Arn
+                      - !Ref AdditionalCiRoleArns
+                - - !GetAtt CiRole.Arn
+                  - !GetAtt ExecutorRole.Arn
+                  - !GetAtt SchedulerRole.Arn
+                  - !GetAtt OperatorRole.Arn
             Action: sqs:SendMessage
             Resource: !GetAtt DeployQueue.Arn
           - Sid: AllowConsumeFromExecutorRole
@@ -170,11 +191,21 @@ Resources:
             Resource: !GetAtt DeployQueue.Arn
             Condition:
               ArnNotEquals:
-                aws:PrincipalArn:
-                  - !GetAtt CiRole.Arn
-                  - !GetAtt ExecutorRole.Arn
-                  - !GetAtt SchedulerRole.Arn
-                  - !GetAtt OperatorRole.Arn
+                aws:PrincipalArn: !If
+                  - HasAdditionalCiRoles
+                  - !Split
+                    - ","
+                    - !Join
+                      - ","
+                      - - !GetAtt CiRole.Arn
+                        - !GetAtt ExecutorRole.Arn
+                        - !GetAtt SchedulerRole.Arn
+                        - !GetAtt OperatorRole.Arn
+                        - !Ref AdditionalCiRoleArns
+                  - - !GetAtt CiRole.Arn
+                    - !GetAtt ExecutorRole.Arn
+                    - !GetAtt SchedulerRole.Arn
+                    - !GetAtt OperatorRole.Arn
 
   # ---------------------------------------------------------------- State table (design §5.1)
   # Key attribute names, GSI2 and the TTL attribute mirror
