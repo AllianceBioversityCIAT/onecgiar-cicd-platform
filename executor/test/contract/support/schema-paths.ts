@@ -22,3 +22,10 @@ export const deploymentDefinitionsDir = path.join(repoRoot, "deployment-definiti
 export const deploymentSchemaPath = path.join(schemasDir, "deployment.schema.json");
 export const deployRequestSchemaPath = path.join(schemasDir, "deploy-request.schema.json");
 export const prmsReportingDevDeploymentYamlPath = path.join(deploymentDefinitionsDir, "prms", "reporting-dev.yaml");
+
+// architecture-change-04 (SQS_AGENT): agent registry record and the agent messages.
+export const agentRecordSchemaPath = path.join(schemasDir, "agent-record.schema.json");
+export const agentCommandSchemaPath = path.join(schemasDir, "agent-command.schema.json");
+export const agentEventSchemaPath = path.join(schemasDir, "agent-event.schema.json");
+export const agentQuerySchemaPath = path.join(schemasDir, "agent-query.schema.json");
+export const agentHeartbeatSchemaPath = path.join(schemasDir, "agent-heartbeat.schema.json");

@@ -55,6 +55,7 @@ const FORBIDDEN_ENV = [
 const TOOL_OWNED_FIELDS = ["schemaVersion", "version", "updatedAt", "updatedBy", "pk", "sk"] as const;
 
 const TARGET_ID = /^[a-z0-9][a-z0-9-]{1,62}$/;
+const AGENT_ID = /^[a-z0-9][a-z0-9-]{1,39}$/;
 const TABLE_NAME = /^[A-Za-z0-9_.-]{3,255}$/;
 const REGION = /^[a-z]{2}(-[a-z]+)+-[0-9]$/;
 const PROFILE = /^[A-Za-z0-9_.+=@-]{1,128}$/;
@@ -80,6 +81,22 @@ export const CHECKLIST = [
   "8. Option A gate: a second repository is NOT added to the CI role trust until the B2 positive and negative tests of",
   "   P-R1/P-R2 pass, including the real SQS SenderId suffix (P-A4).",
   "9. This tool runs with the administrative profile only: never the Executor profile, never the CI role.",
+  "10. transport sqs-agent (architecture-change-04): items 3-6 apply to the agent's catalog entry instead (the script",
+  "   path, owner and sudoers rule live on the server; there is no host key or SSH credential). The agent record",
+  "   (agent-put) must list this targetId. Until the agent dispatch exists (E2) the Executor refuses such a target.",
+];
+
+/** architecture-change-04 §5, §10, §11: what an agent record asserts. */
+export const AGENT_CHECKLIST = [
+  "AGENT ONBOARDING CHECKLIST (confirm every item, then pass --checklist-confirmed)",
+  "1. agentId names ONE server and ONE platform stage (AP-4); the same id is in the agent's own configuration.",
+  "2. roleId is the unique id (AROA...) of THIS agent's IAM role, which no other agent or principal uses.",
+  "3. commandQueueUrl is this agent's own FIFO command queue; its policy lets only the Executor role send.",
+  "4. targets lists exactly the targetIds whose catalog entries are installed on this agent; each target record",
+  "   names this agentId.",
+  "5. The catalog, the agent configuration and every catalog script are root-owned and not writable by the agent",
+  "   user or the deploy users; sudoers allows only the exact catalog script paths.",
+  "6. This tool runs with the administrative profile only: never the Executor profile, never an agent role.",
 ];
 
 export const USAGE = [
@@ -90,7 +107,14 @@ export const USAGE = [
   "  tools/target-registry put --file <record.json> --updated-by <who> --secret-id-prefix <PREFIX> [--expected-version <N>] --dry-run",
   "  tools/target-registry get --target-id <TARGET_ID> --registry-table <TABLE> --region <REGION> --profile <ADMIN_PROFILE>",
   "  tools/target-registry checklist",
+  "  tools/target-registry agent-put --file <agent.json> --updated-by <who> --registry-table <TABLE> --region <REGION>",
+  "                                  --profile <ADMIN_PROFILE> [--expected-version <N>] --checklist-confirmed",
+  "  tools/target-registry agent-put --file <agent.json> --updated-by <who> [--expected-version <N>] --dry-run",
+  "  tools/target-registry agent-get --agent-id <AGENT_ID> --registry-table <TABLE> --region <REGION> --profile <ADMIN_PROFILE>",
+  "  tools/target-registry agent-checklist",
   "",
+  "  A target with transport sqs-agent holds agentId and scriptId instead of the SSH fields (architecture-change-04).",
+  "  <agent.json> holds agentId, stage, roleId, commandQueueUrl, targets and minAgentVersion.",
   "  <record.json> holds targetId, project, environment, host, port (optional), user, hostKey, credentialRef,",
   "  deployScript, deployWindowPolicy and sourceRepositoryId. The tool sets schemaVersion, version, updatedAt",
   "  and updatedBy. Without --expected-version the target must not exist yet; with it, the stored version must",
@@ -109,6 +133,8 @@ export interface TargetRegistryToolDeps {
   readonly clock: Clock;
   /** Parsed schemas/target-record.schema.json. */
   readonly schema: object;
+  /** Parsed schemas/agent-record.schema.json (architecture-change-04); needed only by agent-put. */
+  readonly agentSchema?: object;
   readonly readFile: (path: string) => Promise<string>;
   readonly createClient: RegistryClientFactory;
   readonly out: (line: string) => void;
@@ -118,12 +144,15 @@ export interface TargetRegistryToolDeps {
 class UsageError extends Error {}
 class RefusedError extends Error {}
 
-const VALUED = new Set(["file", "updated-by", "secret-id-prefix", "registry-table", "region", "profile", "expected-version", "target-id"]);
+const VALUED = new Set(["file", "updated-by", "secret-id-prefix", "registry-table", "region", "profile", "expected-version", "target-id", "agent-id"]);
 const BOOLEAN = new Set(["dry-run", "checklist-confirmed"]);
 const ALLOWED: Record<string, readonly string[]> = {
   put: ["file", "updated-by", "secret-id-prefix", "registry-table", "region", "profile", "expected-version", "dry-run", "checklist-confirmed"],
   get: ["target-id", "registry-table", "region", "profile"],
   checklist: [],
+  "agent-put": ["file", "updated-by", "registry-table", "region", "profile", "expected-version", "dry-run", "checklist-confirmed"],
+  "agent-get": ["agent-id", "registry-table", "region", "profile"],
+  "agent-checklist": [],
 };
 
 function parse(argv: readonly string[]): { command: string; flags: Map<string, string> } {
@@ -183,9 +212,27 @@ function awsName(error: unknown): string {
 }
 
 async function buildRecord(flags: Map<string, string>, deps: TargetRegistryToolDeps): Promise<{ record: Record<string, unknown>; expected?: number }> {
+  required(flags, "file");
+  required(flags, "updated-by");
+  const prefix = required(flags, "secret-id-prefix");
+  const built = await buildOwnedRecord(flags, deps, deps.schema, "target");
+  // architecture-change-04: an sqs-agent target has no SSH credential; the prefix rule applies to ssh targets only.
+  if (built.record.transport !== "sqs-agent") {
+    const problem = credentialRefProblem(prefix, String(built.record.credentialRef));
+    if (problem !== undefined) throw new RefusedError(`invalid target record: credentialRef ${problem}`);
+  }
+  return built;
+}
+
+/** Reads the input file, adds the tool-owned fields and validates the whole record against `schema`. */
+async function buildOwnedRecord(
+  flags: Map<string, string>,
+  deps: TargetRegistryToolDeps,
+  schema: object,
+  label: "target" | "agent",
+): Promise<{ record: Record<string, unknown>; expected?: number }> {
   const file = required(flags, "file");
   const updatedBy = required(flags, "updated-by");
-  const prefix = required(flags, "secret-id-prefix");
   const rawExpected = flags.get("expected-version");
   let expected: number | undefined;
   if (rawExpected !== undefined) {
@@ -212,66 +259,101 @@ async function buildRecord(flags: Map<string, string>, deps: TargetRegistryToolD
   };
   const ajv = new Ajv2020Ctor({ allErrors: true, strict: true });
   addFormats(ajv);
-  const validate = ajv.compile(deps.schema);
-  if (!validate(record)) throw new RefusedError(`invalid target record: ${describeErrors(validate).join("; ")}`);
-  const problem = credentialRefProblem(prefix, String(record.credentialRef));
-  if (problem !== undefined) throw new RefusedError(`invalid target record: credentialRef ${problem}`);
+  const validate = ajv.compile(schema);
+  if (!validate(record)) throw new RefusedError(`invalid ${label} record: ${describeErrors(validate).join("; ")}`);
   return expected === undefined ? { record } : { record, expected };
 }
 
-async function put(flags: Map<string, string>, deps: TargetRegistryToolDeps): Promise<number> {
+/** What differs between the two record kinds the tool writes (AC-02 V1 targets; architecture-change-04 agents). */
+interface RecordKind {
+  readonly label: "target" | "agent";
+  readonly idField: "targetId" | "agentId";
+  readonly keyPrefix: "TARGET#" | "AGENT#";
+  readonly idFlag: "target-id" | "agent-id";
+  readonly idPattern: RegExp;
+  readonly getCommand: "get" | "agent-get";
+  readonly checklist: readonly string[];
+  build(flags: Map<string, string>, deps: TargetRegistryToolDeps): Promise<{ record: Record<string, unknown>; expected?: number }>;
+}
+
+const TARGET_KIND: RecordKind = {
+  label: "target",
+  idField: "targetId",
+  keyPrefix: "TARGET#",
+  idFlag: "target-id",
+  idPattern: TARGET_ID,
+  getCommand: "get",
+  checklist: CHECKLIST,
+  build: buildRecord,
+};
+
+const AGENT_KIND: RecordKind = {
+  label: "agent",
+  idField: "agentId",
+  keyPrefix: "AGENT#",
+  idFlag: "agent-id",
+  idPattern: AGENT_ID,
+  getCommand: "agent-get",
+  checklist: AGENT_CHECKLIST,
+  build: (flags, deps) => {
+    if (deps.agentSchema === undefined) throw new UsageError("agent records need the agent-record schema");
+    return buildOwnedRecord(flags, deps, deps.agentSchema, "agent");
+  },
+};
+
+async function put(kind: RecordKind, flags: Map<string, string>, deps: TargetRegistryToolDeps): Promise<number> {
   const dryRun = flags.has("dry-run");
   if (!dryRun) {
     // Identity and confirmation are checked before the record file is even read.
     adminProfile(flags, deps.env);
     if (!flags.has("checklist-confirmed")) {
-      CHECKLIST.forEach((line) => deps.err(line));
+      kind.checklist.forEach((line) => deps.err(line));
       throw new UsageError("a write requires --checklist-confirmed after you have confirmed every checklist item");
     }
   }
-  const { record, expected } = await buildRecord(flags, deps);
+  const { record, expected } = await kind.build(flags, deps);
   if (dryRun) {
     deps.out(JSON.stringify(record, null, 2));
-    CHECKLIST.forEach((line) => deps.out(line));
-    deps.out(`dry run: ${expected === undefined ? "would create" : `would update from version ${String(expected)}`} ${String(record.targetId)}; nothing was written`);
+    kind.checklist.forEach((line) => deps.out(line));
+    deps.out(`dry run: ${expected === undefined ? "would create" : `would update from version ${String(expected)}`} ${String(record[kind.idField])}; nothing was written`);
     return 0;
   }
   const table = required(flags, "registry-table", TABLE_NAME);
   const region = required(flags, "region", REGION);
   const client = deps.createClient({ region, profile: adminProfile(flags, deps.env) });
-  const targetId = String(record.targetId);
+  const id = String(record[kind.idField]);
   const condition =
     expected === undefined
       ? { ConditionExpression: "attribute_not_exists(pk)" }
       : { ConditionExpression: "#version = :expected", ExpressionAttributeNames: { "#version": "version" }, ExpressionAttributeValues: { ":expected": expected } };
   try {
-    await client.send(new PutCommand({ TableName: table, Item: { pk: `TARGET#${targetId}`, sk: SORT_KEY, ...record }, ...condition }));
+    await client.send(new PutCommand({ TableName: table, Item: { pk: `${kind.keyPrefix}${id}`, sk: SORT_KEY, ...record }, ...condition }));
   } catch (error) {
     if (awsName(error) === "ConditionalCheckFailedException") {
       throw new RefusedError(
         expected === undefined
-          ? `target ${targetId} already exists; read its version with \`get\` and pass --expected-version`
-          : `target ${targetId} does not exist or its version is not ${String(expected)}; nothing was written`,
+          ? `${kind.label} ${id} already exists; read its version with \`${kind.getCommand}\` and pass --expected-version`
+          : `${kind.label} ${id} does not exist or its version is not ${String(expected)}; nothing was written`,
       );
     }
     throw new RefusedError(`write failed: ${awsName(error)}`);
   }
-  deps.out(`${expected === undefined ? "created" : "updated"} ${targetId} at version ${String(record.version)}`);
+  deps.out(`${expected === undefined ? "created" : "updated"} ${id} at version ${String(record.version)}`);
   return 0;
 }
 
-async function get(flags: Map<string, string>, deps: TargetRegistryToolDeps): Promise<number> {
-  const targetId = required(flags, "target-id", TARGET_ID);
+async function get(kind: RecordKind, flags: Map<string, string>, deps: TargetRegistryToolDeps): Promise<number> {
+  const id = required(flags, kind.idFlag, kind.idPattern);
   const table = required(flags, "registry-table", TABLE_NAME);
   const region = required(flags, "region", REGION);
   const client = deps.createClient({ region, profile: adminProfile(flags, deps.env) });
   let output: { Item?: Record<string, unknown> };
   try {
-    output = (await client.send(new GetCommand({ TableName: table, Key: { pk: `TARGET#${targetId}`, sk: SORT_KEY }, ConsistentRead: true }))) as { Item?: Record<string, unknown> };
+    output = (await client.send(new GetCommand({ TableName: table, Key: { pk: `${kind.keyPrefix}${id}`, sk: SORT_KEY }, ConsistentRead: true }))) as { Item?: Record<string, unknown> };
   } catch (error) {
     throw new RefusedError(`read failed: ${awsName(error)}`);
   }
-  if (output.Item === undefined) throw new RefusedError(`target ${targetId} does not exist`);
+  if (output.Item === undefined) throw new RefusedError(`${kind.label} ${id} does not exist`);
   const attributes = Object.fromEntries(Object.entries(output.Item).filter(([name]) => name !== "pk" && name !== "sk"));
   deps.out(JSON.stringify(attributes, null, 2));
   return 0;
@@ -280,11 +362,13 @@ async function get(flags: Map<string, string>, deps: TargetRegistryToolDeps): Pr
 export async function runTargetRegistryTool(argv: readonly string[], deps: TargetRegistryToolDeps): Promise<number> {
   try {
     const { command, flags } = parse(argv);
-    if (command === "checklist") {
-      CHECKLIST.forEach((line) => deps.out(line));
+    if (command === "checklist" || command === "agent-checklist") {
+      (command === "checklist" ? CHECKLIST : AGENT_CHECKLIST).forEach((line) => deps.out(line));
       return 0;
     }
-    return command === "put" ? await put(flags, deps) : await get(flags, deps);
+    if (command === "put") return await put(TARGET_KIND, flags, deps);
+    if (command === "agent-put") return await put(AGENT_KIND, flags, deps);
+    return command === "agent-get" ? await get(AGENT_KIND, flags, deps) : await get(TARGET_KIND, flags, deps);
   } catch (error) {
     if (error instanceof UsageError) {
       deps.err(`target-registry: ${error.message}`);

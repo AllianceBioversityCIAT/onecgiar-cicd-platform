@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { EXECUTOR_PROFILE, runTargetRegistryTool, type RegistryClientFactory, type TargetRegistryToolDeps } from "../../src/tools/target-registry/index.js";
-import { targetRecordSchemaPath } from "../contract/support/schema-paths.js";
+import { agentRecordSchemaPath, targetRecordSchemaPath } from "../contract/support/schema-paths.js";
 
 const SCHEMA = JSON.parse(readFileSync(targetRecordSchemaPath, "utf8")) as object;
 const NOW = "2026-10-07T12:00:00.000Z";
@@ -245,5 +245,136 @@ describe("target registry tool: get and checklist", () => {
     expect(await runTargetRegistryTool(["delete"], harness().deps)).toBe(2);
     expect(await runTargetRegistryTool([...PUT, "--force"], harness().deps)).toBe(2);
     expect(await runTargetRegistryTool([], harness().deps)).toBe(2);
+  });
+});
+
+// architecture-change-04 (E1): sqs-agent targets and agent records.
+/** Obviously fake queue base: AWS's documentation account id (publication policy, DD-23). */
+const FAKE_SQS_QUEUE_BASE = "https://sqs.us-east-1.amazonaws.com/123456789012";
+const AGENT_SCHEMA = JSON.parse(readFileSync(agentRecordSchemaPath, "utf8")) as object;
+
+function agentTargetInput(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    targetId: "example-app-dev",
+    project: "example",
+    environment: "dev",
+    transport: "sqs-agent",
+    agentId: "example-server-dev",
+    scriptId: "deploy-example-app-dev",
+    deployWindowPolicy: "not-required",
+    sourceRepositoryId: "123456789",
+    ...overrides,
+  };
+}
+
+function agentInput(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    agentId: "example-server-dev",
+    stage: "dev",
+    roleId: "AROAEXAMPLEEXAMPLE001",
+    commandQueueUrl: `${FAKE_SQS_QUEUE_BASE}/cicd-agent-dev-example-server-dev-cmd.fifo`,
+    targets: ["example-app-dev"],
+    minAgentVersion: "1.0.0",
+    ...overrides,
+  };
+}
+
+function withAgentSchema(h: Harness): TargetRegistryToolDeps {
+  return { ...h.deps, agentSchema: AGENT_SCHEMA };
+}
+
+const AGENT_PUT = ["agent-put", "--file", "agent.json", "--updated-by", "platform-admin", "--registry-table", "cicd-registry-dev", "--region", "us-east-1", "--profile", "cicd-admin", "--checklist-confirmed"];
+
+describe("target registry tool: sqs-agent targets (architecture-change-04)", () => {
+  it("accepts an sqs-agent target without SSH fields (the credentialRef prefix rule applies to ssh targets only)", async () => {
+    const h = harness({ file: agentTargetInput() });
+    expect(await runTargetRegistryTool(PUT, h.deps)).toBe(0);
+    expect(h.sent[0]?.input.Item).toMatchObject({ pk: "TARGET#example-app-dev", transport: "sqs-agent", agentId: "example-server-dev", scriptId: "deploy-example-app-dev" });
+  });
+
+  it("refuses an sqs-agent target that carries SSH fields", async () => {
+    const h = harness({ file: agentTargetInput({ host: "target.example.internal" }) });
+    expect(await runTargetRegistryTool(PUT, h.deps)).toBe(1);
+    expect(h.sent).toEqual([]);
+  });
+
+  it("refuses an sqs-agent target without scriptId", async () => {
+    const file = agentTargetInput();
+    delete file.scriptId;
+    const h = harness({ file });
+    expect(await runTargetRegistryTool(PUT, h.deps)).toBe(1);
+  });
+
+  it("still enforces the credentialRef prefix for an explicit ssh target", async () => {
+    const h = harness({ file: input({ transport: "ssh", credentialRef: "other/prefix/ssh" }) });
+    expect(await runTargetRegistryTool(PUT, h.deps)).toBe(1);
+    expect(h.err.join("\n")).toContain("credentialRef");
+  });
+});
+
+describe("target registry tool: agent records (architecture-change-04)", () => {
+  it("writes AGENT#{agentId} / META conditionally (create) with the tool-owned fields", async () => {
+    const h = harness({ file: agentInput() });
+    expect(await runTargetRegistryTool(AGENT_PUT, withAgentSchema(h))).toBe(0);
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]?.input).toMatchObject({
+      Item: { pk: "AGENT#example-server-dev", sk: "META", ...agentInput(), schemaVersion: 1, version: 1, updatedAt: NOW, updatedBy: "platform-admin" },
+      ConditionExpression: "attribute_not_exists(pk)",
+    });
+    expect(h.out.join("\n")).toContain("created example-server-dev at version 1");
+  });
+
+  it("updates only from the expected version", async () => {
+    const h = harness({ file: agentInput() });
+    expect(await runTargetRegistryTool([...AGENT_PUT, "--expected-version", "2"], withAgentSchema(h))).toBe(0);
+    expect(h.sent[0]?.input).toMatchObject({ ConditionExpression: "#version = :expected", ExpressionAttributeValues: { ":expected": 2 } });
+    expect(h.sent[0]?.input.Item).toMatchObject({ version: 3 });
+  });
+
+  it("reports an existing agent on create without overwriting it", async () => {
+    const h = harness({ file: agentInput(), reply: () => conditionalFailure() });
+    expect(await runTargetRegistryTool(AGENT_PUT, withAgentSchema(h))).toBe(1);
+    expect(h.err.join("\n")).toContain("agent example-server-dev already exists; read its version with `agent-get`");
+  });
+
+  it.each([
+    ["a role ARN instead of the role id", { roleId: "arn:aws:iam::123456789012:role/agent" }],
+    ["a standard (non-FIFO) queue", { commandQueueUrl: `${FAKE_SQS_QUEUE_BASE}/cicd-agent-dev-example-server-dev-cmd` }],
+    ["no target", { targets: [] }],
+    ["a duplicated target", { targets: ["example-app-dev", "example-app-dev"] }],
+    ["an extra field", { password: "x" }],
+  ])("refuses %s", async (_label, overrides) => {
+    const h = harness({ file: agentInput(overrides) });
+    expect(await runTargetRegistryTool(AGENT_PUT, withAgentSchema(h))).toBe(1);
+    expect(h.sent).toEqual([]);
+  });
+
+  it("dry run validates and prints the agent checklist without any AWS client", async () => {
+    const h = harness({ file: agentInput() });
+    expect(await runTargetRegistryTool(["agent-put", "--file", "agent.json", "--updated-by", "platform-admin", "--dry-run"], withAgentSchema(h))).toBe(0);
+    expect(h.clients).toEqual([]);
+    expect(h.out.join("\n")).toContain("AGENT ONBOARDING CHECKLIST");
+    expect(h.out.join("\n")).toContain("dry run: would create example-server-dev; nothing was written");
+  });
+
+  it("a write requires --checklist-confirmed and the administrative profile, as for targets", async () => {
+    const h = harness({ file: agentInput() });
+    const noConfirm = AGENT_PUT.filter((a) => a !== "--checklist-confirmed");
+    expect(await runTargetRegistryTool(noConfirm, withAgentSchema(h))).toBe(2);
+    const executorProfile = AGENT_PUT.map((a) => (a === "cicd-admin" ? EXECUTOR_PROFILE : a));
+    expect(await runTargetRegistryTool(executorProfile, withAgentSchema(harness({ file: agentInput() })))).toBe(2);
+    expect(h.sent).toEqual([]);
+  });
+
+  it("agent-get reads AGENT#{agentId} / META consistently", async () => {
+    const h = harness({ reply: () => ({ Item: { pk: "AGENT#example-server-dev", sk: "META", ...agentInput(), version: 1 } }) });
+    expect(await runTargetRegistryTool(["agent-get", "--agent-id", "example-server-dev", "--registry-table", "cicd-registry-dev", "--region", "us-east-1", "--profile", "cicd-admin"], h.deps)).toBe(0);
+    expect(h.sent[0]?.input).toMatchObject({ Key: { pk: "AGENT#example-server-dev", sk: "META" }, ConsistentRead: true });
+  });
+
+  it("agent-put without the agent schema is a usage error, never an unvalidated write", async () => {
+    const h = harness({ file: agentInput() });
+    expect(await runTargetRegistryTool(AGENT_PUT, h.deps)).toBe(2);
+    expect(h.sent).toEqual([]);
   });
 });

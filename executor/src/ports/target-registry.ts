@@ -9,6 +9,8 @@ export interface TargetRecord {
   readonly targetId: string;
   readonly project: string;
   readonly environment: string;
+  /** architecture-change-04: absent or `ssh`. The registry adapter refuses `sqs-agent` records until the agent dispatch exists (E2). */
+  readonly transport?: "ssh";
   readonly host: string;
   /** SSH port; absent means 22 (design §6.3). */
   readonly port?: number;

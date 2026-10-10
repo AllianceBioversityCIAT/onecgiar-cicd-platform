@@ -174,3 +174,39 @@ describe("read-only guard (code level, in addition to IAM; R-3)", () => {
     expect(methods).toEqual(["getTarget"]);
   });
 });
+
+// architecture-change-04 (E1): the schema accepts `transport`, but this Executor has no agent dispatch yet.
+describe("DynamoDbTargetRegistry: transport (architecture-change-04, E1)", () => {
+  it("still finds a record with transport ssh, exactly like a record without transport", async () => {
+    const { registry } = registryWith(async () => ({ Item: item({ transport: "ssh" }) }));
+    const result = await registry.getTarget("example-app-dev");
+    expect(result.kind).toBe("found");
+  });
+
+  it("refuses an sqs-agent record (fail closed until E2): it is never handed to the SSH path", async () => {
+    const stored = {
+      pk: "TARGET#example-app-dev",
+      sk: "META",
+      targetId: "example-app-dev",
+      project: "example",
+      environment: "dev",
+      transport: "sqs-agent",
+      agentId: "example-server-dev",
+      scriptId: "deploy-example-app-dev",
+      deployWindowPolicy: "required",
+      sourceRepositoryId: "123456789",
+      schemaVersion: 1,
+      version: 1,
+      updatedAt: "2026-10-07T12:00:00Z",
+      updatedBy: "platform-admin",
+    };
+    const { registry } = registryWith(async () => ({ Item: stored }));
+    expect(await registry.getTarget("example-app-dev")).toEqual({ kind: "invalid", problems: ["/transport sqs-agent is not enabled in this Executor version"] });
+  });
+
+  it("refuses an sqs-agent record that still carries SSH fields (schema)", async () => {
+    const { registry } = registryWith(async () => ({ Item: item({ transport: "sqs-agent", agentId: "example-server-dev", scriptId: "deploy-example-app-dev" }) }));
+    const result = await registry.getTarget("example-app-dev");
+    expect(result.kind).toBe("invalid");
+  });
+});

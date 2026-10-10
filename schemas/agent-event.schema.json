@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecgiar-cicd-platform/schemas/agent-event.schema.json",
+  "title": "AGENT_EVENT (agent to the Executor, architecture-change-04)",
+  "$comment": "@akili-spec changes/cicd-executor-poc architecture-change-04 §6, §7, §10.3. Sent to the shared results FIFO queue with MessageGroupId = executionId and MessageDeduplicationId = <commandId>:<seq>. seq is monotonic per command and persisted by the agent; the Executor applies an event only if seq > lastEventSeq, dispatchToken matches and the execution is DEPLOYING (otherwise it is audit only). The sender is authenticated by SenderId (role id of AGENT#{agentId}), never by these fields. Phase meaning: ACCEPTED journaled; STARTED spawned; HEARTBEAT running; FINISHED process group ended; NOT_STARTED never started and never will (reason); LOST started then interrupted, effect unknown; NEVER_SEEN answer to AGENT_QUERY, evidence only under the journal rule; NO_RECORD answer that proves nothing; LOG_UPLOADED log stored or failed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["specVersion", "type", "phase", "commandId", "executionId", "dispatchToken", "fencingToken", "agentId", "targetId", "seq", "sentAt", "agentVersion"],
+  "properties": {
+    "specVersion": { "const": 1 },
+    "type": { "const": "AGENT_EVENT" },
+    "phase": { "enum": ["ACCEPTED", "STARTED", "HEARTBEAT", "FINISHED", "NOT_STARTED", "LOST", "NEVER_SEEN", "NO_RECORD", "LOG_UPLOADED"] },
+    "commandId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}-[1-9][0-9]{0,11}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "executionId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}-[1-9][0-9]{0,11}$" },
+    "dispatchToken": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "fencingToken": { "type": "integer", "minimum": 0, "$comment": "The command's token; 0 only in NEVER_SEEN and NO_RECORD (the agent never saw the command)." },
+    "agentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,39}$" },
+    "targetId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
+    "seq": { "type": "integer", "minimum": 1, "maximum": 999999 },
+    "sentAt": { "type": "string", "format": "date-time" },
+    "agentVersion": { "type": "string", "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,4}$" },
+    "acceptedAt": { "type": "string", "format": "date-time" },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "pid": { "type": "integer", "minimum": 1 },
+    "elapsedMs": { "type": "integer", "minimum": 0 },
+    "exitCode": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "signal": { "type": ["string", "null"], "pattern": "^SIG[A-Z0-9]{2,10}$" },
+    "timedOut": { "type": "boolean" },
+    "durationMs": { "type": "integer", "minimum": 0 },
+    "cicdResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "deployedImages": { "type": "object", "maxProperties": 16, "additionalProperties": { "type": "string", "maxLength": 512 } },
+        "previousImages": { "type": "object", "maxProperties": 16, "additionalProperties": { "type": "string", "maxLength": 512 } },
+        "migrations": { "enum": ["APPLIED", "NONE", "FAILED"] },
+        "healthy": { "type": "boolean" },
+        "mutexHolder": { "type": "string", "maxLength": 256 },
+        "deployedCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+      },
+      "$comment": "The script's CICD_RESULT (AC-03 G-D6), parsed by the agent with the same rules as the Executor."
+    },
+    "logTail": { "type": "string", "maxLength": 4096, "$comment": "Redacted last lines; the full log is in S3." },
+    "reason": {
+      "enum": [
+        "EXPIRED", "BUSY", "ABANDONED", "CLOCK_SKEW", "PREDATES_JOURNAL", "TARGET_ACTIVE", "STALE_FENCING",
+        "REJECTED_SCHEMA", "REJECTED_SENDER", "REJECTED_AGENT", "REJECTED_TARGET", "REJECTED_SCRIPT", "REJECTED_ARGS", "REJECTED_CONFIG"
+      ]
+    },
+    "journalEpoch": { "type": "string", "format": "date-time", "$comment": "When the agent's journal was created (persisted at first start)." },
+    "journalRetentionDays": { "type": "integer", "minimum": 1, "maximum": 3650 },
+    "log": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["UPLOADED", "FAILED"] },
+        "key": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  },
+  "allOf": [
+    { "if": { "properties": { "phase": { "const": "ACCEPTED" } } }, "then": { "properties": { "acceptedAt": true }, "required": ["acceptedAt"] } },
+    { "if": { "properties": { "phase": { "const": "STARTED" } } }, "then": { "properties": { "startedAt": true }, "required": ["startedAt"] } },
+    { "if": { "properties": { "phase": { "const": "HEARTBEAT" } } }, "then": { "properties": { "elapsedMs": true }, "required": ["elapsedMs"] } },
+    {
+      "if": { "properties": { "phase": { "const": "FINISHED" } } },
+      "then": { "properties": { "exitCode": true, "timedOut": true, "durationMs": true }, "required": ["exitCode", "timedOut", "durationMs"] }
+    },
+    { "if": { "properties": { "phase": { "const": "NOT_STARTED" } } }, "then": { "properties": { "reason": true }, "required": ["reason"] } },
+    { "if": { "properties": { "phase": { "const": "LOST" } } }, "then": { "properties": { "startedAt": true }, "required": ["startedAt"] } },
+    {
+      "if": { "properties": { "phase": { "const": "NEVER_SEEN" } } },
+      "then": { "properties": { "journalEpoch": true, "journalRetentionDays": true }, "required": ["journalEpoch", "journalRetentionDays"] }
+    },
+    { "if": { "properties": { "phase": { "const": "NO_RECORD" } } }, "then": { "properties": { "journalEpoch": true }, "required": ["journalEpoch"] } },
+    { "if": { "properties": { "phase": { "const": "LOG_UPLOADED" } } }, "then": { "properties": { "log": true }, "required": ["log"] } },
+    {
+      "if": { "properties": { "phase": { "enum": ["NEVER_SEEN", "NO_RECORD"] } } },
+      "then": { "properties": { "fencingToken": { "type": "integer", "const": 0 } } },
+      "else": { "properties": { "fencingToken": { "type": "integer", "minimum": 1 } } }
+    }
+  ]
+}

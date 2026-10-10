@@ -86,6 +86,18 @@ const PATH_SCOPED_ALLOWLIST = [
     reason: "T-17 logger test — same FAKE_* redaction fixtures; off limits to this task (leader note).",
   },
   {
+    path: "executor/test/contract/agent-schemas.contract.test.ts",
+    rules: ["amazonaws-hostname"],
+    requireFakeMarker: true,
+    reason: "architecture-change-04: the agent record schema requires an SQS FIFO queue URL; one FAKE_SQS_QUEUE_BASE literal with AWS's documentation account id.",
+  },
+  {
+    path: "executor/test/unit/target-registry-tool.test.ts",
+    rules: ["amazonaws-hostname"],
+    requireFakeMarker: true,
+    reason: "architecture-change-04: agent-put fixtures need an SQS FIFO queue URL; one FAKE_SQS_QUEUE_BASE literal with AWS's documentation account id.",
+  },
+  {
     path: "executor/test/contract/targets-schema.contract.test.ts",
     rules: ["pem-private-key"],
     requireFakeMarker: false,

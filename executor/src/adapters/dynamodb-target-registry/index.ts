@@ -67,6 +67,9 @@ export class DynamoDbTargetRegistry implements TargetRegistry {
     if (pk !== partitionKey || sk !== SORT_KEY) return { kind: "invalid", problems: ["(key) pk/sk do not match the requested target"] };
     if (!this.#validate(attributes)) return { kind: "invalid", problems: describeErrors(this.#validate) };
     if (attributes.targetId !== targetId) return { kind: "invalid", problems: ["/targetId does not match the item key"] };
+    // architecture-change-04: the schema already accepts `transport: sqs-agent` (E1), but this Executor has no agent
+    // dispatch yet (E2). Fail closed: such a target is TARGET_INVALID, never handed to the SSH path.
+    if (attributes.transport === "sqs-agent") return { kind: "invalid", problems: ["/transport sqs-agent is not enabled in this Executor version"] };
     return { kind: "found", target: attributes as unknown as TargetRecord };
   }
 }

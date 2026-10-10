@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecgiar-cicd-platform/schemas/agent-command.schema.json",
+  "title": "AGENT_COMMAND (Executor to one agent, architecture-change-04)",
+  "$comment": "@akili-spec changes/cicd-executor-poc architecture-change-04 §6, §8, §10.2. Sent once per dispatch to the agent's FIFO command queue with MessageGroupId = targetId and MessageDeduplicationId = commandId. commandId = <executionId>:<dispatchToken> (cross-field equality is checked by domain/agent-protocol, not here). The agent never takes a path or a command from it: scriptId is a catalog key and args is the AC-03 vector (standard) or empty (none), re-validated against the catalog. notAfter is the latest START; killGraceSeconds is the value the Executor used in hardDeadlineAt (§17), and the agent refuses a catalog value larger than it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "specVersion", "type", "commandId", "executionId", "dispatchToken", "fencingToken", "agentId", "targetId", "scriptId",
+    "args", "issuedAt", "notAfter", "timeoutSeconds", "killGraceSeconds", "log", "commit", "requestId", "project", "environment"
+  ],
+  "properties": {
+    "specVersion": { "const": 1 },
+    "type": { "const": "AGENT_COMMAND" },
+    "commandId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}-[1-9][0-9]{0,11}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "executionId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}-[1-9][0-9]{0,11}$" },
+    "dispatchToken": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "fencingToken": { "type": "integer", "minimum": 1 },
+    "agentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,39}$" },
+    "targetId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
+    "scriptId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
+    "args": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "type": "string", "minLength": 1, "maxLength": 300, "pattern": "^[^\\u0000-\\u001f\\u007f]+$" },
+      "$comment": "One element per argument, never joined into a shell string; no control characters."
+    },
+    "issuedAt": { "type": "string", "format": "date-time" },
+    "notAfter": { "type": "string", "format": "date-time" },
+    "timeoutSeconds": { "type": "integer", "minimum": 60, "maximum": 3600 },
+    "killGraceSeconds": { "type": "integer", "minimum": 5, "maximum": 600 },
+    "log": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bucket", "keyPrefix"],
+      "properties": {
+        "bucket": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$" },
+        "keyPrefix": {
+          "type": "string",
+          "pattern": "^logs/[a-z0-9][a-z0-9-]{0,62}/[a-z][a-z0-9-]{0,15}/[a-z0-9][a-z0-9-]{1,62}/[a-z0-9][a-z0-9-]{1,62}-[1-9][0-9]{0,11}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/$",
+          "$comment": "logs/<project>/<environment>/<targetId>/<executionId>/<dispatchToken>/ (§12)."
+        }
+      }
+    },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "requestId": { "type": "string", "pattern": "^[0-9]{1,20}-[0-9]{1,4}$" },
+    "project": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
+    "environment": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,15}$" }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecgiar-cicd-platform/schemas/agent-heartbeat.schema.json",
+  "title": "AGENT_HEARTBEAT (agent liveness, architecture-change-04)",
+  "$comment": "@akili-spec changes/cicd-executor-poc architecture-change-04 §6. Sent every 60 s (AP-7), also when idle, to the results FIFO queue with MessageGroupId = agent#<agentId>. Liveness and clock offset only: it never extends or shortens a lock (§9.2).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["specVersion", "type", "agentId", "agentVersion", "sentAt", "clockOffsetMs", "running"],
+  "properties": {
+    "specVersion": { "const": 1 },
+    "type": { "const": "AGENT_HEARTBEAT" },
+    "agentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,39}$" },
+    "agentVersion": { "type": "string", "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,4}$" },
+    "sentAt": { "type": "string", "format": "date-time" },
+    "clockOffsetMs": { "type": "integer", "minimum": -86400000, "maximum": 86400000, "$comment": "Offset of the agent clock to AWS as measured by the SDK." },
+    "running": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}-[1-9][0-9]{0,11}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" }
+    }
+  }
+}

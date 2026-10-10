@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecgiar-cicd-platform/schemas/agent-record.schema.json",
+  "title": "Agent record (Target Registry, architecture-change-04)",
+  "$comment": "@akili-spec changes/cicd-executor-poc architecture-change-04 §5, §11.4. One item of cicd-registry-<stage> (AGENT#{agentId} / META), validated without its key attributes. Written only by the administrative tool, read by the Executor with GetItem. roleId is the agent role's unique id, compared with the role-id prefix of the SQS SenderId of every agent event (AG-D8); commandQueueUrl is where the Executor sends this agent's commands; targets lists the targetIds this agent may serve (an event about any other target is refused). Values are non-secret; never committed (DD-23).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agentId", "stage", "roleId", "commandQueueUrl", "targets", "minAgentVersion", "schemaVersion", "version", "updatedAt", "updatedBy"],
+  "properties": {
+    "agentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,39}$" },
+    "stage": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,15}$", "$comment": "Platform stage (AP-4: one agent per server and platform stage)." },
+    "roleId": { "type": "string", "pattern": "^AROA[A-Z0-9]{17}$", "$comment": "Unique id of the agent's IAM role (never an ARN, never a credential)." },
+    "commandQueueUrl": {
+      "type": "string",
+      "pattern": "^https://sqs\\.[a-z0-9-]+\\.amazonaws\\.com/[0-9]{12}/cicd-agent-[a-z0-9-]{1,60}-cmd\\.fifo$",
+      "$comment": "The agent's FIFO command queue (AP-1)."
+    },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" }
+    },
+    "minAgentVersion": { "type": "string", "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,4}$" },
+    "schemaVersion": { "const": 1 },
+    "version": { "type": "integer", "minimum": 1 },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "updatedBy": { "type": "string", "minLength": 1, "maxLength": 256 }
+  }
+}

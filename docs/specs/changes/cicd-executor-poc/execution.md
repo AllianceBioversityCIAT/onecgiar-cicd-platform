@@ -1011,3 +1011,42 @@ Executed by the owner (AWS, GitHub, Slack); prepared, checked and pushed (only t
 **Review.** FAIL (attempt 1: MAJOR units + artifacts could exceed the schema's 8 and the request would then be rejected after the push; MINOR `lastDeployed` semantics undocumented, mode-dependent mutex name, top-level code in the platform block, Docker targets with no artifact; NIT merge order, `inherit_errexit`, `deployedCommit` after a restore) → all fixed with tests red first where code changed → **PASS** (attempt 2; the bash ≥ 4.4 note applied).
 
 **Pending external (owner authorization required):** pushing these commits; pinning the new `deploy-request.reusable.yml` commit in the CI role trust (`PinnedWorkflowSha` stack update) and re-pinning the caller — needed only for empty units or caller artifacts; the deployed R-8 pin keeps the Docker flow working with this Executor. The pruning limitation of `deploy-container.sh` with a shared ECR repository remains open before two Docker targets share a server.
+
+## Multi-repository CI, first real integration and AC-04 E1 (2026-10-10)
+
+**Multi-repository CI (owner decision D2).** One CI role per repository (`infra/sam/ci-repository-role.yaml`), the
+main stack parameter `AdditionalCiRoleArns` (queue policy only), and the Executor binding `CICD_CI_REPOSITORY_BINDINGS`
+(a bound role is accepted only for its own `repository_id`). Commits `6e2759c`, `bf5d9df`; branch
+`feature/multi-repository-ci` pushed, not merged. Owner-authorized AWS and GitHub steps, each previewed first: the
+pilot repository's role stack (change set: one `AWS::IAM::Role`), the main stack update (SAM change set: only
+`Modify DeployQueuePolicy`, tags preserved), the binding secret, the pilot target record (fictitious SSH data,
+`deployWindowPolicy: required`) and the pilot CD Environment (pilot branch only, no reviewers, no admin bypass).
+
+**Notifications switch.** `CICD_NOTIFICATIONS_DISABLED=true` replaces Slack with a provider that only logs
+`notification suppressed`; exact values only, absent/empty/`false` keep Slack (commit `63f76fb`). Enabled in the
+running Executor for the weekend tests.
+
+**First real integration (two runs).** Pilot repository push → CI → both images in ECR → `deploy-request` (OIDC with
+the repository's own role, session name = `repository_id`) → SQS → Executor → DynamoDB. Both executions ended
+`FAILED (DEPLOY_WINDOW_CLOSED)` with the published digests recorded, no lock, no window, no dispatch token, no
+SSH and no notification sent (`EVT#` audit marks present, no Slack thread). The second run finished `SUCCESS` after
+the non-blocking spec typecheck job was removed from the pilot workflow.
+
+**AC-04 approved (revision 2) and E1 implemented (local, uncommitted).**
+- `schemas/target-record.schema.json`: optional `transport` (`ssh` default, `sqs-agent`), `agentId`, `scriptId`; SSH
+  fields required only for `ssh` and forbidden for `sqs-agent`; agent fields forbidden for `ssh`. Every earlier record
+  validates unchanged.
+- New schemas: `agent-record`, `agent-command`, `agent-event` (phase-specific fields), `agent-query`, `agent-heartbeat`;
+  all compile under the runtime Ajv strict options.
+- `executor/src/domain/agent-protocol/`: command identities and FIFO ids (≤ 128), `hardDeadlineAt`, pinned-lock
+  sentinel, fenced lock-change rule, `NEVER_SEEN` evidence rule, event → transition/lock effect (existing transitions
+  only), hold decision, agent acceptance (duplicate, `PREDATES_JOURNAL`, clock skew, expiry, `TARGET_ACTIVE`,
+  `STALE_FENCING`).
+- Registry adapter refuses `sqs-agent` targets (`TARGET_INVALID`) until E2; `TargetRecord` stays the SSH type.
+- Admin tool: `agent-put`, `agent-get`, `agent-checklist`; the `credentialRef` prefix rule applies to `ssh` targets only.
+- Publication guard: two path-scoped allowlist entries (`amazonaws-hostname`, FAKE marker required) for the queue URL
+  fixtures, which use AWS's documentation account id.
+
+**Validation.** `npm run check:local` exit 0: typecheck, lint, build, 62 test files passed / 16 skipped, 1705 tests
+passed, 95 skipped, 29 todo (28 are the E2/E3 acceptance cases of `agent-protocol.pending.test.ts`), guards 8/8,
+0 production vulnerabilities; `npm run test:integration` 14/14 files. No AWS, GitHub or server change in E1.

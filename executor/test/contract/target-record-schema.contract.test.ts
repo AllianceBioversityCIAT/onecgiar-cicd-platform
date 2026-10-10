@@ -207,3 +207,61 @@ describe("schemas/target-record.schema.json (FR-02, design §6.3, R-1)", () => {
     });
   });
 });
+
+// architecture-change-04 (E1): optional transport. Absent or ssh keeps the AC-02 V1 rules unchanged; sqs-agent
+// requires agentId + scriptId and forbids every SSH field.
+describe("schemas/target-record.schema.json: transport (architecture-change-04)", () => {
+  let validate: ValidateFunction;
+
+  beforeAll(() => {
+    validate = createAjv().compile(readJsonSchema(targetRecordSchemaPath));
+  });
+
+  function agentRecord(overrides: TargetRecord = {}): TargetRecord {
+    const record = validRecord();
+    for (const field of ["host", "port", "user", "hostKey", "credentialRef", "deployScript"]) delete record[field];
+    return { ...record, transport: "sqs-agent", agentId: "example-server-dev", scriptId: "deploy-example-app-dev", ...overrides };
+  }
+
+  it("a record without transport is exactly as valid as before (ssh by default)", () => {
+    expect(validate(validRecord())).toBe(true);
+  });
+
+  it("accepts transport ssh with the SSH fields", () => {
+    expect(validate({ ...validRecord(), transport: "ssh" })).toBe(true);
+  });
+
+  it("accepts an sqs-agent record with agentId and scriptId and no SSH field", () => {
+    expect(validate(agentRecord()), JSON.stringify(validate.errors)).toBe(true);
+  });
+
+  it("accepts scriptArguments none on an sqs-agent record (AC-03 G-D1 applies to both transports)", () => {
+    expect(validate(agentRecord({ scriptArguments: "none" }))).toBe(true);
+  });
+
+  it.each(["host", "port", "user", "hostKey", "credentialRef", "deployScript"])("rejects an sqs-agent record that carries %s", (field) => {
+    const ssh = validRecord();
+    expect(validate(agentRecord({ [field]: ssh[field] }))).toBe(false);
+  });
+
+  it.each(["agentId", "scriptId"])("rejects an sqs-agent record without %s", (field) => {
+    const record = agentRecord();
+    delete record[field];
+    expect(validate(record)).toBe(false);
+  });
+
+  it.each(["host", "user", "hostKey", "credentialRef", "deployScript"])("still rejects an ssh record without %s", (field) => {
+    const record: TargetRecord = { ...validRecord(), transport: "ssh" };
+    delete record[field];
+    expect(validate(record)).toBe(false);
+  });
+
+  it.each([["agentId", "example-server-dev"], ["scriptId", "deploy-x"]])("rejects an ssh record that carries %s", (field, value) => {
+    expect(validate({ ...validRecord(), [field]: value })).toBe(false);
+  });
+
+  it("rejects an unknown transport and a script path as scriptId", () => {
+    expect(validate({ ...validRecord(), transport: "http" })).toBe(false);
+    expect(validate(agentRecord({ scriptId: "/opt/cicd/deploy.sh" }))).toBe(false);
+  });
+});

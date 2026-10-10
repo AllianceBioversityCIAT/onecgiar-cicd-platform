@@ -12,12 +12,15 @@ import { runTargetRegistryTool } from "./index.js";
 // No fallback to instance metadata credentials if the administrative profile cannot be resolved.
 process.env["AWS_EC2_METADATA_DISABLED"] = "true";
 
-const schema = JSON.parse((await new BundledSchemaSource().getSchema("target-record.schema.json")).content) as object;
+const schemas = new BundledSchemaSource();
+const schema = JSON.parse((await schemas.getSchema("target-record.schema.json")).content) as object;
+const agentSchema = JSON.parse((await schemas.getSchema("agent-record.schema.json")).content) as object;
 
 const code = await runTargetRegistryTool(process.argv.slice(2), {
   env: process.env,
   clock: { now: () => new Date() },
   schema,
+  agentSchema,
   readFile: (path) => readFile(path, "utf8"),
   createClient: ({ region, profile }) => DynamoDBDocumentClient.from(new DynamoDBClient({ region, profile })),
   out: (line) => console.log(line),

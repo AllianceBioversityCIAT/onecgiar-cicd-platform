@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecgiar-cicd-platform/schemas/agent-query.schema.json",
+  "title": "AGENT_QUERY (Executor to one agent, architecture-change-04)",
+  "$comment": "@akili-spec changes/cicd-executor-poc architecture-change-04 §6, §9.3. Evidence query for a silent or held execution. Sent to the command's FIFO group (MessageGroupId = targetId) with MessageDeduplicationId = <commandId>:q<queryNumber>, so a pending copy of the command is processed first. FIFO order alone is NOT evidence: the agent answers NEVER_SEEN only when the journal can prove it (commandIssuedAt after the journal epoch, inside the retention, and after notAfter plus skew); otherwise NO_RECORD. commandIssuedAt and notAfter are the command's own values, so the agent can apply that rule without having the command.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["specVersion", "type", "queryNumber", "commandId", "executionId", "dispatchToken", "agentId", "targetId", "commandIssuedAt", "notAfter", "issuedAt"],
+  "properties": {
+    "specVersion": { "const": 1 },
+    "type": { "const": "AGENT_QUERY" },
+    "queryNumber": { "type": "integer", "minimum": 1, "maximum": 9999 },
+    "commandId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}-[1-9][0-9]{0,11}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "executionId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}-[1-9][0-9]{0,11}$" },
+    "dispatchToken": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "agentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,39}$" },
+    "targetId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
+    "commandIssuedAt": { "type": "string", "format": "date-time" },
+    "notAfter": { "type": "string", "format": "date-time" },
+    "issuedAt": { "type": "string", "format": "date-time" }
+  }
+}
