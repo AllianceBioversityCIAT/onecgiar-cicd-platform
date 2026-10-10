@@ -14,7 +14,9 @@ import type { DomainErrorCode, RejectReason } from "../../domain/errors/index.js
  * in-flight execution. `credentialRef` is a reference; the credential is read
  * only at connect time.
  */
-export interface TargetSnapshot {
+export interface SshTargetSnapshot {
+  /** Absent on executions accepted before architecture-change-04, which are ssh. */
+  readonly transport?: "ssh";
   /** Version of the target record that was copied. */
   readonly version: number;
   readonly project: string;
@@ -30,6 +32,53 @@ export interface TargetSnapshot {
   readonly sourceRepositoryId: string;
   /** Effective invocation mode (AC-03 G-D1); absent on executions accepted before AC-03, which are `standard`. */
   readonly scriptArguments?: "standard" | "none";
+}
+
+/**
+ * architecture-change-04 §5: an sqs-agent target, with the agent binding resolved from AGENT#{agentId} at X1. The
+ * agent's role id and command queue are snapshotted like everything else, so a later registry edit never redirects an
+ * in-flight execution, and every agent event is checked against the role id taken here.
+ */
+export interface AgentTargetSnapshot {
+  readonly transport: "sqs-agent";
+  readonly version: number;
+  readonly project: string;
+  readonly environment: string;
+  readonly agentId: string;
+  readonly scriptId: string;
+  readonly agentRoleId: string;
+  readonly commandQueueUrl: string;
+  readonly deployWindowPolicy: "required" | "not-required";
+  readonly sourceRepositoryId: string;
+  readonly scriptArguments?: "standard" | "none";
+}
+
+export type TargetSnapshot = SshTargetSnapshot | AgentTargetSnapshot;
+
+export function isAgentSnapshot(snapshot: TargetSnapshot): snapshot is AgentTargetSnapshot {
+  return snapshot.transport === "sqs-agent";
+}
+
+/** architecture-change-04 §6, §8: the agent dispatch of the current attempt (sqs-agent executions only). */
+export interface AgentDispatchState {
+  readonly commandId: string;
+  /** PENDING_SEND until the SendMessage is confirmed; events, not this field, are authoritative. */
+  readonly dispatchState: "PENDING_SEND" | "SENT";
+  readonly issuedAt: number;
+  readonly notAfter: number;
+  readonly hardDeadlineAt: number;
+  readonly timeoutSeconds: number;
+  readonly killGraceSeconds: number;
+  readonly sentAt?: number;
+  readonly sendAttempts: number;
+  readonly acceptedAt?: number;
+  readonly lastHeartbeatAt?: number;
+  readonly lastEventSeq: number;
+  readonly queriesSent: number;
+  readonly lastQueryAt?: number;
+  readonly log?: { readonly bucket: string; readonly keyPrefix: string; readonly status?: "UPLOADED" | "FAILED"; readonly key?: string; readonly bytes?: number; readonly sha256?: string };
+  /** The cause the agent reported (NOT_STARTED reason, LOST, TIMEOUT...), for audit and notifications. */
+  readonly cause?: string;
 }
 
 /** Execution item (`EXEC#{executionId}` / `META`), design §5.1. */
@@ -78,9 +127,16 @@ export interface ExecutionItem {
   readonly result?: { readonly code: number; readonly cicdResult?: string; readonly logTail?: string };
   readonly error?: { readonly code: DomainErrorCode; readonly message?: string };
   readonly slackThreadTs?: string;
+  /** architecture-change-04: the agent dispatch of the current attempt; cleared by X9 (rewritten) and X14. */
+  readonly agent?: AgentDispatchState;
+  /** architecture-change-04 §9.1: an UNKNOWN_TARGET_STATE whose lock is held (hold = true on the lock item). */
+  readonly hold?: { readonly since: number; readonly released?: number; readonly releasedBy?: string };
   readonly deadlineAt?: number;
-  /** Present (= "EXECUTION") only while `status` is non-terminal: GSI2's sparse key. */
-  readonly activeStatus?: "EXECUTION";
+  /**
+   * GSI2's sparse key: "EXECUTION" while `status` is non-terminal; "HOLD" only on an UNKNOWN_TARGET_STATE whose lock is
+   * held and still being queried for evidence (architecture-change-04 §9.3); absent otherwise.
+   */
+  readonly activeStatus?: "EXECUTION" | "HOLD";
   readonly startedAt: number;
   readonly finishedAt?: number;
   /** Epoch seconds (DynamoDB TTL); 180 days after creation. */
@@ -188,8 +244,17 @@ export interface LockItem {
   readonly fencingToken: number;
   readonly leaseExpiresAt: number;
   readonly acquiredAt: number;
-  /** TTL cleanup only (forward pointer T-08.a): never the mechanism that frees the lock. */
-  readonly expiresAt: number;
+  /**
+   * TTL cleanup only (forward pointer T-08.a): never the mechanism that frees the lock. ABSENT while the lock is pinned
+   * or held (architecture-change-04 §5): a TTL deletion would reset the fencing counter.
+   */
+  readonly expiresAt?: number;
+  /** architecture-change-04 §5: PINNED from X9 of an sqs-agent dispatch (leaseExpiresAt = PINNED_LEASE_EXPIRES_AT). */
+  readonly mode?: "LEASE" | "PINNED";
+  /** architecture-change-04 §9.1: UNKNOWN_TARGET_STATE keeps the lock; released only by evidence or an operator. */
+  readonly hold?: boolean;
+  readonly holdReason?: string;
+  readonly holdSince?: number;
 }
 
 /** Event mark item (`EXEC#{executionId}` / `EVT#{eventKey}`) — presence-only, design §5.1. */

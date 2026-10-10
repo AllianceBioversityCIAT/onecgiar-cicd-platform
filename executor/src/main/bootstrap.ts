@@ -36,6 +36,13 @@ import {
 } from "../adapters/dynamodb-state-store/index.js";
 import { createSlackProvider } from "../adapters/notify/slack-provider/index.js";
 import { createSuppressedNotificationProvider } from "../adapters/notify/suppressed-provider/index.js";
+import { createSqsAgentDispatcher } from "../adapters/sqs-agent-dispatcher/index.js";
+import { AgentEventRepository } from "../adapters/dynamodb-state-store/agent-event-repository.js";
+import { createAgentTransport, type AgentTransport } from "../application/agent-transport/index.js";
+import { createAgentContractValidators } from "../application/agent-transport/validators.js";
+import { createAgentResultsHandler } from "../inbound/agent-results/index.js";
+import type { AgentDispatcher } from "../ports/agent-dispatcher.js";
+import { DEFAULT_DEPLOY_TIMEOUT_MINUTES } from "../application/deploy-coordinator/index.js";
 import { createSqsQueuePublisher } from "../adapters/sqs-publisher/index.js";
 import { Ssh2DeployTransport } from "../adapters/ssh-deployer/index.js";
 import { DynamoDbTargetRegistry } from "../adapters/dynamodb-target-registry/index.js";
@@ -106,12 +113,18 @@ export interface BootstrapOptions {
     metrics: Metrics;
   }) => ConsumerHandle;
   readonly healthcheckIntervalMs?: number;
+  /** architecture-change-04: replaces the SQS FIFO agent dispatcher (tests use an in-memory agent). */
+  readonly agentDispatcher?: AgentDispatcher;
 }
 
 export interface Executor {
   readonly config: ExecutorConfig;
   /** Routes one raw message exactly as the consumer would (used by the consumer and by tests). */
   handle(message: InboundMessage): Promise<{ ack: boolean }>;
+  /** architecture-change-04: one message of the agent results queue (used by its consumer and by tests); absent when the agent transport is off. */
+  readonly handleAgentMessage?: (message: InboundMessage) => Promise<{ ack: boolean }>;
+  /** architecture-change-04: the agent transport, when configured (tests drive its reconciler path directly). */
+  readonly agentTransport?: AgentTransport;
   start(): Promise<void>;
   /** Ordered shutdown (idempotent): stop the consumer, wait for in-flight work, then flush logs. */
   stop(): Promise<void>;
@@ -134,6 +147,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
   const schemas = options.schemas ?? new BundledSchemaSource(config.definitionsRoot === undefined ? {} : { root: config.definitionsRoot });
   const validators = await createMessageValidators(schemas);
   const targetRecordSchema = JSON.parse((await schemas.getSchema("target-record.schema.json")).content) as object;
+  // architecture-change-04: the agent schemas are loaded only when the agent transport is configured (safe mode otherwise).
+  const agentRecordSchema = config.agentTransport === undefined ? undefined : (JSON.parse((await schemas.getSchema("agent-record.schema.json")).content) as object);
+  const agentValidators = config.agentTransport === undefined ? undefined : await createAgentContractValidators(schemas);
 
   // 3. Adapters over the single table (design §5.1).
   const client = options.documentClient ?? createDocumentClient({ tableName: config.tableName, region: config.region, ...(config.dynamoEndpoint === undefined ? {} : { endpoint: config.dynamoEndpoint }) });
@@ -143,13 +159,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
   const locks = new LockRepository(client, table);
   const windowsRepo = new DeployWindowRepository(client, table);
   const stateStore = new DynamoDbStateStore(client, table);
-  const transactions = new DeployTransactions(client, executions, targets);
+  const transactions = new DeployTransactions(client, executions, targets, locks);
   const dedupe = new DedupeRepository(client, table);
   // Target Registry (AC-02 V1, design §5.3): a separate table read with GetItem only; validated with the R-1 schema.
   const registry = new DynamoDbTargetRegistry({
     client,
     tableName: config.registryTableName,
     schema: targetRecordSchema,
+    ...(agentRecordSchema === undefined ? {} : { agentSchema: agentRecordSchema }),
   });
 
   const sqs = options.publisher === undefined || options.createConsumer === undefined ? new SQSClient({ region: config.region }) : undefined;
@@ -187,6 +204,38 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
   // 4. Services.
   const windows = new DeployWindowService({ windows: windowsRepo, targets: registry, clock });
   const transport = options.createTransport?.() ?? new Ssh2DeployTransport({ secrets, logger });
+  const resolution = new TargetResolutionService({
+    unresolved: createUnresolvedStore({ targets, clock }),
+    executions: createExecutionLookup(executions),
+    locks: createLockOwnerLookup(locks),
+    audit: createResolutionAuditWriter(new ResolutionAuditRepository(client, table)),
+    clock,
+  });
+  // architecture-change-04: the asynchronous sqs-agent transport (only when configured).
+  const agentTransport =
+    config.agentTransport === undefined || agentValidators === undefined
+      ? undefined
+      : createAgentTransport({
+          executions,
+          transactions,
+          locks,
+          target: targets,
+          windows,
+          dispatcher: options.agentDispatcher ?? createSqsAgentDispatcher({ client: sqs ?? new SQSClient({ region: config.region }) }),
+          queue: publisher,
+          audit: new AgentEventRepository(client, table),
+          resolver: {
+            resolveWithEvidence: async (input) =>
+              (await resolution.record({ eventId: input.eventId, targetId: input.targetId, executionId: input.executionId, resolvedBy: input.resolvedBy, observedDigests: {}, note: input.note })).outcome,
+          },
+          registry: { agentRoleId: (agentId) => registry.agentRoleId(agentId) },
+          validators: agentValidators,
+          clock,
+          logBucket: config.agentTransport.logBucket,
+          deployTimeoutMinutes: DEFAULT_DEPLOY_TIMEOUT_MINUTES,
+          onError: (message, fields) => logger.error(message, fields),
+          onWarn: (message, fields) => logger.warn(message, fields),
+        });
   const rawCoordinator = createDeployCoordinator({
     executions,
     transactions,
@@ -197,6 +246,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
     queue: publisher,
     clock,
     semaphore: new Semaphore(config.sshConcurrency),
+    ...(agentTransport === undefined ? {} : { agent: agentTransport }),
     onCleanupError: (error, resource) => logger.warn("coordinator cleanup failed", { resource, error: error instanceof Error ? error.message : String(error) }),
   });
   const coordinator = withNotifications(rawCoordinator, notifier, pending);
@@ -219,13 +269,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
     metrics,
     clock,
     onTransitioned: (info) => notifier.outcomeInBackground(info.executionId),
-  });
-  const resolution = new TargetResolutionService({
-    unresolved: createUnresolvedStore({ targets, clock }),
-    executions: createExecutionLookup(executions),
-    locks: createLockOwnerLookup(locks),
-    audit: createResolutionAuditWriter(new ResolutionAuditRepository(client, table)),
-    clock,
+    ...(agentTransport === undefined ? {} : { agent: agentTransport }),
   });
 
   // 5. Router: sender authorization (DD-25: the shared CI role and the platform principals), the Target Registry
@@ -262,6 +306,17 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
       options.createConsumer?.({ handle, logger, metrics }) ??
       createSqsConsumer({ client: sqs as SQSClient, queueUrl: config.queueUrl, handle, logger, metrics, maxMessages: 1 }),
   );
+  // architecture-change-04: one independent consumer of the shared FIFO results queue (it never waits for a deploy).
+  const handleAgentMessage =
+    agentTransport === undefined
+      ? undefined
+      : createAgentResultsHandler({ agent: agentTransport, logger, onOutcome: (executionId) => notifier.outcomeInBackground(executionId) });
+  if (handleAgentMessage !== undefined && config.agentTransport !== undefined && options.createConsumer === undefined) {
+    consumers.push(
+      createSqsConsumer({ client: sqs as SQSClient, queueUrl: config.agentTransport.resultsQueueUrl, handle: handleAgentMessage, logger, metrics, maxMessages: 1 }),
+    );
+  }
+  if (agentTransport !== undefined) logger.info("agent transport enabled", { eventType: "AGENT_TRANSPORT_ENABLED" });
   const heartbeat = createHeartbeat({
     metrics,
     clock,
@@ -275,6 +330,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
   return {
     config,
     handle,
+    ...(handleAgentMessage === undefined ? {} : { handleAgentMessage }),
+    ...(agentTransport === undefined ? {} : { agentTransport }),
     async start() {
       heartbeat.start();
       await Promise.all(consumers.map((c) => c.start()));

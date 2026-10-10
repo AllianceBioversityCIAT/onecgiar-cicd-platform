@@ -320,3 +320,17 @@ Revision 2 adds about 25 probable hours (E2 +15, E3 +10). Critical path: E0 → 
 
 ## 21. Spec impact once approved
 Design §1.2, §5.1 (execution, lock and agent items, lock TTL rule), §6.3 (target record), §6.4–§6.6 (agent, logs, notifications), §7.2–§7.5 (dispatch, X11/X14 causes, X16 hold, lock lifecycle), §11, DD-09 (pinned lock and hold), new DD for the agent; requirements FR-11, FR-12, FR-14, FR-15, NFR-01, NFR-04; tasks E0–E7; `docs/STATUS.md`.
+
+## 22. E2 implementation notes (Executor, 2026-10-10)
+No decision of this document changed. Details fixed by the implementation and its tests:
+
+| Item | As implemented |
+|---|---|
+| Fresh fencing token per dispatch | A release with proof, or of a hold, sets the lock owner to `(released)`. The next acquisition, even by the same execution (retry after X14), is then `LEASE_EXPIRED` with a strictly higher token, so an agent never sees two commands with the same token (§10.4). Found by the NEVER_SEEN retry test: a re-entrant acquisition kept the token |
+| Agent binding | Resolved by the registry adapter at X1 and snapshotted (`agentRoleId`, `commandQueueUrl`); a missing agent, an invalid agent record or an agent that does not list the target is `TARGET_INVALID` |
+| Configuration | Optional `CICD_AGENT_RESULTS_QUEUE_URL` (FIFO) and `CICD_AGENT_LOG_BUCKET`, both or neither. Without them every `sqs-agent` target is `TARGET_INVALID` and the Executor behaves as before |
+| Event audit | One item per received event, `EXEC#{executionId}` / `AGEVT#{dispatchToken}#{seq}`, written once, with its disposition (applied, progress, duplicate, late, not evidence, hold released, operator required); replaces the bounded `lateEvents[]` of §5 |
+| HOLD partition | A held `UNKNOWN_TARGET_STATE` whose agent is still queried stays in GSI2 under `activeStatus = HOLD`; the reconciler reads it with a third query only when the agent transport is configured |
+| Hold release | `TARGET_RESOLUTION_RECORDED` releases a hold of the same execution (owner and token) before removing the `unresolved[]` entry; verified never-started evidence uses the same service with `resolvedBy = agent:<agentId>` |
+| SSH | X16 holds the lock as well (AP-3); renew and release never touch a pinned or held lock |
+| Not in E2 | The agent (E3), templates (E4), the real SQS `SenderId` and deduplication window (E5), log links in notifications (E7) |

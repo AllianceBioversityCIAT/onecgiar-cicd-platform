@@ -29,6 +29,9 @@ export const FAILURE_CODES = [
   "MIGRATION",
   "START",
   "HEALTH",
+  // architecture-change-04 (sqs-agent): X11 causes proved by the agent or the dispatch, never by silence.
+  "AGENT_REJECTED",
+  "AGENT_DISPATCH_FAILED",
 ] as const;
 export type FailureCode = (typeof FAILURE_CODES)[number];
 

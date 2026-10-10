@@ -13,9 +13,12 @@ import type { ExecutionTransitionExpected, ExecutionUpdatePatch } from "../../sr
 import type {
   BeginDispatchInput,
   BeginDispatchOutcome,
+  CloseWithReleaseInput,
+  CloseWithReleaseOutcome,
   MarkUnknownInput,
   MarkUnknownOutcome,
 } from "../../src/adapters/dynamodb-state-store/deploy-transactions.js";
+import { PINNED_LEASE_EXPIRES_AT } from "../../src/domain/agent-protocol/index.js";
 import type {
   RecordDeployedInput,
   RecordDeployedOutcome,
@@ -113,6 +116,19 @@ export class World {
     return this.lock !== undefined && this.lock.leaseExpiresAt < this.clock.nowMs;
   }
 
+  /** architecture-change-04: the lock is pinned (no expiry) and, optionally, held. */
+  public lockIsPinned(): boolean {
+    return this.lock !== undefined && this.lock.leaseExpiresAt === PINNED_LEASE_EXPIRES_AT;
+  }
+
+  public lockIsHeld(): boolean {
+    return this.lock?.hold === true;
+  }
+
+  public ownsLock(owner: string, fencingToken: number): boolean {
+    return this.lock !== undefined && this.lock.owner === owner && this.lock.fencingToken === fencingToken;
+  }
+
   /** Another owner takes the lock over (lease lost, a newer fencing token). */
   public stealLock(owner = "exec-other"): void {
     this.lock = {
@@ -166,11 +182,23 @@ export class FakeTransactions implements DeployTransactionPort {
   public async beginDispatch(input: BeginDispatchInput): Promise<BeginDispatchOutcome> {
     const item = this.world.executions.get(input.executionId);
     const stored = this.world.target.highestDispatched;
+    if (input.pin !== undefined) {
+      const lock = this.world.lock;
+      if (lock === undefined || !this.world.ownsLock(input.pin.owner, input.pin.fencingToken) || lock.leaseExpiresAt < input.now) {
+        return { outcome: "LOCK_CONDITION_FAILED" };
+      }
+    }
     if (!decideRaiseMax(stored, input.dispatched).accepted) return { outcome: "TARGET_CONDITION_FAILED" };
     if (!matches(item, input.expected)) return { outcome: "EXECUTION_CONFLICT" };
-    // Both or none.
+    // All or none.
     this.world.executions.set(input.executionId, applyPatch(item, input.patch));
     this.world.target = { ...this.world.target, highestDispatched: input.dispatched };
+    if (input.pin !== undefined && this.world.lock !== undefined) {
+      const rest: LockItem = { ...this.world.lock };
+      delete (rest as { expiresAt?: number }).expiresAt;
+      this.world.lock = { ...rest, leaseExpiresAt: PINNED_LEASE_EXPIRES_AT, mode: "PINNED" };
+      this.world.events.push("lock:pinned");
+    }
     this.world.events.push("tx:X9");
     return { outcome: "COMMITTED" };
   }
@@ -180,7 +208,26 @@ export class FakeTransactions implements DeployTransactionPort {
     if (!matches(item, input.expected)) return { outcome: "EXECUTION_CONFLICT" };
     this.world.executions.set(input.executionId, applyPatch(item, input.patch));
     this.world.target = { ...this.world.target, unresolved: [...(this.world.target.unresolved ?? []), input.entry] };
+    let held = false;
+    if (input.hold !== undefined && this.world.ownsLock(input.hold.owner, input.hold.fencingToken) && this.world.lock !== undefined) {
+      const rest: LockItem = { ...this.world.lock };
+      delete (rest as { expiresAt?: number }).expiresAt;
+      this.world.lock = { ...rest, leaseExpiresAt: PINNED_LEASE_EXPIRES_AT, mode: "PINNED", hold: true, holdReason: input.hold.reason, holdSince: input.now };
+      held = true;
+      this.world.events.push("lock:held");
+    }
     this.world.events.push("tx:X16");
+    return { outcome: "COMMITTED", held };
+  }
+
+  public async closeWithRelease(input: CloseWithReleaseInput): Promise<CloseWithReleaseOutcome> {
+    const item = this.world.executions.get(input.executionId);
+    if (!matches(item, input.expected)) return { outcome: "EXECUTION_CONFLICT" };
+    if (!this.world.ownsLock(input.owner, input.fencingToken) || this.world.lock?.hold === true) return { outcome: "LOCK_CONDITION_FAILED" };
+    this.world.executions.set(input.executionId, applyPatch(item, input.patch));
+    this.world.lock = { ...(this.world.lock as LockItem), owner: "(released)", leaseExpiresAt: input.now - 1, mode: "LEASE", expiresAt: 0 };
+    this.world.lockReleases += 1;
+    this.world.events.push("tx:close+release");
     return { outcome: "COMMITTED" };
   }
 }
@@ -192,6 +239,9 @@ export class FakeLocks implements DeployLockPort {
   }
   public async acquire(lockKey: string, me: string, now: number, leaseSeconds: number): Promise<LockAcquireOutcome> {
     const current = this.world.lock;
+    if (current !== undefined && (current.leaseExpiresAt === PINNED_LEASE_EXPIRES_AT || current.hold === true)) {
+      return { outcome: "BUSY", owner: current.owner, leaseExpiresAt: current.leaseExpiresAt };
+    }
     const decision = evaluateLockAcquisition(
       current === undefined ? undefined : { owner: current.owner, fencingToken: current.fencingToken, leaseExpiresAt: current.leaseExpiresAt },
       me,
@@ -205,13 +255,13 @@ export class FakeLocks implements DeployLockPort {
     return { outcome: "ACQUIRED", fencingToken: decision.fencingToken, leaseExpiresAt: decision.leaseExpiresAt, alreadyHeld };
   }
   public async renew(_lockKey: string, owner: string, now: number, leaseSeconds: number): Promise<boolean> {
-    if (this.world.renewRefused || this.world.lock?.owner !== owner) return false;
+    if (this.world.renewRefused || this.world.lock?.owner !== owner || this.world.lockIsPinned() || this.world.lockIsHeld()) return false;
     this.world.renewals += 1;
     this.world.lock = { ...this.world.lock, leaseExpiresAt: now + leaseSeconds * 1000 };
     return true;
   }
   public async release(_lockKey: string, owner: string, now: number): Promise<boolean> {
-    if (this.world.lock?.owner !== owner) return false;
+    if (this.world.lock?.owner !== owner || this.world.lockIsPinned() || this.world.lockIsHeld()) return false;
     this.world.lock = { ...this.world.lock, leaseExpiresAt: now - 1 };
     this.world.lockReleases += 1;
     this.world.events.push("lock:released");

@@ -13,7 +13,7 @@ import {
   QUEUED_DEADLINE_MS,
   type AcceptedDeployRequest,
 } from "../../src/application/execution-service/index.js";
-import type { TargetRecord } from "../../src/ports/target-registry.js";
+import type { SshTargetRecord, TargetRecord } from "../../src/ports/target-registry.js";
 import {
   FakeClock,
   FakeDedupe,
@@ -135,11 +135,12 @@ describe("execution-service: creation (X1)", () => {
   it("the snapshot is a copy: changing the record object afterwards never changes the stored execution", async () => {
     const { service, executions } = setup();
     const input = accepted();
-    const target = { ...input.target, hostKey: [...input.target.hostKey] };
+    const ssh = input.target as SshTargetRecord;
+    const target = { ...ssh, hostKey: [...ssh.hostKey] };
     const before = [...target.hostKey];
     await service.deployRequested({ ...input, target });
     target.hostKey.push("tampered");
-    expect(executions.items.get(`${TARGET_ID}-1`)?.targetSnapshot.hostKey).toEqual(before);
+    expect((executions.items.get(`${TARGET_ID}-1`)?.targetSnapshot as { hostKey?: readonly string[] } | undefined)?.hostKey).toEqual(before);
   });
 
   it("an absent port stays absent in the snapshot (22 is applied by the transport)", async () => {

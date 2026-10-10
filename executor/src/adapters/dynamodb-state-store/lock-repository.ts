@@ -16,6 +16,7 @@
 // that depends on fencing being monotonic across the lock's whole lifetime.
 import { GetCommand, PutCommand, UpdateCommand, type DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { evaluateLockAcquisition, type PersistedLockItem } from "../../domain/lock-policy/index.js";
+import { PINNED_LEASE_EXPIRES_AT } from "../../domain/agent-protocol/index.js";
 import { lockKeyOf, TABLE_PK_ATTR, TABLE_SK_ATTR } from "./keys.js";
 import { runConditionalWrite } from "./condition-error.js";
 import type { LockItem } from "./types.js";
@@ -40,6 +41,26 @@ export type LockAcquireOutcome =
   /** The read-time decision was ACQUIRABLE but a concurrent writer won the race first. */
   | { readonly outcome: "LOST_RACE" };
 
+/**
+ * architecture-change-04 §10.4: owner of a lock released with proof or after a hold. No execution has this id, so the
+ * next acquisition, even by the same execution (a retry after X14), is LEASE_EXPIRED and gets a STRICTLY higher fencing
+ * token: every sqs-agent dispatch carries a fresh token, and an agent never sees two commands with the same token.
+ */
+export const RELEASED_OWNER = "(released)";
+
+/** Appended to every lease operation: a PINNED or HELD lock (architecture-change-04 §9.1) is out of the lease protocol. */
+const UNPINNED_UNHELD = " AND #leaseExpiresAt <> :pinned AND (attribute_not_exists(#hold) OR #hold <> :true)";
+
+/** An Update usable inside `TransactWriteItems` (architecture-change-04: pin at X9, release or hold when closing). */
+export interface LockUpdateSpec {
+  readonly TableName: string;
+  readonly Key: Record<string, string>;
+  readonly UpdateExpression: string;
+  readonly ConditionExpression: string;
+  readonly ExpressionAttributeNames: Record<string, string>;
+  readonly ExpressionAttributeValues: Record<string, unknown>;
+}
+
 export class LockRepository {
   public constructor(
     private readonly client: DynamoDBDocumentClient,
@@ -60,6 +81,11 @@ export class LockRepository {
     const persisted: PersistedLockItem | undefined = current
       ? { owner: current.owner, fencingToken: current.fencingToken, leaseExpiresAt: current.leaseExpiresAt }
       : undefined;
+    // architecture-change-04 §9.1: a PINNED or HELD lock is never (re)acquired, not even by its owner: only the
+    // fenced closing transaction, evidence or an operator resolution frees it.
+    if (current !== undefined && (current.leaseExpiresAt === PINNED_LEASE_EXPIRES_AT || current.hold === true)) {
+      return { outcome: "BUSY", owner: current.owner, leaseExpiresAt: current.leaseExpiresAt };
+    }
     const decision = evaluateLockAcquisition(persisted, me, now, leaseSeconds);
 
     if (decision.outcome === "BUSY") {
@@ -98,9 +124,9 @@ export class LockRepository {
       // item the other already rewrote a moment earlier (see this file's
       // top comment).
       const conditionExpression =
-        decision.reason === "REENTRANT"
+        (decision.reason === "REENTRANT"
           ? "#owner = :me AND #fencingToken = :expectedFencingToken"
-          : "#leaseExpiresAt < :now AND #fencingToken = :expectedFencingToken";
+          : "#leaseExpiresAt < :now AND #fencingToken = :expectedFencingToken") + UNPINNED_UNHELD;
       applied = await runConditionalWrite(() =>
         this.client.send(
           new UpdateCommand({
@@ -115,6 +141,7 @@ export class LockRepository {
               "#leaseExpiresAt": "leaseExpiresAt",
               "#acquiredAt": "acquiredAt",
               "#expiresAt": "expiresAt",
+              "#hold": "hold",
             },
             ExpressionAttributeValues: {
               ":me": me,
@@ -123,6 +150,8 @@ export class LockRepository {
               ":newLeaseExpiresAt": decision.leaseExpiresAt,
               ":ttl": ttl,
               ":expectedFencingToken": persisted?.fencingToken,
+              ":pinned": PINNED_LEASE_EXPIRES_AT,
+              ":true": true,
             },
           }),
         ),
@@ -141,6 +170,94 @@ export class LockRepository {
     };
   }
 
+  /**
+   * architecture-change-04 §8 step 2 (X9 of an sqs-agent dispatch): the short lease becomes PINNED, with no expiry and no
+   * TTL (a TTL deletion would reset the fencing counter). Only the owner with its fencing token, while its short lease is
+   * still live, can pin; a lost or expired lease cancels the X9 transaction.
+   */
+  public pinSpec(lockKey: string, owner: string, fencingToken: number, now: number): LockUpdateSpec {
+    const key = lockKeyOf(lockKey);
+    return {
+      TableName: this.tableName,
+      Key: { [TABLE_PK_ATTR]: key.pk, [TABLE_SK_ATTR]: key.sk },
+      UpdateExpression: "SET #leaseExpiresAt = :pinned, #mode = :pinnedMode REMOVE #expiresAt",
+      ConditionExpression: "#owner = :owner AND #fencingToken = :fencingToken AND #leaseExpiresAt >= :now",
+      ExpressionAttributeNames: { "#owner": "owner", "#fencingToken": "fencingToken", "#leaseExpiresAt": "leaseExpiresAt", "#mode": "mode", "#expiresAt": "expiresAt" },
+      ExpressionAttributeValues: { ":owner": owner, ":fencingToken": fencingToken, ":now": now, ":pinned": PINNED_LEASE_EXPIRES_AT, ":pinnedMode": "PINNED" },
+    };
+  }
+
+  /**
+   * architecture-change-04 §9.1: release with proof that no process exists, in the SAME transaction as the closing
+   * transition. Fenced on owner AND token: a late event of another execution, or of an older dispatch of a reacquired
+   * lock, can never release it. A held lock is released only by `releaseHoldSpec`. The item is kept (fencing stays
+   * monotonic) and the cleanup TTL is restored.
+   */
+  public releaseSpec(lockKey: string, owner: string, fencingToken: number, now: number): LockUpdateSpec {
+    const key = lockKeyOf(lockKey);
+    return {
+      TableName: this.tableName,
+      Key: { [TABLE_PK_ATTR]: key.pk, [TABLE_SK_ATTR]: key.sk },
+      UpdateExpression: "SET #leaseExpiresAt = :expired, #mode = :leaseMode, #expiresAt = :ttl, #owner = :released",
+      ConditionExpression: "#owner = :owner AND #fencingToken = :fencingToken AND (attribute_not_exists(#hold) OR #hold <> :true)",
+      ExpressionAttributeNames: { "#owner": "owner", "#fencingToken": "fencingToken", "#leaseExpiresAt": "leaseExpiresAt", "#mode": "mode", "#expiresAt": "expiresAt", "#hold": "hold" },
+      ExpressionAttributeValues: { ":owner": owner, ":fencingToken": fencingToken, ":expired": now - 1, ":leaseMode": "LEASE", ":ttl": Math.floor(now / 1000) + LOCK_ITEM_TTL_SECONDS, ":true": true, ":released": RELEASED_OWNER },
+    };
+  }
+
+  /**
+   * architecture-change-04 §9.1 (AP-3): X16 keeps the lock: pinned, no TTL, hold = true. Fenced on owner and token (an
+   * SSH run may have lost its lease meanwhile: then there is nothing of this execution to hold).
+   */
+  public holdSpec(lockKey: string, owner: string, fencingToken: number, now: number, reason: string): LockUpdateSpec {
+    const key = lockKeyOf(lockKey);
+    return {
+      TableName: this.tableName,
+      Key: { [TABLE_PK_ATTR]: key.pk, [TABLE_SK_ATTR]: key.sk },
+      UpdateExpression: "SET #leaseExpiresAt = :pinned, #mode = :pinnedMode, #hold = :true, #holdReason = :reason, #holdSince = :now REMOVE #expiresAt",
+      ConditionExpression: "#owner = :owner AND #fencingToken = :fencingToken",
+      ExpressionAttributeNames: {
+        "#owner": "owner",
+        "#fencingToken": "fencingToken",
+        "#leaseExpiresAt": "leaseExpiresAt",
+        "#mode": "mode",
+        "#hold": "hold",
+        "#holdReason": "holdReason",
+        "#holdSince": "holdSince",
+        "#expiresAt": "expiresAt",
+      },
+      ExpressionAttributeValues: { ":owner": owner, ":fencingToken": fencingToken, ":pinned": PINNED_LEASE_EXPIRES_AT, ":pinnedMode": "PINNED", ":true": true, ":reason": reason, ":now": now },
+    };
+  }
+
+  /** Releases a HELD lock (verified evidence or an operator resolution): owner, token AND hold must match. */
+  public releaseHoldSpec(lockKey: string, owner: string, fencingToken: number, now: number): LockUpdateSpec {
+    const key = lockKeyOf(lockKey);
+    return {
+      TableName: this.tableName,
+      Key: { [TABLE_PK_ATTR]: key.pk, [TABLE_SK_ATTR]: key.sk },
+      UpdateExpression: "SET #leaseExpiresAt = :expired, #mode = :leaseMode, #expiresAt = :ttl, #owner = :released REMOVE #hold, #holdReason, #holdSince",
+      ConditionExpression: "#owner = :owner AND #fencingToken = :fencingToken AND #hold = :true",
+      ExpressionAttributeNames: {
+        "#owner": "owner",
+        "#fencingToken": "fencingToken",
+        "#leaseExpiresAt": "leaseExpiresAt",
+        "#mode": "mode",
+        "#hold": "hold",
+        "#holdReason": "holdReason",
+        "#holdSince": "holdSince",
+        "#expiresAt": "expiresAt",
+      },
+      ExpressionAttributeValues: { ":owner": owner, ":fencingToken": fencingToken, ":expired": now - 1, ":leaseMode": "LEASE", ":ttl": Math.floor(now / 1000) + LOCK_ITEM_TTL_SECONDS, ":true": true, ":released": RELEASED_OWNER },
+    };
+  }
+
+  /** Standalone form of `releaseHoldSpec`; false when the lock is not this execution's held lock. */
+  public async releaseHold(lockKey: string, owner: string, fencingToken: number, now: number): Promise<boolean> {
+    const spec = this.releaseHoldSpec(lockKey, owner, fencingToken, now);
+    return runConditionalWrite(() => this.client.send(new UpdateCommand(spec)));
+  }
+
   /** FR-11 "renewal": conditional on `owner` — a non-owner's renewal is a no-op (FR-11 "ownership"). */
   public async renew(lockKey: string, owner: string, now: number, leaseSeconds: number): Promise<boolean> {
     const key = lockKeyOf(lockKey);
@@ -152,9 +269,9 @@ export class LockRepository {
           TableName: this.tableName,
           Key: { [TABLE_PK_ATTR]: key.pk, [TABLE_SK_ATTR]: key.sk },
           UpdateExpression: "SET #leaseExpiresAt = :newLeaseExpiresAt, #expiresAt = :ttl",
-          ConditionExpression: "#owner = :owner",
-          ExpressionAttributeNames: { "#owner": "owner", "#leaseExpiresAt": "leaseExpiresAt", "#expiresAt": "expiresAt" },
-          ExpressionAttributeValues: { ":owner": owner, ":newLeaseExpiresAt": newLeaseExpiresAt, ":ttl": ttl },
+          ConditionExpression: "#owner = :owner" + UNPINNED_UNHELD,
+          ExpressionAttributeNames: { "#owner": "owner", "#leaseExpiresAt": "leaseExpiresAt", "#expiresAt": "expiresAt", "#hold": "hold" },
+          ExpressionAttributeValues: { ":owner": owner, ":newLeaseExpiresAt": newLeaseExpiresAt, ":ttl": ttl, ":pinned": PINNED_LEASE_EXPIRES_AT, ":true": true },
         }),
       ),
     );
@@ -175,9 +292,9 @@ export class LockRepository {
           TableName: this.tableName,
           Key: { [TABLE_PK_ATTR]: key.pk, [TABLE_SK_ATTR]: key.sk },
           UpdateExpression: "SET #leaseExpiresAt = :expiredLeaseExpiresAt, #expiresAt = :ttl",
-          ConditionExpression: "#owner = :owner",
-          ExpressionAttributeNames: { "#owner": "owner", "#leaseExpiresAt": "leaseExpiresAt", "#expiresAt": "expiresAt" },
-          ExpressionAttributeValues: { ":owner": owner, ":expiredLeaseExpiresAt": now - 1, ":ttl": ttl },
+          ConditionExpression: "#owner = :owner" + UNPINNED_UNHELD,
+          ExpressionAttributeNames: { "#owner": "owner", "#leaseExpiresAt": "leaseExpiresAt", "#expiresAt": "expiresAt", "#hold": "hold" },
+          ExpressionAttributeValues: { ":owner": owner, ":expiredLeaseExpiresAt": now - 1, ":ttl": ttl, ":pinned": PINNED_LEASE_EXPIRES_AT, ":true": true },
         }),
       ),
     );

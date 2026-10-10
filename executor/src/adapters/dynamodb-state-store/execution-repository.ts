@@ -22,7 +22,7 @@ type PatchableField = Exclude<keyof ExecutionItem, "executionId" | "version" | "
  * that contradicts the target status (see below).
  */
 export type ExecutionUpdatePatch = { readonly [F in PatchableField]?: ExecutionItem[F] | undefined } & {
-  readonly activeStatus: "EXECUTION" | undefined;
+  readonly activeStatus: "EXECUTION" | "HOLD" | undefined;
   readonly deadlineAt: number | undefined;
 };
 
@@ -34,8 +34,16 @@ export interface ExecutionTransitionExpected {
   readonly dispatchToken?: string;
 }
 
-/** GSI2 sparse rule: non-terminal requires activeStatus + deadlineAt; terminal forbids both. */
+/**
+ * GSI2 sparse rule: non-terminal requires activeStatus EXECUTION + deadlineAt; terminal forbids both, except
+ * architecture-change-04 §9.3: an UNKNOWN_TARGET_STATE whose lock is held may stay in the HOLD partition (with a
+ * deadlineAt) while the reconciler still queries its agent for evidence.
+ */
 function assertSparseIndexCovenant(status: ExecutionStatus, activeStatus: unknown, deadlineAt: unknown): void {
+  if (status === "UNKNOWN_TARGET_STATE" && activeStatus === "HOLD") {
+    if (deadlineAt === undefined) throw new Error("a held UNKNOWN_TARGET_STATE in the HOLD partition needs a deadlineAt");
+    return;
+  }
   if (TERMINAL_EXECUTION_STATUSES.has(status)) {
     if (activeStatus !== undefined || deadlineAt !== undefined) {
       throw new Error(`terminal status "${status}" must remove activeStatus and deadlineAt (GSI2 is sparse)`);

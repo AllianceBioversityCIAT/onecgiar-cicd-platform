@@ -4,8 +4,8 @@
 GitHub Actions (OIDC, a CI role per repository) → ECR → SQS → central Executor → DynamoDB. The pilot
 application's target is registered with fictitious SSH data and `deployWindowPolicy: required`, so every request
 ends `FAILED (DEPLOY_WINDOW_CLOSED)` by design: **no real deployment has run yet**. The next architecture,
-**AC-04 (`SQS_AGENT`: asynchronous Executor, one agent per server)**, is **approved (revision 2)**; stage **E1**
-(contracts) is implemented locally; **E2 needs the owner's authorization**. A new conversation resumes from this
+**AC-04 (`SQS_AGENT`: asynchronous Executor, one agent per server)**, is **approved (revision 2)**; **E1** (contracts) is committed
+locally and **E2** (the asynchronous Executor path) is implemented and tested locally, uncommitted; **E3 needs the owner's authorization**. A new conversation resumes from this
 file without any chat history.
 
 ## 1. Approved architecture
@@ -16,7 +16,7 @@ file without any chat history.
 | Common CD request (`.github/workflows/deploy-request.reusable.yml`) | OIDC with **the caller repository's own CI role** (session name = `repository_id`), optional image build and push (`units`), optional `artifacts`, exactly one `DEPLOY_REQUESTED` to SQS | Platform build steps |
 | Executor (generic, `executor/`) | Sender and source-repository authorization (shared CI role or `CICD_CI_REPOSITORY_BINDINGS`), Target Registry read (`GetItem`), deploy windows, dedupe, supersede ordering, DynamoDB lock with fencing, closed state machine, running the registered script through the target's transport, interpreting the exit code and `CICD_RESULT`, version check, audit, notifications | Docker, PM2, Tomcat or any platform command, builds, migrations, rollback, artifact download, Jenkins logic, expressions |
 | Transport `ssh` (current) | Synchronous SSH with a pinned host key and a Secrets Manager credential | — |
-| Transport `sqs-agent` (AC-04, being built) | Asynchronous command to the server's agent (one per server and platform stage), events back on a shared results queue, logs in S3 | — |
+| Transport `sqs-agent` (AC-04: Executor side done in E2, agent in E3) | Asynchronous command to the server's agent (one per server and platform stage), events back on a shared results queue, logs in S3 | — |
 | Deploy script (one per platform and environment, on the target, admin-owned) | Its application procedure, the AC-03 contract, shared-resource locks | Trusting anything but its own configuration and the contract arguments |
 
 Rationale: [architecture-change-04.md](specs/changes/cicd-executor-poc/architecture-change-04.md) (agent, approved),
@@ -44,7 +44,8 @@ Rationale: [architecture-change-04.md](specs/changes/cicd-executor-poc/architect
 | Notifications switch `CICD_NOTIFICATIONS_DISABLED` | Yes | Yes | Yes: Slack is **disabled** in the running Executor (owner decision, weekend tests) |
 | GitHub Actions → OIDC → ECR → SQS → Executor → DynamoDB | Yes | Yes | **Yes, twice**: both requests ended `FAILED (DEPLOY_WINDOW_CLOSED)`, no lock, no SSH, nothing deployed (pilot target with fictitious SSH data, `required`, no window) |
 | AC-04 E1: agent contracts (`target-record` transport fields, `agent-record`, `agent-command`, `agent-event`, `agent-query`, `agent-heartbeat`, `domain/agent-protocol`, admin tool `agent-put`/`agent-get`) | Yes (local, uncommitted) | `check:local` exit 0: 1705 tests passed, 95 skipped, 29 todo (the E2/E3 acceptance cases); guards 8/8; integration 14/14 files | No (no AWS change in E1). The Executor **refuses** `sqs-agent` targets (`TARGET_INVALID`) until E2 |
-| AC-04 E2–E7 (Executor async path, agent, templates, real agent, first real deploy, notifications with log links) | No | — | — |
+| AC-04 E2: asynchronous Executor path (outbox dispatch to a FIFO command queue, results consumer, pinned and held locks without TTL, fresh fencing token per dispatch, reconciler re-send/query/hard deadline, hold release by evidence or `TARGET_RESOLUTION_RECORDED`, SSH X16 hold) | Yes (local, uncommitted, branch `feature/ac-04-sqs-agent`) | `check:local` exit 0: 1729 passed, 110 skipped, 13 todo (E3 cases); guards 8/8; integration 15/15 files, 102 tests (13 agent scenarios on DynamoDB Local); ElasticMQ FIFO dispatcher test | No (no AWS change). Off unless `CICD_AGENT_RESULTS_QUEUE_URL` and `CICD_AGENT_LOG_BUCKET` are set |
+| AC-04 E3–E7 (agent, templates, real agent, first real deploy, notifications with log links) | No | — | — |
 
 Evidence: [execution.md](specs/changes/cicd-executor-poc/execution.md). Branch `feature/multi-repository-ci` is pushed
 and **not merged** to `main`; the DEV stack was updated from that branch's template, so `main` must not be deployed
@@ -65,14 +66,14 @@ before the merge.
 | Stage | Content | State |
 |---|---|---|
 | E0 | AC-04 approved | **Done** (revision 2, 2026-10-10) |
-| E1 | Schemas, registry records, admin tool, contract tests | **Done locally**, uncommitted |
-| **E2 (next, needs authorization)** | Executor async path: outbox dispatch, results consumer, lock pin/hold/release and TTL rule, X11/X14 causes, reconciler (re-send, query, deadlines), evidence resolution, SSH X16 hold | — |
-| E3 | `agent/` package (Node.js 22): catalog, journal, target state, scheduler with resources, outbox, spawn via sudo, S3 upload | — |
+| E1 | Schemas, registry records, admin tool, contract tests | **Done**, local commit `8528231` |
+| E2 | Executor async path (see §3) | **Done locally**, uncommitted |
+| **E3 (next, needs authorization)** | `agent/` package (Node.js 22): catalog, journal, target state, scheduler with resources, outbox, spawn via sudo, S3 upload | — |
 | E4 | Templates: platform additions, `agent-stack.yaml`, `target-script-role.yaml` | — |
 | E5–E7 | One real agent with a no-op script; Reporting Tool DEV on `sqs-agent`; notifications with log links | — |
 
-**Pending owner decisions:** AC-04 OP-1 (late `FINISHED` exit 0 after X16: operator only?) and OP-2 (operator
-tooling); CA and server inventory for IAM Roles Anywhere (AP-5); Executor hosting (AP-9); merge of the branch;
+**Owner decisions applied:** OP-1 (a late `FINISHED` never releases a hold automatically) and OP-2 (reuse
+`TARGET_RESOLUTION_RECORDED`). **Pending:** CA and server inventory for IAM Roles Anywhere (AP-5); Executor hosting (AP-9); merge of the branch;
 restoring Slack. Open decisions OD-Q5, OD-Q7, OD-Q11–Q15 and OD-N1 are never resolved by assumption.
 
 ## 6. Operational restrictions (in force until the owner lifts them explicitly)

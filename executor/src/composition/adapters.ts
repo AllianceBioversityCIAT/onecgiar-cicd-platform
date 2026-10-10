@@ -48,17 +48,24 @@ export function createExecutionLookup(executions: Pick<ExecutionRepository, "get
   return {
     async getStatus(executionId) {
       const item = await executions.get(executionId);
-      return item === undefined ? undefined : { status: item.status, targetId: item.targetId };
+      return item === undefined
+        ? undefined
+        : { status: item.status, targetId: item.targetId, ...(item.fencingToken === undefined ? {} : { fencingToken: item.fencingToken }) };
     },
   };
 }
 
-export function createLockOwnerLookup(locks: Pick<LockRepository, "get">): LockOwnerLookup {
+export function createLockOwnerLookup(locks: Pick<LockRepository, "get" | "releaseHold">): LockOwnerLookup {
   return {
     async hasLiveOwner(lockKey, nowMs) {
       const lock = await locks.get(lockKey);
       return lock !== undefined && lock.leaseExpiresAt > nowMs;
     },
+    async heldBy(lockKey) {
+      const lock = await locks.get(lockKey);
+      return lock?.hold === true ? { owner: lock.owner, fencingToken: lock.fencingToken } : undefined;
+    },
+    releaseHold: (lockKey, owner, fencingToken, nowMs) => locks.releaseHold(lockKey, owner, fencingToken, nowMs),
   };
 }
 

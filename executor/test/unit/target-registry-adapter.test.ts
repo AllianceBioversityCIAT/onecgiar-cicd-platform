@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { GetCommand, type DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { describe, expect, it } from "vitest";
 import { DynamoDbTargetRegistry } from "../../src/adapters/dynamodb-target-registry/index.js";
-import type { TargetRegistry } from "../../src/ports/target-registry.js";
+import type { SshTargetRecord, TargetRegistry } from "../../src/ports/target-registry.js";
 import { readJsonSchema } from "../contract/support/ajv-factory.js";
 import { targetRecordSchemaPath } from "../contract/support/schema-paths.js";
 
@@ -94,7 +94,7 @@ describe("DynamoDbTargetRegistry (R-3)", () => {
     ];
     const { registry } = registryWith(async () => ({ Item: item({ hostKey: lines }) }));
     const result = await registry.getTarget("example-app-dev");
-    expect(result.kind === "found" && result.target.hostKey).toEqual(lines);
+    expect(result.kind === "found" && (result.target as SshTargetRecord).hostKey).toEqual(lines);
   });
 
   it("returns missing when the item does not exist", async () => {
@@ -147,9 +147,9 @@ describe("DynamoDbTargetRegistry (R-3)", () => {
   it("returns a copy: mutating the result never changes a later lookup", async () => {
     const { registry } = registryWith(async () => ({ Item: item() }));
     const first = await registry.getTarget("example-app-dev");
-    if (first.kind === "found") (first.target.hostKey as string[]).push("tampered");
+    if (first.kind === "found") ((first.target as SshTargetRecord).hostKey as string[]).push("tampered");
     const second = await registry.getTarget("example-app-dev");
-    expect(second.kind === "found" && second.target.hostKey).toHaveLength(1);
+    expect(second.kind === "found" && (second.target as SshTargetRecord).hostKey).toHaveLength(1);
   });
 });
 
@@ -167,11 +167,11 @@ describe("read-only guard (code level, in addition to IAM; R-3)", () => {
     expect(members).toEqual(["getTarget"]);
   });
 
-  it("the adapter instance exposes only getTarget", () => {
+  it("the adapter instance exposes only read operations: getTarget and (architecture-change-04) agentRoleId", () => {
     const { registry } = registryWith(async () => ({}));
     const proto = Object.getPrototypeOf(registry) as object;
     const methods = Object.getOwnPropertyNames(proto).filter((n) => n !== "constructor");
-    expect(methods).toEqual(["getTarget"]);
+    expect(methods.sort()).toEqual(["agentRoleId", "getTarget"]);
   });
 });
 
@@ -183,7 +183,7 @@ describe("DynamoDbTargetRegistry: transport (architecture-change-04, E1)", () =>
     expect(result.kind).toBe("found");
   });
 
-  it("refuses an sqs-agent record (fail closed until E2): it is never handed to the SSH path", async () => {
+  it("refuses an sqs-agent record when the agent transport is not configured (safe mode): it is never handed to the SSH path", async () => {
     const stored = {
       pk: "TARGET#example-app-dev",
       sk: "META",
@@ -201,7 +201,7 @@ describe("DynamoDbTargetRegistry: transport (architecture-change-04, E1)", () =>
       updatedBy: "platform-admin",
     };
     const { registry } = registryWith(async () => ({ Item: stored }));
-    expect(await registry.getTarget("example-app-dev")).toEqual({ kind: "invalid", problems: ["/transport sqs-agent is not enabled in this Executor version"] });
+    expect(await registry.getTarget("example-app-dev")).toEqual({ kind: "invalid", problems: ["/transport sqs-agent is not enabled in this Executor (no agent configuration)"] });
   });
 
   it("refuses an sqs-agent record that still carries SSH fields (schema)", async () => {

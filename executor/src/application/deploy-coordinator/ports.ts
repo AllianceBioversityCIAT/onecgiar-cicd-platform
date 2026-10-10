@@ -15,6 +15,8 @@ import type {
 import type {
   BeginDispatchInput,
   BeginDispatchOutcome,
+  CloseWithReleaseInput,
+  CloseWithReleaseOutcome,
   MarkUnknownInput,
   MarkUnknownOutcome,
 } from "../../adapters/dynamodb-state-store/deploy-transactions.js";
@@ -38,6 +40,8 @@ export interface DeployTargetPort {
 export interface DeployTransactionPort {
   beginDispatch(input: BeginDispatchInput): Promise<BeginDispatchOutcome>;
   markUnknownTargetState(input: MarkUnknownInput): Promise<MarkUnknownOutcome>;
+  /** architecture-change-04 §9.1: closing transition + fenced lock release, atomically. */
+  closeWithRelease(input: CloseWithReleaseInput): Promise<CloseWithReleaseOutcome>;
 }
 
 export interface WindowRevalidator {

@@ -3,7 +3,8 @@
 // checks the preconditions here, through ports:
 //   1. the execution exists, is UNKNOWN_TARGET_STATE and belongs to `targetId`;
 //   2. it is listed in the target's `unresolved[]`;
-//   3. the target (the V1 lock key, design §1.2) has no live lock owner.
+//   3. the target (the V1 lock key, design §1.2) has no live lock owner, EXCEPT the hold of this very execution
+//      (architecture-change-04 AP-3, OP-2): the resolution then releases that hold, fenced on owner and token.
 // Effect: audit first (idempotent per eventId), then remove that ONE entry
 // from `unresolved[]` through a conditional write. The ports below expose no
 // way to touch `lastDeployed`, `highestDispatched`, `highestAccepted` or any
@@ -18,12 +19,16 @@ export interface UnresolvedStore {
 }
 
 export interface ExecutionLookup {
-  getStatus(executionId: string): Promise<{ readonly status: string; readonly targetId: string } | undefined>;
+  getStatus(executionId: string): Promise<{ readonly status: string; readonly targetId: string; readonly fencingToken?: number } | undefined>;
 }
 
 export interface LockOwnerLookup {
   /** True when a non-expired lease exists for `lockKey` at `nowMs`. */
   hasLiveOwner(lockKey: string, nowMs: number): Promise<boolean>;
+  /** architecture-change-04: the owner and token of a HELD lock, if any. */
+  heldBy?(lockKey: string): Promise<{ readonly owner: string; readonly fencingToken: number } | undefined>;
+  /** architecture-change-04: fenced release of a held lock (owner, token and hold must match). */
+  releaseHold?(lockKey: string, owner: string, fencingToken: number, nowMs: number): Promise<boolean>;
 }
 
 export interface ResolutionAudit {
@@ -94,7 +99,15 @@ export class TargetResolutionService {
     if (!unresolved.includes(event.executionId)) return reject("NOT_LISTED_IN_UNRESOLVED");
 
     const now = this.deps.clock.now().getTime();
-    if (await this.deps.locks.hasLiveOwner(event.targetId, now)) return reject("LOCK_HAS_LIVE_OWNER");
+    // AP-3 / OP-2: a hold of THIS execution (same owner, same fencing token) is what the resolution releases; any other
+    // live owner, held or not, still refuses it.
+    const held = await this.deps.locks.heldBy?.(event.targetId);
+    const ownHold =
+      held !== undefined &&
+      held.owner === event.executionId &&
+      (execution.fencingToken === undefined || held.fencingToken === execution.fencingToken);
+    if (held !== undefined && !ownHold) return reject("LOCK_HAS_LIVE_OWNER");
+    if (!ownHold && (await this.deps.locks.hasLiveOwner(event.targetId, now))) return reject("LOCK_HAS_LIVE_OWNER");
 
     await this.deps.audit.write({
       eventId: event.eventId,
@@ -106,6 +119,12 @@ export class TargetResolutionService {
       ...(event.note === undefined ? {} : { note: event.note }),
       at: now,
     });
+    // The hold is released before the unresolved entry is removed: a crash in between leaves an entry the next
+    // delivery removes (the lock is then free); the reverse order could leave a hold nobody can resolve.
+    if (ownHold && held !== undefined) {
+      const released = (await this.deps.locks.releaseHold?.(event.targetId, held.owner, held.fencingToken, now)) ?? false;
+      if (!released) return { outcome: "CONFLICT" };
+    }
     const removed = await this.deps.unresolved.removeUnresolved(event.targetId, event.executionId);
     return removed ? { outcome: "RECORDED" } : { outcome: "CONFLICT" };
   }

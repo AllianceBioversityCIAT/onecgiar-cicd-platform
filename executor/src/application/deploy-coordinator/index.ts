@@ -56,7 +56,7 @@ import {
 import type { QueuePublisher } from "../../ports/queue-publisher.js";
 import type { Clock } from "../../ports/clock.js";
 import type { ExecutionUpdatePatch } from "../../adapters/dynamodb-state-store/execution-repository.js";
-import type { ExecutionItem } from "../../adapters/dynamodb-state-store/types.js";
+import { isAgentSnapshot, type ExecutionItem } from "../../adapters/dynamodb-state-store/types.js";
 import type { SshTarget } from "../../ports/deploy-transport.js";
 import type { WindowTarget } from "../deploy-window-service/index.js";
 import { OrderingSourceMismatchError } from "../execution-service/index.js";
@@ -68,6 +68,7 @@ import type {
   WindowRevalidator,
 } from "./ports.js";
 import type { Semaphore } from "./semaphore.js";
+import type { AgentTransport } from "../agent-transport/index.js";
 import { toExecutionSnapshot } from "./snapshot.js";
 
 export { Semaphore, DEFAULT_SSH_CONCURRENCY } from "./semaphore.js";
@@ -94,25 +95,22 @@ export const LOG_TAIL_MAX_CHARS = 4096;
 export const DEFAULT_DEPLOY_TIMEOUT_MINUTES = 20;
 export const MAX_DEPLOY_TIMEOUT_MINUTES = 60;
 
-/** What the coordinator needs to run one deployment, built from the execution's snapshot (design §6.5). */
-export interface DeployPlan {
-  readonly target: SshTarget;
+/** What every transport needs (design §6.5, AC-03 G-D1, architecture-change-04): window, timeout and the argument vector. */
+export interface BasePlan {
   readonly window: WindowTarget;
-  readonly scriptPath: string;
   readonly timeoutMinutes: number;
   /** Script arguments (design §6.5), one element per argument; the fencing token is the lock's. */
   scriptArgs(fencingToken: number): readonly string[];
 }
 
-/**
- * The deploy plan of an execution (design §6.5): the fixed argument vector
- * `--target-id --execution-id --fencing-token --commit-sha` and one
- * `--artifact <unit>=sha256:<64-hex>` per request artifact (sorted by unit, so the
- * vector is deterministic). Every value was validated by the request schema or
- * is Executor-generated; the transport also refuses line breaks and quotes every
- * element. Nothing application-specific is added here.
- */
-export function deployPlanOf(item: ExecutionItem, timeoutMinutes: number = DEFAULT_DEPLOY_TIMEOUT_MINUTES): DeployPlan {
+/** What the coordinator needs to run one SSH deployment, built from the execution's snapshot (design §6.5). */
+export interface DeployPlan extends BasePlan {
+  readonly target: SshTarget;
+  readonly scriptPath: string;
+}
+
+/** The transport-independent part of the plan; the same vector goes over SSH or in an AGENT_COMMAND (AC-04 §6). */
+export function basePlanOf(item: ExecutionItem, timeoutMinutes: number = DEFAULT_DEPLOY_TIMEOUT_MINUTES): BasePlan {
   const s = item.targetSnapshot;
   const requested = item.artifacts ?? {};
   const artifacts = Object.keys(requested)
@@ -121,16 +119,7 @@ export function deployPlanOf(item: ExecutionItem, timeoutMinutes: number = DEFAU
   // AC-03 G-D1: the target record, never the request, decides whether the script gets arguments.
   const noArguments = s.scriptArguments === "none";
   return {
-    target: {
-      targetId: item.targetId,
-      host: s.host,
-      ...(s.port === undefined ? {} : { port: s.port }),
-      user: s.user,
-      hostKey: s.hostKey,
-      credentialRef: s.credentialRef,
-    },
     window: { targetId: item.targetId, deployWindowPolicy: s.deployWindowPolicy },
-    scriptPath: s.deployScript,
     timeoutMinutes,
     scriptArgs: (fencingToken) => noArguments ? [] : [
       "--target-id",
@@ -143,6 +132,31 @@ export function deployPlanOf(item: ExecutionItem, timeoutMinutes: number = DEFAU
       item.commitSha,
       ...artifacts,
     ],
+  };
+}
+
+/**
+ * The deploy plan of an execution (design §6.5): the fixed argument vector
+ * `--target-id --execution-id --fencing-token --commit-sha` and one
+ * `--artifact <unit>=sha256:<64-hex>` per request artifact (sorted by unit, so the
+ * vector is deterministic). Every value was validated by the request schema or
+ * is Executor-generated; the transport also refuses line breaks and quotes every
+ * element. Nothing application-specific is added here.
+ */
+export function deployPlanOf(item: ExecutionItem, timeoutMinutes: number = DEFAULT_DEPLOY_TIMEOUT_MINUTES): DeployPlan {
+  const s = item.targetSnapshot;
+  if (isAgentSnapshot(s)) throw new Error("deploy-coordinator: an sqs-agent execution has no SSH plan (architecture-change-04)");
+  return {
+    ...basePlanOf(item, timeoutMinutes),
+    target: {
+      targetId: item.targetId,
+      host: s.host,
+      ...(s.port === undefined ? {} : { port: s.port }),
+      user: s.user,
+      hostKey: s.hostKey,
+      credentialRef: s.credentialRef,
+    },
+    scriptPath: s.deployScript,
   };
 }
 
@@ -170,6 +184,11 @@ export interface DeployCoordinatorDeps {
   readonly renewalIntervalMs?: number;
   /** Called when releasing a resource fails; the failure never masks the outcome (a lock lease expires by itself). */
   readonly onCleanupError?: (error: unknown, resource: "session" | "lock" | "renewal" | "window") => void;
+  /**
+   * architecture-change-04: the asynchronous sqs-agent transport. Required only for sqs-agent executions (the registry
+   * refuses such targets when the agent transport is not configured, so this is never missing for one in practice).
+   */
+  readonly agent?: Pick<AgentTransport, "dispatchFields" | "send">;
 }
 
 export interface DeployCoordinator {
@@ -231,7 +250,7 @@ interface Resources {
 
 interface Attempt {
   readonly item: ExecutionItem;
-  readonly plan: DeployPlan;
+  readonly plan: BasePlan;
   readonly fencingToken: number;
   readonly token: string;
   version: number;
@@ -249,7 +268,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
   if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > MAX_DEPLOY_TIMEOUT_MINUTES) {
     throw new Error(`deploy-coordinator: deployTimeoutMinutes must be an integer in [1, ${String(MAX_DEPLOY_TIMEOUT_MINUTES)}]`);
   }
-  const planFor = (item: ExecutionItem): DeployPlan => deployPlanOf(item, timeoutMinutes);
+  const planFor = (item: ExecutionItem): BasePlan => basePlanOf(item, timeoutMinutes);
   const nowMs = (): number => deps.clock.now().getTime();
 
   const transitioned = (t: Accepted): DeployOutcome => ({
@@ -452,7 +471,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
   // -------------------------------------------------------------------
   // Under the lock: S2, X9, then the attempt
   // -------------------------------------------------------------------
-  async function underLock(item: ExecutionItem, plan: DeployPlan, fencingToken: number, res: Resources): Promise<DeployOutcome> {
+  async function underLock(item: ExecutionItem, plan: BasePlan, fencingToken: number, res: Resources): Promise<DeployOutcome> {
     const snapshot = toExecutionSnapshot(item);
     const ordering: OrderingValue = { sourceRef: item.order.sourceRef, runNumber: item.order.runNumber };
 
@@ -467,14 +486,19 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
     const x9 = accept(
       applyTransition(snapshot, { kind: "BEGIN_DISPATCH", v2Valid: true, lockAcquired: true, superseded: false, newDispatchToken: token }),
     );
-    const deadlineAt = now + plan.timeoutMinutes * 60_000 + DEPLOYING_GRACE_MS;
+    // architecture-change-04 §8: an sqs-agent dispatch persists its command identity (outbox) and PINS the lock in X9.
+    const viaAgent = isAgentSnapshot(item.targetSnapshot);
+    if (viaAgent && deps.agent === undefined) throw new Error("deploy-coordinator: sqs-agent execution without the agent transport");
+    const agentFields = viaAgent ? (deps.agent as NonNullable<DeployCoordinatorDeps["agent"]>).dispatchFields(item, token, now) : undefined;
+    const deadlineAt = agentFields?.deadlineAt ?? now + plan.timeoutMinutes * 60_000 + DEPLOYING_GRACE_MS;
     const begun = await deps.transactions.beginDispatch({
       executionId: item.executionId,
       expected: { status: "WAITING_LOCK", version: item.version },
-      patch: buildPatch(x9, now, { deadlineAt, extra: { fencingToken } }),
+      patch: buildPatch(x9, now, { deadlineAt, extra: { fencingToken, ...(agentFields === undefined ? {} : { agent: agentFields.agent }) } }),
       lockKey: item.targetId,
       dispatched: { ...ordering, executionId: item.executionId },
       now,
+      ...(viaAgent ? { pin: { owner: item.executionId, fencingToken } } : {}),
     });
     // A cancelled transaction wrote NOTHING: a newer dispatch won the race after S2 read, so this one is superseded (CS-2).
     if (begun.outcome === "TARGET_CONDITION_FAILED") return supersedeUnderLock(item, res);
@@ -482,10 +506,46 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
       await keepLockIfSiblingDispatched(item, res);
       return conflict;
     }
+    // Our short lease expired or changed hands before the pin: nothing was dispatched; the lock is not ours to release.
+    if (begun.outcome === "LOCK_CONDITION_FAILED") {
+      res.keepLock = true;
+      return conflict;
+    }
+    if (viaAgent) return dispatchToAgent(item, plan, token, fencingToken, x9, res);
+
     // This handler committed the intent: it owns the attempt and releases the lock at its exit.
     res.keepLock = false;
 
     return runAttempt({ item, plan, fencingToken, token, version: item.version + 1, deadlineAt, current: x9.next, res });
+  }
+
+  /**
+   * architecture-change-04 §8 (AG-D1): after X9 the lock is PINNED and belongs to the execution, never to this handler
+   * (no renewal, no release at exit). V4 just before the send (X10 releases in the same transaction); then ONE send and
+   * the handler returns. A failed send leaves PENDING_SEND for the reconciler: same command, same token.
+   */
+  async function dispatchToAgent(item: ExecutionItem, plan: BasePlan, token: string, fencingToken: number, x9: Accepted, res: Resources): Promise<DeployOutcome> {
+    res.keepLock = true;
+    await stopRenewal(res);
+    const fresh = await deps.executions.get(item.executionId);
+    if (fresh === undefined || fresh.status !== "DEPLOYING" || fresh.dispatchToken !== token) return conflict;
+    const v4 = await deps.windows.revalidate("V4", plan.window, nowMs() + plan.timeoutMinutes * 60_000);
+    if (!v4.ok) {
+      const x10 = accept(applyTransition(x9.next, { kind: "WINDOW_CLOSED_BEFORE_EXEC", dispatchToken: token, v4Valid: false }));
+      const now = nowMs();
+      const closed = await deps.transactions.closeWithRelease({
+        executionId: item.executionId,
+        expected: { status: "DEPLOYING", version: fresh.version, dispatchToken: token },
+        patch: buildPatch(x10, now),
+        lockKey: item.targetId,
+        owner: item.executionId,
+        fencingToken,
+        now,
+      });
+      return closed.outcome === "COMMITTED" ? transitioned(x10) : conflict;
+    }
+    await (deps.agent as NonNullable<DeployCoordinatorDeps["agent"]>).send(fresh);
+    return transitioned(x9);
   }
 
   async function supersedeUnderLock(item: ExecutionItem, res: Resources): Promise<DeployOutcome> {
@@ -531,6 +591,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
 
   async function runAttempt(a: Attempt): Promise<DeployOutcome> {
     const { item, plan, res } = a;
+    const sshPlan = deployPlanOf(item, timeoutMinutes);
 
     // SSH semaphore, then session (waiting for a slot holds none of the later resources).
     res.releaseSlot = await deps.semaphore.acquire();
@@ -538,7 +599,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
     let connectError: DeployTransportError | undefined;
     for (let tries = 0; tries <= SSH_CONNECT_RETRIES; tries += 1) {
       try {
-        res.session = await deps.transport.connect(plan.target);
+        res.session = await deps.transport.connect(sshPlan.target);
         connectError = undefined;
         break;
       } catch (error) {
@@ -574,7 +635,7 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
     try {
       outcome = await res.session.exec({
         executionId: item.executionId,
-        scriptPath: plan.scriptPath,
+        scriptPath: sshPlan.scriptPath,
         args: plan.scriptArgs(a.fencingToken),
         timeoutMs: plan.timeoutMinutes * 60_000,
       });
@@ -698,6 +759,8 @@ export function createDeployCoordinator(deps: DeployCoordinatorDeps): DeployCoor
       lockKey: a.item.targetId,
       entry: { executionId: a.item.executionId, since: now },
       now,
+      // AP-3 (architecture-change-04 §15): the script may still run; the lock is held until evidence or an operator.
+      hold: { owner: a.item.executionId, fencingToken: a.fencingToken, reason: "UNKNOWN_TARGET_STATE" },
     });
     return done.outcome === "COMMITTED" ? transitioned(t) : conflict;
   }

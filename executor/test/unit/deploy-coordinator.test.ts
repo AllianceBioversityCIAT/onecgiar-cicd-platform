@@ -86,6 +86,15 @@ function expectAllReleased(ctx: Ctx): void {
   expect(ctx.world.lockIsReleased()).toBe(true);
 }
 
+/** AP-3 (architecture-change-04 §15): an UNKNOWN_TARGET_STATE releases session and slot but HOLDS the lock. */
+function expectReleasedButLockHeld(ctx: Ctx): void {
+  expect(ctx.transport.openSessions).toBe(0);
+  expect(ctx.semaphore.inUse).toBe(0);
+  expect(ctx.world.lockIsReleased()).toBe(false);
+  expect(ctx.world.lockIsHeld()).toBe(true);
+  expect(ctx.world.lockIsPinned()).toBe(true);
+}
+
 function queuedExecution(): ExecutionItem {
   const rest: Record<string, unknown> = { ...waitingExecution(), status: "QUEUED" };
   for (const field of ["lockWaitStartedAt", "lockWaitAttempts", "nextAttemptAt"]) delete rest[field];
@@ -453,7 +462,7 @@ describe("exit mapping", () => {
     expectAllReleased(ctx);
   });
 
-  test.each([2, 1, 137, 255])("exit %i (outside 0/10/20/30/40/50): X16 with the unresolved[] append, everything released", async (exitCode) => {
+  test.each([2, 1, 137, 255])("exit %i (outside 0/10/20/30/40/50): X16 with the unresolved[] append; session and slot released, lock HELD (AP-3)", async (exitCode) => {
     const ctx = setup();
     ctx.world.add(waitingExecution());
     ctx.transport.execScript = [{ kind: "EXIT", exitCode }];
@@ -463,7 +472,7 @@ describe("exit mapping", () => {
     expect(ctx.world.target.unresolved).toEqual([{ executionId: "exec-1", since: ctx.world.clock.nowMs }]);
     expect(ctx.world.target.lastDeployed).toBeUndefined();
     expect(ctx.world.events).toContain("tx:X16");
-    expectAllReleased(ctx);
+    expectReleasedButLockHeld(ctx);
   });
 
   test("exit 50 with budget left and V3 ok: X14 back to WAITING_LOCK; resources released, per-attempt fields cleared, retry published after the write (CW-1, CW-2)", async () => {
@@ -608,7 +617,7 @@ describe("supersede under the lock (S2, X6) and CS-2", () => {
   const older = (): ExecutionItem =>
     waitingExecution({ executionId: "exec-2", order: { sourceRef: TEST_SOURCE_REF, runNumber: 4, runAttempt: 1 } });
 
-  test("CS-2 (a): a newer run dispatched and ended UNKNOWN_TARGET_STATE still blocks the older request at S2", async () => {
+  test("CS-2 (a): a newer run dispatched and ended UNKNOWN_TARGET_STATE still blocks the older request: first by the hold (AP-3), then at S2", async () => {
     const ctx = setup();
     ctx.world.add(waitingExecution()); // run 5
     ctx.world.add(older()); // run 4
@@ -617,6 +626,13 @@ describe("supersede under the lock (S2, X6) and CS-2", () => {
     expect(ctx.world.target.lastDeployed).toBeUndefined();
     expect(ctx.world.target.highestDispatched).toMatchObject({ runNumber: 5 });
 
+    // AP-3: while the lock is held, the older request cannot even take the lock.
+    expect(await ctx.coordinator.handleLockRetry(retry(1, "exec-2"))).toMatchObject({ outcome: "RETRY_SCHEDULED" });
+    expect(ctx.world.lockIsHeld()).toBe(true);
+
+    // An operator resolution releases the hold (fenced); the older request is then superseded at S2.
+    const held = ctx.world.lock as NonNullable<typeof ctx.world.lock>;
+    ctx.world.lock = { ...held, hold: false, leaseExpiresAt: ctx.world.clock.nowMs - 1, mode: "LEASE" };
     const out = await ctx.coordinator.handleLockRetry(retry(1, "exec-2"));
     expect(out).toMatchObject({ transitionId: "X6", status: "SUPERSEDED" });
     expect(ctx.world.item("exec-2").dispatchToken).toBeUndefined();

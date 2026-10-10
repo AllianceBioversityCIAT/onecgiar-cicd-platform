@@ -54,10 +54,14 @@ import type { DeployWindowItem, ExecutionItem } from "../../adapters/dynamodb-st
 import type { DeployCoordinator, DeployExecutionStore, DeployTargetPort, DeployTransactionPort } from "../deploy-coordinator/index.js";
 import { buildPatch, toExecutionSnapshot } from "../deploy-coordinator/index.js";
 import type { WindowStore } from "../deploy-window-service/index.js";
+import type { AgentReconcileAction, AgentTransport } from "../agent-transport/index.js";
+import { isAgentSnapshot } from "../../adapters/dynamodb-state-store/types.js";
 
 /** GSI2 partition values (design §5.1). */
 const EXECUTION_PARTITION = "EXECUTION";
 const WINDOW_PARTITION = "WINDOW";
+/** architecture-change-04 §9.3: held UNKNOWN_TARGET_STATE executions still queried for evidence. */
+const HOLD_PARTITION = "HOLD";
 
 /** The read side of the table: `DynamoDbStateStore.queryIndex` satisfies it structurally (Query only, no scan). */
 export interface DeadlineIndex {
@@ -82,6 +86,11 @@ export interface ReconcilerDeps {
   readonly newEventId?: () => string;
   /** Called after this reconciler wrote a terminal transition (best effort; the composition wires notifications). */
   readonly onTransitioned?: (info: ReconciledTransition) => void;
+  /**
+   * architecture-change-04: sqs-agent executions are reconciled by the agent transport (re-send, query, hard deadline,
+   * held queries). When absent, the tick keeps its two GSI2 queries and no HOLD partition is read.
+   */
+  readonly agent?: Pick<AgentTransport, "reconcile">;
 }
 
 export interface ReconciledTransition {
@@ -99,6 +108,8 @@ export type ReconcileAction =
   | "LOCK_TIMEOUT"
   | "DISPATCH_INTERRUPTED"
   | "UNKNOWN_TARGET_STATE"
+  /** architecture-change-04: actions of the agent transport. */
+  | Exclude<AgentReconcileAction, "UNKNOWN_TARGET_STATE" | "SKIPPED">
   /** Moved on, no longer overdue, or another writer won the conditional write. */
   | "SKIPPED";
 
@@ -145,6 +156,15 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
     const item = await deps.executions.get(candidate.executionId);
     if (item === undefined || item.deadlineAt === undefined || !(item.deadlineAt < now)) return "SKIPPED";
 
+    // architecture-change-04: an sqs-agent dispatch is never closed by the SSH rule (silence is not "not started").
+    if (deps.agent !== undefined && isAgentSnapshot(item.targetSnapshot) && item.agent !== undefined) {
+      const action = await deps.agent.reconcile(item, now);
+      if (action === "UNKNOWN_TARGET_STATE") {
+        notify({ executionId: item.executionId, transitionId: "X16", status: "UNKNOWN_TARGET_STATE", errorCode: "UNKNOWN_TARGET_STATE" });
+      }
+      return action;
+    }
+
     switch (item.status) {
       case "QUEUED": {
         // S1 first (design §7.3 CW-2: re-evaluate X3-X5). Ordering value from the persisted `order`, never rebuilt.
@@ -187,6 +207,8 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
             lockKey: item.targetId,
             entry: { executionId: item.executionId, since: now },
             now,
+            // AP-3: hold the lock when this execution still owns it (the fencing token written at X9).
+            ...(item.fencingToken === undefined ? {} : { hold: { owner: item.executionId, fencingToken: item.fencingToken, reason: "UNKNOWN_TARGET_STATE" } }),
           });
           if (done.outcome !== "COMMITTED") return "SKIPPED";
           notify({ executionId: item.executionId, transitionId: "X16", status: t.next.status, errorCode: "UNKNOWN_TARGET_STATE" });
@@ -242,6 +264,22 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
       }
     } catch (error) {
       failures.push(error);
+    }
+
+    // Query 3 (only with the agent transport): held executions whose agent is still queried for evidence.
+    if (deps.agent !== undefined) {
+      try {
+        const held = await deps.index.queryIndex<ExecutionItem>(GSI2_NAME, HOLD_PARTITION, { sortKeyBefore: now });
+        for (const candidate of held) {
+          try {
+            actions.push({ executionId: candidate.executionId, action: await reconcileExecution(candidate, now) });
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+      } catch (error) {
+        failures.push(error);
+      }
     }
 
     if (failures.length > 0) {

@@ -1050,3 +1050,43 @@ the non-blocking spec typecheck job was removed from the pilot workflow.
 **Validation.** `npm run check:local` exit 0: typecheck, lint, build, 62 test files passed / 16 skipped, 1705 tests
 passed, 95 skipped, 29 todo (28 are the E2/E3 acceptance cases of `agent-protocol.pending.test.ts`), guards 8/8,
 0 production vulnerabilities; `npm run test:integration` 14/14 files. No AWS, GitHub or server change in E1.
+
+## AC-04 E2 — asynchronous Executor path for sqs-agent (2026-10-10): **implemented and tested locally, uncommitted**
+
+**Scope (owner authorization, E2 only).** E1 committed locally as `8528231` on branch `feature/ac-04-sqs-agent`
+(`feature/multi-repository-ci` untouched). Owner decisions OP-1 (a late `FINISHED` is evidence only) and OP-2 (reuse
+`TARGET_RESOLUTION_RECORDED`) applied.
+
+**Implemented.**
+- State machine: no new state or transition; X11 accepts `AGENT_REJECTED` / `AGENT_DISPATCH_FAILED`, X14/X15 accept
+  agent never-started evidence (`AGENT_NOT_STARTED`), X16 accepts `AGENT_UNKNOWN` and the reconciler's silence rule for
+  sqs-agent executions.
+- Locks: PINNED at X9 in the same transaction (no expiry, cleanup TTL removed), fenced release in the closing
+  transaction, HOLD on X16 for both transports, `acquire`/`renew`/`release` never touch a pinned or held lock, a release
+  leaves the owner `(released)` so every dispatch gets a strictly higher fencing token.
+- Coordinator: after X9 an sqs-agent dispatch revalidates V4, sends ONE `AGENT_COMMAND` (FIFO, group = target,
+  deduplication = `commandId`) and returns; the lock belongs to the execution, never to the handler.
+- `application/agent-transport`: outbox dispatch and same-command re-send, event application (schema, `commandId`,
+  SenderId role = snapshotted agent role, agent and target, dispatch token, fencing token, `seq` order), closing through
+  the existing transitions with the lock in the same transaction, `AGENT_QUERY` with the `NEVER_SEEN` evidence rule,
+  hard deadline X16 + hold + HOLD partition, automatic hold release only for verified never-started evidence, heartbeats.
+- Results queue handler (`inbound/agent-results`), SQS FIFO dispatcher, agent event audit items, registry agent
+  binding, optional configuration `CICD_AGENT_RESULTS_QUEUE_URL` + `CICD_AGENT_LOG_BUCKET` (absent: safe mode).
+- `TargetResolutionService`: releases the hold of the resolved execution (owner and token) before the `unresolved[]`
+  removal.
+
+**Tests.** `npm run check:local` exit 0: typecheck, lint, build, 63 test files passed / 18 skipped, 1729 passed, 110
+skipped, 13 todo (the E3 agent cases), guards 8/8, 0 production vulnerabilities. `npm run test:integration`: 15/15
+files, 102 tests, including 13 new sqs-agent scenarios on DynamoDB Local through the real composition root (asynchronous
+dispatch, pinned lock without TTL, closing transactions, duplicates and out-of-order events, re-send with the same
+command, pinned lock beyond the old 24 h TTL with an Executor restart, forged sender and stale fencing, silence ->
+query -> X16 with a hold, `NEVER_SEEN` with insufficient and with valid evidence, `NOT_STARTED` retry and reject, LOST +
+late `FINISHED` + operator resolution, automatic release by verified evidence, two requests for one target, safe mode).
+`npm run test:sqs-emulator`: the real FIFO dispatcher on ElasticMQ (a re-sent command is delivered once; group order).
+SSH regression: the whole existing suite; the tests that expected an SSH X16 to free the lock now expect the AP-3 hold.
+
+**Defect found by the tests and fixed.** A retry after X14 re-acquired the lock re-entrantly and kept the fencing token;
+the agent would have refused the new command as `STALE_FENCING`. Releases now leave the owner `(released)`.
+
+**Not verified here (needs AWS, E5):** the real SQS `SenderId`, the real FIFO deduplication window, IAM and queue
+policies. Simulated SenderIds are never presented as AWS evidence. No AWS, GitHub, server or Executor change.

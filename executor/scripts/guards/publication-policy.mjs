@@ -92,6 +92,12 @@ const PATH_SCOPED_ALLOWLIST = [
     reason: "architecture-change-04: the agent record schema requires an SQS FIFO queue URL; one FAKE_SQS_QUEUE_BASE literal with AWS's documentation account id.",
   },
   {
+    path: "executor/test/integration/agent-transport.int.test.ts",
+    rules: ["amazonaws-hostname"],
+    requireFakeMarker: true,
+    reason: "architecture-change-04 E2: the agent record needs an SQS FIFO queue URL; one FAKE_SQS_QUEUE_BASE literal with AWS's documentation account id.",
+  },
+  {
     path: "executor/test/unit/target-registry-tool.test.ts",
     rules: ["amazonaws-hostname"],
     requireFakeMarker: true,

@@ -119,8 +119,19 @@ export type TransitionRequest =
   | {
       readonly kind: "FAIL_BEFORE_EXEC";
       readonly dispatchToken: string;
-      readonly code: "SSH_CONNECT" | "HOST_KEY_MISMATCH";
+      /** AGENT_*: architecture-change-04 §7, the agent proved the command never started (or the dispatch could not be delivered). */
+      readonly code: "SSH_CONNECT" | "HOST_KEY_MISMATCH" | "AGENT_REJECTED" | "AGENT_DISPATCH_FAILED";
     }
+  /** architecture-change-04 §7: the agent proved the command never started (EXPIRED, BUSY, ABANDONED, valid NEVER_SEEN...): X14 retry, or X15 when the budget or the window is gone. */
+  | {
+      readonly kind: "AGENT_NOT_STARTED";
+      readonly dispatchToken: string;
+      readonly v3Valid: boolean;
+      readonly now: number;
+      readonly nextAttemptAt: number;
+    }
+  /** architecture-change-04 §7: unknown outcome on an agent target (LOST, timeout, exit outside the contract): X16 even without execStartedAt. */
+  | { readonly kind: "AGENT_UNKNOWN"; readonly dispatchToken: string }
   /** X12 / X13 / X14 / X15 / X16, chosen by exit code. */
   | {
       readonly kind: "SCRIPT_EXITED";
@@ -135,7 +146,12 @@ export type TransitionRequest =
   /** X16: session lost while the script may be running. */
   | { readonly kind: "SESSION_LOST"; readonly dispatchToken: string }
   /** Reconciler: overdue DEPLOYING resolves to X16 (execStartedAt set) or X11 DISPATCH_INTERRUPTED. */
-  | { readonly kind: "RECONCILE_OVERDUE_DEPLOYING"; readonly now: number };
+  | {
+      readonly kind: "RECONCILE_OVERDUE_DEPLOYING";
+      readonly now: number;
+      /** architecture-change-04 §7: on an sqs-agent target silence cannot prove that nothing started, so it is X16, never X11. */
+      readonly silenceIsUnknown?: boolean;
+    };
 
 /** Persistence hints the adapter needs for the conditional write; no I/O here. */
 export interface TransitionEffects {
@@ -231,8 +247,8 @@ function isCurrentAttempt(s: ExecutionSnapshot, token: string): boolean {
 }
 
 /** X16: requires `execStartedAt` for the current dispatchToken (DD-28, CW-1). */
-function unknownTargetState(s: ExecutionSnapshot): TransitionResult {
-  if (s.execStartedAt === undefined) return REJECT;
+function unknownTargetState(s: ExecutionSnapshot, startProven = false): TransitionResult {
+  if (s.execStartedAt === undefined && !startProven) return REJECT;
   return ok(
     "X16",
     { ...s, status: "UNKNOWN_TARGET_STATE", error: { code: "UNKNOWN_TARGET_STATE" } },
@@ -321,8 +337,33 @@ export function applyTransition(
       if (!isCurrentAttempt(current, request.dispatchToken)) return REJECT;
       if (current.execStartedAt !== undefined) return REJECT;
       // Runtime guard too: DISPATCH_INTERRUPTED is reconciler-only (callers may bypass the type).
-      if (request.code !== "SSH_CONNECT" && request.code !== "HOST_KEY_MISMATCH") return REJECT;
+      const allowed: readonly string[] = ["SSH_CONNECT", "HOST_KEY_MISMATCH", "AGENT_REJECTED", "AGENT_DISPATCH_FAILED"];
+      if (!allowed.includes(request.code)) return REJECT;
       return failed("X11", current, request.code, TOKEN_EFFECTS);
+    }
+
+    case "AGENT_NOT_STARTED": {
+      if (!isCurrentAttempt(current, request.dispatchToken)) return REJECT;
+      // A command that started can never be reported as not started (out-of-order or forged evidence).
+      if (current.execStartedAt !== undefined) return REJECT;
+      if (request.v3Valid && budgetRemaining(current, request.now)) {
+        return ok(
+          "X14",
+          {
+            ...omitPerAttempt(current),
+            status: "WAITING_LOCK",
+            nextAttemptAt: request.nextAttemptAt,
+            contentionCount: current.contentionCount + 1,
+          },
+          { ...TOKEN_EFFECTS, clear: PER_ATTEMPT_FIELDS },
+        );
+      }
+      return failed("X15", current, request.v3Valid ? "LOCK_TIMEOUT" : "DEPLOY_WINDOW_CLOSED", TOKEN_EFFECTS);
+    }
+
+    case "AGENT_UNKNOWN": {
+      if (!isCurrentAttempt(current, request.dispatchToken)) return REJECT;
+      return unknownTargetState(current, true);
     }
 
     case "SCRIPT_EXITED": {
@@ -362,6 +403,7 @@ export function applyTransition(
     case "RECONCILE_OVERDUE_DEPLOYING": {
       if (current.status !== "DEPLOYING" || current.deadlineAt === undefined) return REJECT;
       if (!(current.deadlineAt < request.now)) return REJECT;
+      if (request.silenceIsUnknown === true) return unknownTargetState(current, true);
       return current.execStartedAt !== undefined
         ? unknownTargetState(current)
         : failed("X11", current, "DISPATCH_INTERRUPTED", TOKEN_EFFECTS);

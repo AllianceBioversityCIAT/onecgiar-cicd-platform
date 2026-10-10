@@ -122,6 +122,22 @@ const ALL_PASSED: CreationChecks = {
 
 /** The non-secret copy of the target record written on the execution at X1 (design §5.1, §6.3). Deep copy: never aliases the caller's object. */
 export function snapshotOf(target: TargetRecord): TargetSnapshot {
+  if (target.transport === "sqs-agent") {
+    // architecture-change-04 §5: the agent binding is snapshotted like the rest; events are checked against it.
+    return {
+      transport: "sqs-agent",
+      version: target.version,
+      project: target.project,
+      environment: target.environment,
+      agentId: target.agentId,
+      scriptId: target.scriptId,
+      agentRoleId: target.agent.roleId,
+      commandQueueUrl: target.agent.commandQueueUrl,
+      deployWindowPolicy: target.deployWindowPolicy,
+      sourceRepositoryId: target.sourceRepositoryId,
+      scriptArguments: target.scriptArguments ?? "standard",
+    };
+  }
   return {
     version: target.version,
     project: target.project,

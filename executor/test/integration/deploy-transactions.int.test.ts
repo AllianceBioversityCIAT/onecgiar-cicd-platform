@@ -28,7 +28,7 @@ describe.skipIf(!dynamoDbLocalAvailable())("deploy coordinator transactions (Dyn
     executions = new ExecutionRepository(client, testTableName());
     targets = new TargetStateRepository(client, testTableName());
     locks = new LockRepository(client, testTableName());
-    tx = new DeployTransactions(client, executions, targets);
+    tx = new DeployTransactions(client, executions, targets, locks);
   });
 
   afterAll(() => {
@@ -140,7 +140,7 @@ describe.skipIf(!dynamoDbLocalAvailable())("deploy coordinator transactions (Dyn
       entry: { executionId: seed.executionId, since: 42 },
       now: Date.now(),
     });
-    expect(ok).toEqual({ outcome: "COMMITTED" });
+    expect(ok).toEqual({ outcome: "COMMITTED", held: false }); // no hold requested
     expect((await executions.get(seed.executionId))?.status).toBe("UNKNOWN_TARGET_STATE");
     expect((await targets.get(seed.targetId))?.unresolved).toEqual([{ executionId: seed.executionId, since: 42 }]);
   });
@@ -185,8 +185,15 @@ describe.skipIf(!dynamoDbLocalAvailable())("deploy coordinator transactions (Dyn
     expect(state?.unresolved).toHaveLength(1);
     expect(state?.lastDeployed).toBeUndefined();
 
-    // The newer run was UNKNOWN: its lock is kept until the lease expires (script may run). Expire it to let the older run reach S2.
-    await locks.release(lockKey, newer.executionId, Date.now());
+    // AP-3: the newer run was UNKNOWN, so its lock is HELD (pinned, no TTL): no lease expiry and no plain release frees it.
+    const held = await locks.get(lockKey);
+    expect(held).toMatchObject({ owner: newer.executionId, hold: true, mode: "PINNED" });
+    expect(held?.expiresAt).toBeUndefined();
+    expect(await locks.release(lockKey, newer.executionId, Date.now())).toBe(false);
+    expect(await coordinator.handleLockRetry({ executionId: older.executionId, attempt: 1 })).toMatchObject({ outcome: "RETRY_SCHEDULED" });
+    // Only a fenced hold release (operator resolution or verified evidence) frees it.
+    expect(await locks.releaseHold(lockKey, newer.executionId, (held?.fencingToken ?? 0) + 1, Date.now())).toBe(false); // wrong token
+    expect(await locks.releaseHold(lockKey, newer.executionId, held?.fencingToken ?? 0, Date.now())).toBe(true);
 
     const second = await coordinator.handleLockRetry({ executionId: older.executionId, attempt: 1 });
     expect(second).toMatchObject({ transitionId: "X6", status: "SUPERSEDED" });

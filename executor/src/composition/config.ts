@@ -37,6 +37,11 @@ export interface ExecutorConfig {
   readonly sshConcurrency?: number;
   /** `CICD_NOTIFICATIONS_DISABLED=true`: external notifications (Slack) are logged as suppressed instead of sent. */
   readonly notificationsDisabled: boolean;
+  /**
+   * architecture-change-04: the sqs-agent transport, enabled only when BOTH `CICD_AGENT_RESULTS_QUEUE_URL` (the shared
+   * FIFO results queue) and `CICD_AGENT_LOG_BUCKET` are set. Absent: every sqs-agent target is TARGET_INVALID.
+   */
+  readonly agentTransport?: { readonly resultsQueueUrl: string; readonly logBucket: string };
   /** Prefix prepended to the logical name to form the Secrets Manager secret id; empty by default. */
   readonly secretIdPrefix: string;
 }
@@ -128,6 +133,19 @@ export function loadConfig(env: NodeJS.ProcessEnv): ExecutorConfig {
     problems.push("CICD_NOTIFICATIONS_DISABLED must be exactly true or false");
   }
 
+  const resultsQueueUrl = env["CICD_AGENT_RESULTS_QUEUE_URL"]?.trim() ?? "";
+  const logBucket = env["CICD_AGENT_LOG_BUCKET"]?.trim() ?? "";
+  let agentTransport: { resultsQueueUrl: string; logBucket: string } | undefined;
+  if (resultsQueueUrl !== "" || logBucket !== "") {
+    if (resultsQueueUrl === "" || logBucket === "") {
+      problems.push("CICD_AGENT_RESULTS_QUEUE_URL and CICD_AGENT_LOG_BUCKET are set together or not at all");
+    } else {
+      if (!/^https:\/\/\S+\.fifo$/.test(resultsQueueUrl)) problems.push("CICD_AGENT_RESULTS_QUEUE_URL must be the URL of a FIFO queue");
+      if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(logBucket)) problems.push("CICD_AGENT_LOG_BUCKET must be an S3 bucket name");
+      agentTransport = { resultsQueueUrl, logBucket };
+    }
+  }
+
   const secretIdPrefix = env["CICD_SECRET_ID_PREFIX"]?.trim() ?? "";
   const prefixProblem = secretIdPrefixProblem(secretIdPrefix);
   if (prefixProblem !== undefined) problems.push(`CICD_SECRET_ID_PREFIX ${prefixProblem}`);
@@ -148,6 +166,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ExecutorConfig {
     runbookUrl,
     healthcheckPath,
     notificationsDisabled,
+    ...(agentTransport === undefined ? {} : { agentTransport }),
     secretIdPrefix,
     ...(sshConcurrency === undefined ? {} : { sshConcurrency }),
   };

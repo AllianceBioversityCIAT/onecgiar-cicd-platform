@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Ssh2DeployTransport } from "../../src/adapters/ssh-deployer/index.js";
 import { redactString } from "../../src/observability/logger/redaction.js";
-import type { TargetLookup, TargetRecord } from "../../src/ports/target-registry.js";
+import type { SshTargetRecord, TargetLookup, TargetRecord } from "../../src/ports/target-registry.js";
 import { FakeSecretProvider } from "../support/fake-secret-provider.js";
 import { SshTestServer, generateTestKeyPair, reply, type TestKeyPair } from "../support/ssh-test-server.js";
 import { parseArgs, runProbe, type ProbeDeps, type ProbeExecutor } from "../../../tools/gate-b/probe/executor-ssh-probe.mjs";
@@ -119,7 +119,7 @@ describe("executor-ssh-probe end to end against the in-process SSH server (V1: n
     "probe.bash_version=5.2.0\nprobe.flock_present=yes\nprobe.flock_contention=busy\nprobe.flock_release=free\n" +
     'CICD_RESULT {"status":"PROBE_OK","healthy":true}\n';
 
-  const record = (port: number, over: Partial<TargetRecord> = {}): TargetRecord => ({
+  const record = (port: number, over: Partial<SshTargetRecord> = {}): TargetRecord => ({
     targetId: TARGET_ID,
     project: "example",
     environment: "dev",

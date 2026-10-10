@@ -554,7 +554,8 @@ describe("domain error codes (design §7.2, §15.1)", () => {
       expect(isDomainErrorCode(dropped), dropped).toBe(false);
     }
     expect([...FAILURE_CODES].sort()).toEqual(
-      ["DEPLOY_WINDOW_CLOSED", "DISPATCH_INTERRUPTED", "HEALTH", "HOST_KEY_MISMATCH", "LOCK_TIMEOUT", "MIGRATION", "PULL", "SSH_CONNECT", "START"],
+      // architecture-change-04 adds the two agent X11 causes to the closed set.
+      ["AGENT_DISPATCH_FAILED", "AGENT_REJECTED", "DEPLOY_WINDOW_CLOSED", "DISPATCH_INTERRUPTED", "HEALTH", "HOST_KEY_MISMATCH", "LOCK_TIMEOUT", "MIGRATION", "PULL", "SSH_CONNECT", "START"],
     );
   });
 

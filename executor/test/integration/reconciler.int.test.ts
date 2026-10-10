@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import type { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { DeployWindowRepository } from "../../src/adapters/dynamodb-state-store/deploy-window-repository.js";
 import { DeployTransactions } from "../../src/adapters/dynamodb-state-store/deploy-transactions.js";
+import { LockRepository } from "../../src/adapters/dynamodb-state-store/lock-repository.js";
 import { ExecutionRepository } from "../../src/adapters/dynamodb-state-store/execution-repository.js";
 import { DynamoDbStateStore } from "../../src/adapters/dynamodb-state-store/state-store.js";
 import { TargetStateRepository } from "../../src/adapters/dynamodb-state-store/target-state-repository.js";
@@ -80,7 +81,7 @@ describe.skipIf(!dynamoDbLocalAvailable())("reconciler (DynamoDB Local)", () => 
     reconciler = createReconciler({
       index: new DynamoDbStateStore(client, testTableName()),
       executions,
-      transactions: new DeployTransactions(client, executions, targets),
+      transactions: new DeployTransactions(client, executions, targets, new LockRepository(client, testTableName())),
       windows,
       target: targets,
       coordinator,
