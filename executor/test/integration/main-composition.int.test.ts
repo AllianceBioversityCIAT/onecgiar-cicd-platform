@@ -7,9 +7,9 @@
 // used by the request or deploy path.
 import { randomUUID } from "node:crypto";
 import { CreateTableCommand, DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DeleteCommand, GetCommand, PutCommand, type DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand, PutCommand, QueryCommand, type DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { buildCreateTableInput } from "../../src/adapters/dynamodb-state-store/table-schema.js";
-import { beforeAll, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { DedupeRepository } from "../../src/adapters/dynamodb-state-store/dedupe-repository.js";
 import { ExecutionRepository } from "../../src/adapters/dynamodb-state-store/execution-repository.js";
 import { RejectionRepository } from "../../src/adapters/dynamodb-state-store/rejection-repository.js";
@@ -128,7 +128,7 @@ describe.skipIf(!dynamoDbLocalAvailable())("composition root on DynamoDB Local (
     client.destroy();
   });
 
-  async function boot(clock?: { now(): Date }, table: string = testTableName()) {
+  async function boot(clock?: { now(): Date }, table: string = testTableName(), opts: { env?: Record<string, string>; injectProvider?: boolean } = {}) {
     const client = createTestDocumentClient();
     const secrets = new RecordingSecrets(fakeSecrets());
     const queue = new LoopbackQueue();
@@ -141,13 +141,13 @@ describe.skipIf(!dynamoDbLocalAvailable())("composition root on DynamoDB Local (
     const order: string[] = [];
     let flushed = false;
     const executor = await bootstrap({
-      env: validEnv({ CICD_TABLE_NAME: table, CICD_REGISTRY_TABLE_NAME: REGISTRY_TABLE, CICD_SSH_CONCURRENCY: "1" }),
+      env: validEnv({ CICD_TABLE_NAME: table, CICD_REGISTRY_TABLE_NAME: REGISTRY_TABLE, CICD_SSH_CONCURRENCY: "1", ...opts.env }),
       secrets,
       ...(clock === undefined ? {} : { clock }),
       schemas: bundledSchemas(),
       documentClient: client,
       publisher: queue,
-      notificationProviders: [provider],
+      ...(opts.injectProvider === false ? {} : { notificationProviders: [provider] }),
       createTransport: () => successfulTransport(execCalls, undefined, sshTargets),
       createConsumer: () => ({ start: async () => void order.push("consumer.start"), stop: async () => void order.push("consumer.stop") }),
       logSink: { write: (l) => void logLines.push(l), flush: () => void (flushed = true) },
@@ -209,6 +209,93 @@ describe.skipIf(!dynamoDbLocalAvailable())("composition root on DynamoDB Local (
     expect(h.sshTargets).toEqual([]);
     expect(h.execCalls).toEqual([]);
     expect(h.secrets.reads.slice(readsBefore)).toEqual([]); // in particular never the SSH credential
+  });
+
+  // CICD_NOTIFICATIONS_DISABLED (operator switch): the default Slack provider is replaced by one that only logs.
+  // These tests boot WITHOUT an injected provider, so the real wiring is exercised; the global `fetch` the Slack
+  // adapter uses is stubbed, so nothing reaches the network.
+  describe("CICD_NOTIFICATIONS_DISABLED", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function stubSlack() {
+      const calls: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          calls.push(url);
+          return new Response(JSON.stringify({ ok: true, ts: "1700000000.000200" }), { status: 200 });
+        }),
+      );
+      return calls;
+    }
+
+    async function phaseA(env: Record<string, string>, injectProvider: boolean, tag: string) {
+      const table = await freshTable();
+      const h = await boot(undefined, table, { env, injectProvider });
+      const readsBefore = h.secrets.reads.length;
+      const runId = String(Date.now() + tag.length);
+      const sent = await h.executor.handle(message(`m-notify-${tag}`, deployRequest(runId, Math.floor(Date.now() / 1000)), CI_SENDER));
+      expect(sent.ack).toBe(true);
+      await h.queue.drain(h.executor.handle);
+      await h.executor.stop();
+      const dedupe = await new DedupeRepository(h.client, table).get(TARGET_ID, `${runId}-1`);
+      const executionId = dedupe!.executionId!;
+      const item = await new ExecutionRepository(h.client, table).get(executionId);
+      const marks = await h.client.send(
+        new QueryCommand({ TableName: table, KeyConditionExpression: "pk = :pk AND begins_with(sk, :evt)", ExpressionAttributeValues: { ":pk": `EXEC#${executionId}`, ":evt": "EVT#" } }),
+      );
+      const logs = h.logLines.map((l) => JSON.parse(l) as Record<string, unknown>);
+      return { h, table, executionId, item, marks: (marks.Items ?? []).map((m) => String(m.sk)), logs, secretReads: h.secrets.reads.slice(readsBefore) };
+    }
+
+    function expectPhaseAOutcome(r: Awaited<ReturnType<typeof phaseA>>): void {
+      expect(r.item).toMatchObject({ status: "FAILED", error: { code: "DEPLOY_WINDOW_CLOSED" }, senderRef: CI_ROLE });
+      expect(r.item?.execStartedAt).toBeUndefined();
+      expect(r.h.queue.published).toEqual([]);
+      expect(r.h.sshTargets).toEqual([]);
+      expect(r.h.execCalls).toEqual([]);
+    }
+
+    test("true: DEPLOY_WINDOW_CLOSED keeps the same outcome and EVT# audit marks, no Slack call, no token read, suppressed events logged", async () => {
+      const slack = stubSlack();
+      const r = await phaseA({ CICD_NOTIFICATIONS_DISABLED: "true" }, false, "off");
+      expectPhaseAOutcome(r);
+      expect(await rawItem(r.h.client, r.table, lockKeyOf(TARGET_ID))).toBeUndefined();
+      expect(slack).toEqual([]);
+      expect(r.secretReads).toEqual([]); // neither the Slack token/channel nor the SSH credential
+      expect(r.item?.slackThreadTs).toBeUndefined(); // no Slack message, so no thread
+      expect(r.marks.length).toBeGreaterThanOrEqual(2); // one mark per notified event, as with Slack
+      expect(r.logs.find((l) => l.message === "external notifications disabled")).toMatchObject({ level: "warn", eventType: "NOTIFICATIONS_DISABLED" });
+      const suppressed = r.logs.filter((l) => l.message === "notification suppressed");
+      expect(suppressed.map((l) => l.kind)).toEqual(["ACCEPTED", "DEPLOY_WINDOW_CLOSED"]);
+      for (const l of suppressed) expect(l).toMatchObject({ level: "info", executionId: r.executionId });
+      expect(r.h.logLines.join("\n")).not.toContain("resolved-platform-token");
+    });
+
+    test.each([
+      ["absent", {}],
+      ["false", { CICD_NOTIFICATIONS_DISABLED: "false" }],
+    ])("%s: the default Slack provider still posts (same outcome, same marks)", async (label, env) => {
+      const slack = stubSlack();
+      const r = await phaseA(env, false, `on-${label}`);
+      expectPhaseAOutcome(r);
+      expect(slack.length).toBeGreaterThanOrEqual(2);
+      expect(slack.every((u) => u.startsWith("https://slack.com/api/"))).toBe(true);
+      expect(r.item?.slackThreadTs).toBe("1700000000.000200");
+      expect(r.marks.length).toBeGreaterThanOrEqual(2);
+      expect(r.logs.some((l) => l.message === "notification suppressed" || l.message === "external notifications disabled")).toBe(false);
+    });
+
+    test("an explicitly injected provider is kept even when the switch is true", async () => {
+      const slack = stubSlack();
+      const r = await phaseA({ CICD_NOTIFICATIONS_DISABLED: "true" }, true, "injected");
+      expectPhaseAOutcome(r);
+      expect(r.h.provider.events.map((e) => e.kind)).toEqual(["ACCEPTED", "DEPLOY_WINDOW_CLOSED"]);
+      expect(slack).toEqual([]);
+      expect(r.logs.some((l) => l.message === "notification suppressed" || l.message === "external notifications disabled")).toBe(false);
+    });
   });
 
   test("DEPLOY_REQUESTED runs to SUCCEEDED from the target snapshot: script on the target, fixed argument vector, platform channel (FR-02, FR-12, FR-14, FR-21)", async () => {

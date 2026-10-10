@@ -35,6 +35,7 @@ import {
   createDocumentClient,
 } from "../adapters/dynamodb-state-store/index.js";
 import { createSlackProvider } from "../adapters/notify/slack-provider/index.js";
+import { createSuppressedNotificationProvider } from "../adapters/notify/suppressed-provider/index.js";
 import { createSqsQueuePublisher } from "../adapters/sqs-publisher/index.js";
 import { Ssh2DeployTransport } from "../adapters/ssh-deployer/index.js";
 import { DynamoDbTargetRegistry } from "../adapters/dynamodb-target-registry/index.js";
@@ -155,7 +156,16 @@ export async function bootstrap(options: BootstrapOptions): Promise<Executor> {
   const publisher = options.publisher ?? createSqsQueuePublisher({ client: sqs as SQSClient, queueUrl: config.queueUrl });
 
   const pending = createPendingTasks();
-  const providers = options.notificationProviders ?? [createSlackProvider({ secrets, resolveChannel: (ref) => secrets.getSecret(ref) })];
+  // Explicitly injected providers (tests) always win; otherwise CICD_NOTIFICATIONS_DISABLED=true replaces Slack
+  // with a provider that only logs, and nothing else in the pipeline changes.
+  const providers =
+    options.notificationProviders ??
+    (config.notificationsDisabled
+      ? [createSuppressedNotificationProvider({ logger })]
+      : [createSlackProvider({ secrets, resolveChannel: (ref) => secrets.getSecret(ref) })]);
+  if (options.notificationProviders === undefined && config.notificationsDisabled) {
+    logger.warn("external notifications disabled", { eventType: "NOTIFICATIONS_DISABLED", setting: "CICD_NOTIFICATIONS_DISABLED" });
+  }
   const notifications = createNotificationService({
     providers,
     marks: new EventMarkRepository(client, table),

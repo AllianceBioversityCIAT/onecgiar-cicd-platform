@@ -35,6 +35,8 @@ export interface ExecutorConfig {
   readonly runbookUrl: string;
   readonly healthcheckPath: string;
   readonly sshConcurrency?: number;
+  /** `CICD_NOTIFICATIONS_DISABLED=true`: external notifications (Slack) are logged as suppressed instead of sent. */
+  readonly notificationsDisabled: boolean;
   /** Prefix prepended to the logical name to form the Secrets Manager secret id; empty by default. */
   readonly secretIdPrefix: string;
 }
@@ -118,6 +120,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): ExecutorConfig {
     if (!Number.isInteger(sshConcurrency) || sshConcurrency < 1) problems.push("CICD_SSH_CONCURRENCY must be a positive integer");
   }
 
+  // Optional switch, exact values only: absent or empty keeps notifications on (the default), anything but
+  // `true` or `false` is refused so a typo never silently disables or enables them.
+  const rawNotificationsDisabled = env["CICD_NOTIFICATIONS_DISABLED"];
+  const notificationsDisabled = rawNotificationsDisabled === "true";
+  if (rawNotificationsDisabled !== undefined && rawNotificationsDisabled !== "" && rawNotificationsDisabled !== "true" && rawNotificationsDisabled !== "false") {
+    problems.push("CICD_NOTIFICATIONS_DISABLED must be exactly true or false");
+  }
+
   const secretIdPrefix = env["CICD_SECRET_ID_PREFIX"]?.trim() ?? "";
   const prefixProblem = secretIdPrefixProblem(secretIdPrefix);
   if (prefixProblem !== undefined) problems.push(`CICD_SECRET_ID_PREFIX ${prefixProblem}`);
@@ -137,6 +147,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ExecutorConfig {
     logsUrlTemplate,
     runbookUrl,
     healthcheckPath,
+    notificationsDisabled,
     secretIdPrefix,
     ...(sshConcurrency === undefined ? {} : { sshConcurrency }),
   };
