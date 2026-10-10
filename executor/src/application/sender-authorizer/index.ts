@@ -33,7 +33,13 @@ const REQUIRED_CLASS: Readonly<Record<MessageEventType, PrincipalClass>> = {
   TARGET_RESOLUTION_RECORDED: "operator",
 };
 
-export type DenyReason = "MISSING_SENDER_ID" | "MALFORMED_SENDER_ID" | "NOT_AUTHORIZED" | "SESSION_NOT_REPOSITORY_ID";
+export type DenyReason =
+  | "MISSING_SENDER_ID"
+  | "MALFORMED_SENDER_ID"
+  | "NOT_AUTHORIZED"
+  | "SESSION_NOT_REPOSITORY_ID"
+  /** A repository-bound CI role whose session names another repository (multi-repository, D2). */
+  | "SESSION_REPOSITORY_MISMATCH";
 
 export interface AuthorizationRequest {
   readonly senderId: string | undefined;
@@ -96,12 +102,23 @@ export function createSenderAuthorizer(deps: SenderAuthorizerDeps): DecidingSend
     if ("reason" in parsed) return { authorized: false, reason: parsed.reason };
     const { roleId, session } = parsed;
     const required = REQUIRED_CLASS[request.eventType];
+    if (required === "ci") {
+      // Multi-repository (D2): a repository-bound CI role speaks only for its own repository_id, on top of the
+      // trust policy that already forces the session name; the shared CI role keeps its AC-02 behavior.
+      const binding = deps.principals.ciRepositoryBindings?.find((b) => b.roleId === roleId);
+      if (binding === undefined && !matches(deps.principals.ci, roleId)) {
+        return { authorized: false, reason: "NOT_AUTHORIZED", senderRef: roleId };
+      }
+      if (!REPOSITORY_ID.test(session)) return { authorized: false, reason: "SESSION_NOT_REPOSITORY_ID", senderRef: roleId };
+      if (binding !== undefined && session !== binding.repositoryId) {
+        return { authorized: false, reason: "SESSION_REPOSITORY_MISMATCH", senderRef: roleId };
+      }
+      return { authorized: true, senderRef: roleId, sourceRepositoryId: session };
+    }
     if (required === undefined || !matches(deps.principals[required], roleId)) {
       return { authorized: false, reason: "NOT_AUTHORIZED", senderRef: roleId };
     }
-    if (required !== "ci") return { authorized: true, senderRef: roleId };
-    if (!REPOSITORY_ID.test(session)) return { authorized: false, reason: "SESSION_NOT_REPOSITORY_ID", senderRef: roleId };
-    return { authorized: true, senderRef: roleId, sourceRepositoryId: session };
+    return { authorized: true, senderRef: roleId };
   }
 
   function decide(request: AuthorizationRequest): AuthorizationDecision {

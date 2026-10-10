@@ -331,6 +331,50 @@ describe("message-router with the real sender-authorizer: body identity never au
   });
 });
 
+// Multi-repository CI (D2): one CI role per repository, bound to its repository_id. The bound role reaches the
+// target only for its own repository; another repository's role (or a bound role claiming another repository's
+// session) never does, whatever the body says.
+describe("message-router with repository-bound CI roles (multi-repository, D2)", () => {
+  const SHARED_CI = "AROAFAKEEXAMPLE0001";
+  const ROLE_TARGET_REPO = "AROAFAKEEXAMPLE0101";
+  const ROLE_OTHER_REPO = "AROAFAKEEXAMPLE0102";
+  const real = () =>
+    createSenderAuthorizer({
+      principals: {
+        ci: SHARED_CI,
+        executor: "AROAFAKEEXAMPLE0010",
+        scheduler: "AROAFAKEEXAMPLE0011",
+        operator: "AROAFAKEEXAMPLE0012",
+        ciRepositoryBindings: [
+          { repositoryId: REPO_ID, roleId: ROLE_TARGET_REPO },
+          { repositoryId: OTHER_REPO_ID, roleId: ROLE_OTHER_REPO },
+        ],
+      },
+    });
+
+  it("the target repository's own role is accepted", async () => {
+    const h = harness();
+    expect(await routeMessage(msg(validRequest, { senderId: `${ROLE_TARGET_REPO}:${REPO_ID}` }), { ...h.deps, authorizer: real() })).toMatchObject({ outcome: "HANDLED" });
+  });
+
+  it("another repository's role is TARGET_NOT_AUTHORIZED, even with a forged ci.repository", async () => {
+    const h = harness();
+    const forged = { ...validRequest, ci: { ...validRequest.ci, repository: "example-org/example-app" } };
+    expect(await routeMessage(msg(forged, { senderId: `${ROLE_OTHER_REPO}:${OTHER_REPO_ID}` }), { ...h.deps, authorizer: real() })).toMatchObject({
+      reason: "TARGET_NOT_AUTHORIZED",
+    });
+    expect(h.dedupeCalls).toEqual([]);
+  });
+
+  it("another repository's role claiming the target repository's session is UNAUTHORIZED_SENDER before any target read", async () => {
+    const h = harness();
+    expect(await routeMessage(msg(validRequest, { senderId: `${ROLE_OTHER_REPO}:${REPO_ID}` }), { ...h.deps, authorizer: real() })).toMatchObject({
+      reason: "UNAUTHORIZED_SENDER",
+    });
+    expect(h.targetCalls).toEqual([]);
+  });
+});
+
 describe("message-router: unparseable messages are never acknowledged (RL-3)", () => {
   it.each([
     ["not JSON", "this is not json {", "NOT_JSON"],

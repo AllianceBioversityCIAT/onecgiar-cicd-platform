@@ -186,6 +186,31 @@ describe.skipIf(!dynamoDbLocalAvailable())("composition root on DynamoDB Local (
     return table;
   }
 
+  // Phase A guarantee (owner decision D3, 2026-10-10): a target with deployWindowPolicy `required` and NO window
+  // ends FAILED (DEPLOY_WINDOW_CLOSED) at X4, before any lock, lock retry, transport connect, secret read or exec.
+  test("Phase A: with the window policy required and no window, the request ends FAILED (DEPLOY_WINDOW_CLOSED) with no lock, no retry, no SSH and no secret read", async () => {
+    const table = await freshTable();
+    const h = await boot(undefined, table);
+    const readsBefore = h.secrets.reads.length;
+    const runId = String(Date.now() + 31);
+    const sent = await h.executor.handle(message("m-phase-a", deployRequest(runId, Math.floor(Date.now() / 1000)), CI_SENDER));
+    expect(sent.ack).toBe(true);
+    await h.queue.drain(h.executor.handle);
+
+    const dedupe = await new DedupeRepository(h.client, table).get(TARGET_ID, `${runId}-1`);
+    const item = await new ExecutionRepository(h.client, table).get(dedupe!.executionId!);
+    expect(item).toMatchObject({ status: "FAILED", error: { code: "DEPLOY_WINDOW_CLOSED" }, senderRef: CI_ROLE });
+    expect(item?.targetSnapshot.sourceRepositoryId).toBe(REPO_ID);
+    expect(item?.execStartedAt).toBeUndefined();
+    expect(item?.dispatchToken).toBeUndefined();
+    expect(await rawItem(h.client, table, lockKeyOf(TARGET_ID))).toBeUndefined();
+    expect(await rawItem(h.client, table, deployWindowKey(TARGET_ID))).toBeUndefined();
+    expect(h.queue.published).toEqual([]); // no LOCK_RETRY_REQUESTED: X5 never happened
+    expect(h.sshTargets).toEqual([]);
+    expect(h.execCalls).toEqual([]);
+    expect(h.secrets.reads.slice(readsBefore)).toEqual([]); // in particular never the SSH credential
+  });
+
   test("DEPLOY_REQUESTED runs to SUCCEEDED from the target snapshot: script on the target, fixed argument vector, platform channel (FR-02, FR-12, FR-14, FR-21)", async () => {
     const table = await freshTable();
     const h = await boot(undefined, table);

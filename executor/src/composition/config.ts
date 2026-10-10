@@ -6,7 +6,7 @@
 // standard chain; OD-Q12 stays open). Every problem is collected and reported
 // at once so a misconfigured deployment fails fast with ONE clear message.
 import { secretIdPrefixProblem } from "../adapters/secrets-manager-provider/index.js";
-import type { PlatformPrincipalRefs } from "../application/platform-config/index.js";
+import type { CiRepositoryBindingRef, PlatformPrincipalRefs } from "../application/platform-config/index.js";
 
 export class ConfigError extends Error {
   public readonly problems: readonly string[];
@@ -40,6 +40,37 @@ export interface ExecutorConfig {
 }
 
 const LOGICAL_REF = /^<[A-Z][A-Z0-9_]*>$/;
+const REPOSITORY_ID = /^[0-9]{1,20}$/;
+
+/**
+ * Multi-repository CI (owner decision D2): optional `CICD_CI_REPOSITORY_BINDINGS`, a comma-separated list of
+ * `<GitHub repository_id>=<LOGICAL_REF>`; each reference resolves at startup to the ID of the CI role that only
+ * that repository can assume. Absent or empty means none (the shared CI role alone, as before).
+ */
+function parseCiRepositoryBindings(raw: string | undefined, problems: string[]): CiRepositoryBindingRef[] {
+  const name = "CICD_CI_REPOSITORY_BINDINGS";
+  if (raw === undefined || raw.trim() === "") return [];
+  const bindings: CiRepositoryBindingRef[] = [];
+  const repositories = new Set<string>();
+  const refs = new Set<string>();
+  for (const entry of raw.split(",")) {
+    const separator = entry.indexOf("=");
+    const repositoryId = separator < 0 ? "" : entry.slice(0, separator).trim();
+    const principalRef = separator < 0 ? "" : entry.slice(separator + 1).trim();
+    if (!REPOSITORY_ID.test(repositoryId) || !LOGICAL_REF.test(principalRef)) {
+      problems.push(`${name} entries must be <repositoryId>=<LOGICAL_REF> with a numeric repository_id and a logical reference (DD-23)`);
+      return [];
+    }
+    if (repositories.has(repositoryId) || refs.has(principalRef)) {
+      problems.push(`${name} must not repeat a repository_id or a reference`);
+      return [];
+    }
+    repositories.add(repositoryId);
+    refs.add(principalRef);
+    bindings.push({ repositoryId, principalRef });
+  }
+  return bindings;
+}
 
 export function loadConfig(env: NodeJS.ProcessEnv): ExecutorConfig {
   const problems: string[] = [];
@@ -66,7 +97,12 @@ export function loadConfig(env: NodeJS.ProcessEnv): ExecutorConfig {
     executorPrincipalRef: ref("CICD_EXECUTOR_PRINCIPAL_REF"),
     schedulerPrincipalRef: ref("CICD_SCHEDULER_PRINCIPAL_REF"),
     operatorPrincipalRef: ref("CICD_OPERATOR_PRINCIPAL_REF"),
+    ciRepositoryBindingRefs: parseCiRepositoryBindings(env["CICD_CI_REPOSITORY_BINDINGS"], problems),
   };
+  const sharedCiRef = principalRefs.ciPrincipalRef;
+  if (principalRefs.ciRepositoryBindingRefs?.some((b) => b.principalRef === sharedCiRef)) {
+    problems.push("CICD_CI_REPOSITORY_BINDINGS must not reuse the shared CI role reference CICD_CI_PRINCIPAL_REF");
+  }
   const platformSlack = { channelRef: ref("CICD_PLATFORM_SLACK_CHANNEL_REF"), tokenRef: ref("CICD_PLATFORM_SLACK_TOKEN_REF") };
   const logsUrlTemplate = value("CICD_LOGS_URL_TEMPLATE");
   if (logsUrlTemplate !== "" && !logsUrlTemplate.includes("{executionId}")) {

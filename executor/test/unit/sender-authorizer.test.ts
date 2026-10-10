@@ -160,3 +160,65 @@ describe("sender-authorizer: unauthorized-sender metric", () => {
     expect(JSON.parse(lines[0] as string)._aws.CloudWatchMetrics[0]).toMatchObject({ Dimensions: [["reason"]], Metrics: [{ Name: "RejectedRequests" }] });
   });
 });
+
+// Multi-repository CI (owner decision D2, 2026-10-10): one CI role per repository, each bound to exactly one
+// GitHub repository_id. The shared CI role keeps its pre-existing behavior; a repository-bound role can only
+// speak for its own repository, so one repository's identity can never stand in for another's.
+describe("sender-authorizer: repository-bound CI roles (multi-repository)", () => {
+  const REPO_A = "520000001";
+  const REPO_B = "520000002";
+  const ROLE_A = "AROAFAKEEXAMPLE0101";
+  const ROLE_B = "AROAFAKEEXAMPLE0102";
+  const bound = {
+    ...principals,
+    ciRepositoryBindings: [
+      { repositoryId: REPO_A, roleId: ROLE_A },
+      { repositoryId: REPO_B, roleId: ROLE_B },
+    ],
+  };
+  const makeBound = () => createSenderAuthorizer({ principals: bound });
+
+  it("authorizes a bound role whose session is its own repository_id", () => {
+    expect(makeBound().decide({ senderId: sid(ROLE_A, REPO_A), eventType: "DEPLOY_REQUESTED" })).toEqual({
+      authorized: true,
+      senderRef: ROLE_A,
+      sourceRepositoryId: REPO_A,
+    });
+    expect(makeBound().decide({ senderId: sid(ROLE_B, REPO_B), eventType: "DEPLOY_REQUESTED" })).toMatchObject({ authorized: true, sourceRepositoryId: REPO_B });
+  });
+
+  it("rejects a bound role whose session names another repository (no cross-repository identity)", () => {
+    const d = makeBound().decide({ senderId: sid(ROLE_A, REPO_B), eventType: "DEPLOY_REQUESTED" });
+    expect(d).toEqual({ authorized: false, reason: "SESSION_REPOSITORY_MISMATCH", senderRef: ROLE_A });
+  });
+
+  it.each(["gh-run-1", "", "12a"])("rejects a bound role whose session %j is not a repository_id", (session) => {
+    expect(makeBound().decide({ senderId: `${ROLE_A}:${session}`, eventType: "DEPLOY_REQUESTED" }).authorized).toBe(false);
+  });
+
+  it("keeps the shared CI role's behavior when bindings are configured", () => {
+    expect(makeBound().decide({ senderId: sid(CI, REPO_ID), eventType: "DEPLOY_REQUESTED" })).toEqual({
+      authorized: true,
+      senderRef: CI,
+      sourceRepositoryId: REPO_ID,
+    });
+  });
+
+  it("rejects an unbound role that is not the shared CI role", () => {
+    expect(makeBound().decide({ senderId: sid(FOREIGN, REPO_A), eventType: "DEPLOY_REQUESTED" })).toMatchObject({ authorized: false, reason: "NOT_AUTHORIZED" });
+  });
+
+  it.each(["LOCK_RETRY_REQUESTED", "RECONCILE_TICK", "DEPLOY_WINDOW_OPEN_REQUESTED", "DEPLOY_WINDOW_CLOSE_REQUESTED", "TARGET_RESOLUTION_RECORDED"] as const)(
+    "never accepts a bound CI role for %s",
+    (eventType) => {
+      expect(makeBound().decide({ senderId: sid(ROLE_A, REPO_A), eventType }).authorized).toBe(false);
+    },
+  );
+
+  it("counts a cross-repository attempt as an unauthorized sender", () => {
+    const reasons: string[] = [];
+    const authorizer = createSenderAuthorizer({ principals: bound, metrics: { recordRejectedRequest: (r) => void reasons.push(r) } });
+    authorizer.decide({ senderId: sid(ROLE_B, REPO_A), eventType: "DEPLOY_REQUESTED" });
+    expect(reasons).toEqual(["UNAUTHORIZED_SENDER"]);
+  });
+});

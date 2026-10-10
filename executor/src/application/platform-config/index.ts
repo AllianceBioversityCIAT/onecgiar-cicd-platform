@@ -19,6 +19,22 @@ export interface PlatformPrincipalRefs {
   readonly executorPrincipalRef: string;
   readonly schedulerPrincipalRef: string;
   readonly operatorPrincipalRef: string;
+  /** Repository-bound CI roles (multi-repository, D2); empty when none is configured. */
+  readonly ciRepositoryBindingRefs?: readonly CiRepositoryBindingRef[];
+}
+
+/** A repository-bound CI role reference (multi-repository, owner decision D2): one CI role per GitHub repository. */
+export interface CiRepositoryBindingRef {
+  /** GitHub repository_id (digits) the role speaks for. */
+  readonly repositoryId: string;
+  /** Logical `<PLACEHOLDER>` reference that resolves to that role's ID. */
+  readonly principalRef: string;
+}
+
+/** A resolved repository-bound CI role. */
+export interface CiRepositoryBinding {
+  readonly repositoryId: string;
+  readonly roleId: string;
 }
 
 /** Resolved role IDs of the platform principals (DD-25). */
@@ -28,6 +44,8 @@ export interface ResolvedPrincipals {
   readonly executor: string;
   readonly scheduler: string;
   readonly operator: string;
+  /** Repository-bound CI roles (D2); each one may only send DEPLOY_REQUESTED for its own repository_id. */
+  readonly ciRepositoryBindings?: readonly CiRepositoryBinding[];
 }
 
 export interface PlatformConfigRefs {
@@ -73,12 +91,23 @@ async function mustExist(secrets: SecretProvider, ref: string): Promise<void> {
 /** Fails fast on the first reference that does not resolve (principals) or does not exist (Slack channel and token). */
 export async function resolvePlatformConfig(secrets: SecretProvider, refs: PlatformConfigRefs): Promise<ResolvedPlatformConfig> {
   const { principalRefs, platformSlack } = refs;
-  const principals: ResolvedPrincipals = {
-    ci: await resolve(secrets, principalRefs.ciPrincipalRef),
-    executor: await resolve(secrets, principalRefs.executorPrincipalRef),
-    scheduler: await resolve(secrets, principalRefs.schedulerPrincipalRef),
-    operator: await resolve(secrets, principalRefs.operatorPrincipalRef),
-  };
+  const ci = await resolve(secrets, principalRefs.ciPrincipalRef);
+  const executor = await resolve(secrets, principalRefs.executorPrincipalRef);
+  const scheduler = await resolve(secrets, principalRefs.schedulerPrincipalRef);
+  const operator = await resolve(secrets, principalRefs.operatorPrincipalRef);
+  // Each repository-bound CI role must be a distinct identity: a role ID shared with another principal or with
+  // another binding would make the sender ambiguous. The message names the reference, never a role ID.
+  const taken = new Set([ci, executor, scheduler, operator]);
+  const ciRepositoryBindings: CiRepositoryBinding[] = [];
+  for (const binding of principalRefs.ciRepositoryBindingRefs ?? []) {
+    const roleId = await resolve(secrets, binding.principalRef);
+    if (taken.has(roleId)) {
+      throw new Error(`repository-bound CI role reference "${binding.principalRef}" resolves to a role ID already used by another principal`);
+    }
+    taken.add(roleId);
+    ciRepositoryBindings.push({ repositoryId: binding.repositoryId, roleId });
+  }
+  const principals: ResolvedPrincipals = { ci, executor, scheduler, operator, ciRepositoryBindings };
   await mustExist(secrets, platformSlack.channelRef);
   await mustExist(secrets, platformSlack.tokenRef);
   return { principals };
