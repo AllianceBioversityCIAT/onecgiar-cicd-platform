@@ -1201,3 +1201,36 @@ process group, queue retention/visibility/DLQ, the real `SenderId`, S3/IAM, the 
 
 **Not verified here (E5):** sudo relay and `!use_pty`, orphan recovery on real `/proc`, PM2 and direct runs on
 Linux with Docker/PM2 applications, SQS retention/visibility/DLQ, `SenderId`, S3/IAM, the footprint on the host.
+
+## AC-04 E3 published and E4 — infrastructure as code (2026-10-13): **E3 pushed; E4 implemented locally, uncommitted, not deployed**
+
+**E3 publication (owner authorization).**
+- Commit `9cf8208` on `feature/ac-04-sqs-agent`, fast-forwarded to `feature/multi-repository-ci` and pushed
+  (`8a520ce..9cf8208`). `main` unchanged (`3893a88`).
+- Before the push: only the reusable workflow exists (`workflow_call`), so a push triggers nothing, and no run
+  appeared. No secret or account identifier in the change (guards 8/8). Local analysis files untracked.
+
+**E4 (owner authorization; templates only, no AWS change).** Details are in architecture-change-04 §24 and
+`infra/RESOURCES.md`.
+- `infra/sam/template.yaml` gains the `EnableAgentTransport` switch, default `false`: off, the stack is identical to
+  the deployed one.
+- `infra/sam/agent-stack.yaml` is new: one stack per agent.
+- `infra/sam/target-script-role.yaml` is new and optional.
+- `parameters.example.json`, `samconfig.example.toml` and `infra/agent/` (identity modes, PM2 environment) are
+  updated.
+
+**Validation (local only).**
+- `sam validate --lint` (SAM CLI 1.151.0): 4/4 templates valid.
+- New `test/contract/agent-infrastructure.contract.test.ts`: 34 tests.
+  - Switch off: no addition, every existing resource identical.
+  - Switch on: only two new Executor statements.
+  - Queue, bucket and role shapes.
+  - Name compatibility with the agent record schema and the Executor/agent configuration.
+  - Lint-style checks and publication policy.
+- The existing `sam-template` suite (78) passes unchanged on the switch-off rendering.
+
+**Not verified (E5, AWS):**
+- real IAM/SQS/S3 enforcement;
+- principal tags on sessions;
+- the instance-role chain and Roles Anywhere;
+- the change set on the deployed stack.

@@ -39,6 +39,10 @@
 //          Scheduler service principal), required verbatim in
 //          infra/sam/template.yaml and its contract test. Not account- or
 //          host-specific.
+//        - "ec2.amazonaws.com" and "rolesanywhere.amazonaws.com": the EC2 and
+//          IAM Roles Anywhere service principals in the agent role trust
+//          (infra/sam/agent-stack.yaml, architecture-change-04 E4) and its
+//          contract test. Same category: fixed public service identifiers.
 //
 //   2. PATH_SCOPED_ALLOWLIST: a short list of {path, rules} entries. Each
 //      entry exempts ONLY the named rule categories, and ONLY in the one
@@ -70,6 +74,8 @@ const GLOBAL_LITERAL_ALLOWLIST = new Set([
   "s3.us-west-2.amazonaws.com",
   "sts.amazonaws.com",
   "scheduler.amazonaws.com",
+  "ec2.amazonaws.com",
+  "rolesanywhere.amazonaws.com",
 ]);
 
 const PATH_SCOPED_ALLOWLIST = [
@@ -102,6 +108,12 @@ const PATH_SCOPED_ALLOWLIST = [
     rules: ["amazonaws-hostname"],
     requireFakeMarker: true,
     reason: "architecture-change-04: agent-put fixtures need an SQS FIFO queue URL; one FAKE_SQS_QUEUE_BASE literal with AWS's documentation account id.",
+  },
+  {
+    path: "executor/test/contract/agent-infrastructure.contract.test.ts",
+    rules: ["amazonaws-hostname"],
+    requireFakeMarker: true,
+    reason: "architecture-change-04 E4: queue names are checked against the agent record schema's SQS FIFO URL pattern; one FAKE_SQS_QUEUE_BASE literal with AWS's documentation account id.",
   },
   {
     path: "executor/test/contract/targets-schema.contract.test.ts",

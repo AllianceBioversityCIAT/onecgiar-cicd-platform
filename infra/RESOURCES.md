@@ -170,3 +170,47 @@ this task; re-create from the table below when needed). Result of the last run i
 **First-pass and falsifier results** are recorded in the report of task N-20 (red run, then
 mutation: a `StringLike` or wildcard `sub`/`job_workflow_ref` in the trust shape fails the
 checklist).
+
+## AC-04 agent transport (E4)
+
+Defined in `infra/sam/`; **not deployed**. The platform additions exist only with `EnableAgentTransport=true`
+(default `false`: the stack stays exactly as deployed). Names use the stage `dev` as an example.
+
+| # | Logical name | Template | Type | Key configuration | New / existing |
+|---|---|---|---|---|---|
+| A1 | `cicd-agent-results-dev.fifo` | `template.yaml` | SQS FIFO | Group = `executionId`, deduplication `commandId:seq` set by the agent (no content-based); visibility 120 s; long poll 20 s; retention `AgentResultsRetentionSeconds` (4 days); SSE-SQS; redrive to A2 after 5 receives | New, one per platform stage |
+| A2 | `cicd-agent-results-dev-dlq.fifo` | `template.yaml` | SQS FIFO DLQ | 14 days; alarm when not empty | New |
+| A3 | Results queue policy | `template.yaml` | SQS resource policy | Deny `SendMessage` to principals without tag `CicdAgentStage=<Stage>` (agent roles only); deny consume to everyone but the Executor role | New |
+| A4 | `cicd-agent-logs-<stage>-<account>-<region>` | `template.yaml` | S3 bucket | Block Public Access (all four), `BucketOwnerEnforced` (no ACLs), SSE-S3 default, expiry of `logs/` after `AgentLogRetentionDays` (90), incomplete uploads aborted after 1 day; retained on stack deletion | New |
+| A5 | Bucket policy | `template.yaml` | S3 resource policy | Deny any request without TLS; deny uploads that are not SSE-S3 (`AES256`); grants nothing | New |
+| A6 | Log read policy | `template.yaml` | IAM managed policy | `s3:GetObject` on `logs/*`, `s3:ListBucket` under `logs/`; attach to the readers' roles or SSO permission sets | New |
+| A7 | `cicd-agent-dev-<agentId>-cmd.fifo` | `agent-stack.yaml` | SQS FIFO | Group = `targetId`, deduplication by the Executor; visibility 120 s (the agent's own receive value); long poll 20 s; retention `CommandRetentionSeconds` (4 days); redrive after `CommandMaxReceiveCount` (5) | New, one per agent |
+| A8 | `cicd-agent-dev-<agentId>-dlq.fifo` | `agent-stack.yaml` | SQS FIFO DLQ | 14 days; alarm when not empty | New, one per agent |
+| A9 | Command queue policy | `agent-stack.yaml` | SQS resource policy | Deny `SendMessage` to everyone but the Executor role; deny consume to everyone but the agent role | New, one per agent |
+| A10 | Agent role | `agent-stack.yaml` | IAM role | See below; tag `CicdAgentStage=<Stage>` | New, one per agent |
+| A11 | Instance profile **or** Roles Anywhere profile | `agent-stack.yaml` | IAM / Roles Anywhere | One per `IdentityMode`: `ec2-instance-profile` (server without a profile), `ec2-instance-role` (server with one: never replaced, the agent assumes A10 from it), `roles-anywhere` (certificate CN = `agentId`) | New, one per agent |
+| A12 | Script role | `target-script-role.yaml` | IAM role | Optional; one per target whose script needs AWS (ECR pull, own secrets, reviewed managed policies) | New, optional |
+| A13 | Alarms | both | CloudWatch | Results DLQ not empty, results oldest message > 10 min; per agent: command DLQ not empty, command backlog > `CommandBacklogAlarmSeconds` (15 min) | New |
+| — | `ExecutorRole` (#15) | `template.yaml` | IAM role (existing) | **Two statements added**: `sqs:SendMessage` on `cicd-agent-<Stage>-*-cmd.fifo`; consume on A1. Nothing else changes | Existing, modified in place |
+| — | Deploy queue, its policy, CI roles, tables, schedule, existing alarms | `template.yaml` | — | **Unchanged** with the switch on or off (contract test) | Existing |
+
+**IAM by component (agent transport).** The results consumer and the reconciler are parts of the Executor process. They use the Executor role, so no extra role is created for them.
+
+| Component | Principal | Permissions | Explicitly excluded |
+|---|---|---|---|
+| Executor (dispatch, results consumer, reconciler) | Executor role | Existing permissions + send to its stage's agent command queues + consume A1 | S3, STS, IAM; the Executor builds log links but never reads logs |
+| Agent | A10 | Receive/delete/change visibility/`GetQueueAttributes` on **its** A7; `SendMessage` on A1; `s3:PutObject` on its targets' `logs/<project>/<environment>/<targetId>/*` (`TargetLogArns`); `sts:AssumeRole` on its targets' script roles (`ScriptRoleArns`) | Other queues, other targets' log prefixes, reads of the bucket, secrets, ECR, any write outside these |
+| Deploy script (optional) | A12 | ECR pull on listed repositories (+ the token), `GetSecretValue` on listed secrets, reviewed managed policies | Other targets' resources; DEV and PROD use different stacks |
+| Log readers | A6 attached by the owner | Read `logs/` | Write, delete |
+
+**Incremental cost estimate** (us-east-1 list prices, to confirm with the AWS Pricing Calculator; DEV with about 5 agents):
+
+| Item | Driver | Estimate per month |
+|---|---|---|
+| SQS FIFO requests | Per idle agent: about 130,000 empty receives (20 s long poll) + 43,000 heartbeats; Executor: about 130,000 receives on A1; deploys add a few dozen requests each. The first 1 M requests per month are free across SQS, then USD 0.50 per million | About USD 0–1 |
+| S3 | Logs of the order of 10 MB/day at 90-day retention (about 1 GB); about 3 PUT per deploy | Under USD 0.10 |
+| CloudWatch alarms | 2 platform + 2 per agent, USD 0.10 each | About USD 1.20 (5 agents) |
+| IAM, Roles Anywhere, SSE-S3, SSE-SQS | No charge | 0 |
+| **Certificate authority for Roles Anywhere (AP-5, open)** | A self-managed CA costs nothing. AWS Private CA costs USD 400/month in general-purpose mode, or USD 50/month in short-lived mode | 0, or USD 50–400 |
+
+Excluding the CA choice: about USD 1–3 per month.

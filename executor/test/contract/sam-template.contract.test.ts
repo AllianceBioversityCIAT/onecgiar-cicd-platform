@@ -27,6 +27,7 @@ import {
   type CfnTemplate,
   type Json,
   type PolicyStatement,
+  withConditions,
 } from "./support/cfn-template.js";
 import { eventSchemaPath } from "./support/schema-paths.js";
 
@@ -39,8 +40,11 @@ let template: CfnTemplate;
 const role = (name: string): CfnResource => template.Resources[name]!;
 const actionsOf = (statements: PolicyStatement[]): string[] => statements.flatMap((s) => asArray(s.Action));
 
+// The agent transport (architecture-change-04 E4) is off by default (EnableAgentTransport=false): every test here runs
+// on that default, which must stay exactly the platform as deployed before E4. The agent additions, and the lint-style
+// checks over the full template, are in agent-infrastructure.contract.test.ts.
 beforeAll(() => {
-  template = loadSamTemplate();
+  template = withConditions(loadSamTemplate(), { AgentTransport: false });
 });
 
 describe("template parsing", () => {

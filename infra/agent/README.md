@@ -32,13 +32,39 @@ override the two files. Nothing outside these directories is written.
   - `"runAs": "self"` runs it as `cicd-agent` itself, without sudo, for servers where no sudo rule is wanted. The
     script then has only the agent user's permissions and can write the agent's own `data/`, so use it only for
     scripts that need no other privileges.
-- **AWS credentials.** Temporary credentials only, from the SDK default chain:
-  - on EC2, the instance profile;
-  - on premises, IAM Roles Anywhere through `credential_process` in `~cicd-agent/.aws/config` with `AWS_PROFILE`
-    (AP-5).
+- **AWS credentials.** Temporary credentials only, never static keys. The agent's own AWS resources and role come from
+  one `infra/sam/agent-stack.yaml` stack per agent (see "AWS identity" below). Per-target script roles are assumed per
+  run (AP-2).
+- **Network.** Outbound HTTPS to SQS, S3 and STS in the platform region. No inbound port: the agent listens on nothing.
 
-  Never static keys. Per-target script roles are assumed per run (AP-2).
-- **Network.** HTTPS to SQS, S3 and STS in the platform region.
+## AWS identity (agent-stack.yaml `IdentityMode`)
+
+| Mode | Server | What the agent uses |
+|---|---|---|
+| `ec2-instance-profile` | EC2 instance **without** an instance profile | Attach the stack's `InstanceProfileName`; the default credential chain picks it up |
+| `ec2-instance-role` | EC2 instance that **already has** an instance profile (it is never replaced, so its applications keep their permissions) | The agent assumes the agent role from the instance role (below) |
+| `roles-anywhere` | On premises | One X.509 certificate per server, CN = `agentId`, private key readable by `cicd-agent` only; `aws_signing_helper` as `credential_process` (below) |
+
+`/opt/cicd-agent/.aws/config` (owned by root, readable by `cicd-agent`), with `AWS_PROFILE=cicd-agent` and
+`AWS_CONFIG_FILE` pointing to it in the agent's environment:
+
+```ini
+# ec2-instance-role
+[profile cicd-agent]
+role_arn = <AGENT_ROLE_ARN>
+credential_source = Ec2InstanceMetadata
+region = <AWS_REGION>
+
+# roles-anywhere
+[profile cicd-agent]
+credential_process = /opt/cicd-agent/bin/aws_signing_helper credential-process --certificate /opt/cicd-agent/pki/agent.crt --private-key /opt/cicd-agent/pki/agent.key --trust-anchor-arn <TRUST_ANCHOR_ARN> --profile-arn <ROLES_ANYWHERE_PROFILE_ARN> --role-arn <AGENT_ROLE_ARN>
+region = <AWS_REGION>
+```
+
+On EC2, instance credentials are reachable by **every** process on the host, including the applications. In
+`ec2-instance-role` mode any of them can also assume the agent role. Roles Anywhere, with a key only `cicd-agent`
+can read, isolates the agent's identity better. IMDSv2 with a hop limit of 1 keeps containers away from instance
+credentials. Changing that is a server setting, decided in E5.
 
 ## Running it
 

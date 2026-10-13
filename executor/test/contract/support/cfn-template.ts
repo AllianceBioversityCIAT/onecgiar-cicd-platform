@@ -213,3 +213,36 @@ export function unguardedEmptyDefaultRefs(template: CfnTemplate): string[] {
   for (const [id, o] of Object.entries(template.Outputs ?? {})) walk(o as unknown as Json, `Outputs/${id}`, new Set());
   return offenders;
 }
+
+/**
+ * The template as CloudFormation deploys it for the given values of SOME conditions: an `Fn::If` on one of them is
+ * replaced by its chosen branch (a chosen `AWS::NoValue` disappears from its list or object), and resources and
+ * outputs whose `Condition` is one of them and false are removed. Every other condition and `Fn::If` is left as it is,
+ * so tests can still inspect both of their branches.
+ */
+export function withConditions(template: CfnTemplate, values: Readonly<Record<string, boolean>>): CfnTemplate {
+  const NO_VALUE = Symbol("AWS::NoValue");
+  const isNoValue = (v: Json | undefined): boolean => isObj(v) && v.Ref === "AWS::NoValue" && Object.keys(v).length === 1;
+  const walk = (node: Json): Json | typeof NO_VALUE => {
+    if (Array.isArray(node)) return node.map(walk).filter((n): n is Json => n !== NO_VALUE);
+    if (!isObj(node)) return node;
+    const branches = node["Fn::If"];
+    if (Array.isArray(branches) && branches.length === 3 && typeof branches[0] === "string" && branches[0] in values) {
+      const chosen = values[branches[0]] === true ? branches[1] : branches[2];
+      return isNoValue(chosen) ? NO_VALUE : walk(chosen as Json);
+    }
+    const out: { [key: string]: Json } = {};
+    for (const [k, v] of Object.entries(node)) {
+      const w = walk(v);
+      if (w !== NO_VALUE) out[k] = w;
+    }
+    return out;
+  };
+  const kept = <T extends { Condition?: string }>(entries: Record<string, T>): Record<string, T> =>
+    Object.fromEntries(
+      Object.entries(entries)
+        .filter(([, e]) => e.Condition === undefined || !(e.Condition in values) || values[e.Condition] === true)
+        .map(([name, e]) => [name, walk(e as unknown as Json) as unknown as T]),
+    );
+  return { ...template, Resources: kept(template.Resources), Outputs: kept((template.Outputs ?? {}) as Record<string, { Condition?: string; Description?: string; Value: Json }>) };
+}

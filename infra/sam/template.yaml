@@ -1,4 +1,4 @@
-# @akili-spec changes/cicd-executor-poc design DD-17, DD-23, DD-24, DD-25, DD-14, §5.1, §5.3, §11, §12; gate-b-plan §5, §11, §12; infra/RESOURCES.md; tasks R-2 (AC-02 V1)
+# @akili-spec changes/cicd-executor-poc design DD-17, DD-23, DD-24, DD-25, DD-14, §5.1, §5.3, §11, §12; gate-b-plan §5, §11, §12; infra/RESOURCES.md; tasks R-2 (AC-02 V1); architecture-change-04 §11, §12, §14 (E4)
 #
 # Gate B / B0 foundation for the DEV stack (OD-Q7 resolved by the owner: SAM / CloudFormation).
 #
@@ -106,6 +106,25 @@ Parameters:
     AllowedPattern: "^$|^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=.@_/-]+(,arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=.@_/-]+){0,19}$"
     ConstraintDescription: Comma-separated IAM role ARNs (no spaces, at most 20, role names without commas).
     Description: ARNs of the repository-bound CI roles (ci-repository-role.yaml stacks) allowed to send deploy requests. Empty means none.
+  # architecture-change-04 (E4): the sqs-agent transport's shared resources. "false" (default) creates none of them and
+  # leaves every existing resource and permission exactly as before; agents (agent-stack.yaml) need "true".
+  EnableAgentTransport:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Create the agent results queue, its DLQ, the agent log bucket and the Executor's agent permissions (AC-04).
+  AgentResultsRetentionSeconds:
+    Type: Number
+    Default: 345600
+    MinValue: 3600
+    MaxValue: 1209600
+    Description: Retention of the agent results queue (seconds; default 4 days). Events wait there while the Executor is stopped.
+  AgentLogRetentionDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    MaxValue: 3650
+    Description: Days the agent logs of this platform stage are kept (AP-6 - DEV 90, STAGING 180, PROD 365).
 
 Conditions:
   CreateOidcProvider: !Equals [!Ref ExistingGitHubOidcProviderArn, ""]
@@ -113,6 +132,7 @@ Conditions:
   CreateProbeRepository: !Equals [!Ref CiEcrRepositoryArn, ""]
   HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, ""]]
   HasAdditionalCiRoles: !Not [!Equals [!Ref AdditionalCiRoleArns, ""]]
+  AgentTransport: !Equals [!Ref EnableAgentTransport, "true"]
 
 Resources:
   # ---------------------------------------------------------------- Queues (DD-14, DD-25)
@@ -380,6 +400,26 @@ Resources:
                   - sqs:ChangeMessageVisibility
                   - sqs:SendMessage
                 Resource: !GetAtt DeployQueue.Arn
+              # AC-04 §11.5: commands and evidence queries to the agents of this stage (command queues are created by
+              # agent-stack.yaml and named cicd-agent-<Stage>-<AgentId>-cmd.fifo), events from the results queue.
+              # Each command queue's policy additionally denies SendMessage to every other principal.
+              - !If
+                - AgentTransport
+                - Sid: AgentCommandSend
+                  Effect: Allow
+                  Action: sqs:SendMessage
+                  Resource: !Sub "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:cicd-agent-${Stage}-*-cmd.fifo"
+                - !Ref AWS::NoValue
+              - !If
+                - AgentTransport
+                - Sid: AgentResultsConsume
+                  Effect: Allow
+                  Action:
+                    - sqs:ReceiveMessage
+                    - sqs:DeleteMessage
+                    - sqs:ChangeMessageVisibility
+                  Resource: !GetAtt AgentResultsQueue.Arn
+                - !Ref AWS::NoValue
               - Sid: StateTableItems
                 Effect: Allow
                 Action:
@@ -630,6 +670,213 @@ Resources:
         - Key: Project
           Value: ONECGIAR-CICD-Platform
 
+  # ---------------------------------------------------------------- Agent transport (AC-04 §11, §12, §14; E4)
+  # Everything below exists only with EnableAgentTransport=true. One results queue and one log bucket per platform
+  # stage; the per-agent command queues and agent roles live in agent-stack.yaml stacks.
+  AgentResultsDlq:
+    Type: AWS::SQS::Queue
+    Condition: AgentTransport
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: !Sub cicd-agent-results-${Stage}-dlq.fifo
+      FifoQueue: true
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+        - Key: Stage
+          Value: !Ref Stage
+
+  # FIFO (AP-1): group = executionId, deduplication = commandId:seq, both set by the agent (no content-based
+  # deduplication). Long polling by default.
+  AgentResultsQueue:
+    Type: AWS::SQS::Queue
+    Condition: AgentTransport
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: !Sub cicd-agent-results-${Stage}.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: false
+      VisibilityTimeout: 120
+      ReceiveMessageWaitTimeSeconds: 20
+      MessageRetentionPeriod: !Ref AgentResultsRetentionSeconds
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt AgentResultsDlq.Arn
+        maxReceiveCount: 5
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+        - Key: Stage
+          Value: !Ref Stage
+
+  # AC-04 §11.4: only agent roles of THIS stage may send (agent-stack.yaml tags every agent role
+  # CicdAgentStage=<Stage>), and only the Executor role may consume. The Executor additionally maps each event's
+  # SenderId to the agent's registered role id and refuses events for targets that agent does not serve.
+  AgentResultsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Condition: AgentTransport
+    Properties:
+      Queues:
+        - !Ref AgentResultsQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenySendFromNonAgents
+            Effect: Deny
+            Principal: "*"
+            Action: sqs:SendMessage
+            Resource: !GetAtt AgentResultsQueue.Arn
+            Condition:
+              StringNotEquals:
+                aws:PrincipalTag/CicdAgentStage: !Ref Stage
+          - Sid: DenyConsumeFromNonExecutor
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+              - sqs:ChangeMessageVisibility
+            Resource: !GetAtt AgentResultsQueue.Arn
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn: !GetAtt ExecutorRole.Arn
+
+  # AC-04 §12, AP-6: private, SSE-S3, TLS only, no ACLs; keys logs/<project>/<environment>/<targetId>/<executionId>/
+  # <dispatchToken>/ (stdout.log.gz, stderr.log.gz, meta.json: agent, script, commit, result). Partial logs (LOST,
+  # timeouts) and failed deploys are uploaded like any other. Retained when the stack is deleted (audit data).
+  AgentLogBucket:
+    Type: AWS::S3::Bucket
+    Condition: AgentTransport
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub cicd-agent-logs-${Stage}-${AWS::AccountId}-${AWS::Region}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-agent-logs
+            Status: Enabled
+            Prefix: logs/
+            ExpirationInDays: !Ref AgentLogRetentionDays
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+        - Key: Stage
+          Value: !Ref Stage
+
+  AgentLogBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: AgentTransport
+    Properties:
+      Bucket: !Ref AgentLogBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt AgentLogBucket.Arn
+              - !Sub "${AgentLogBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+          # The agent always sends ServerSideEncryption=AES256 (SSE-S3); anything else (no header, SSE-KMS, SSE-C) is
+          # refused, so every object is encrypted the approved way (AP-6).
+          - Sid: DenyUploadsNotSseS3
+            Effect: Deny
+            Principal: "*"
+            Action: s3:PutObject
+            Resource: !Sub "${AgentLogBucket.Arn}/*"
+            Condition:
+              StringNotEquals:
+                s3:x-amz-server-side-encryption: AES256
+
+  # AC-04 §12 "Access": attach to the IAM roles or SSO permission sets of the people who read deploy logs.
+  # Read-only, logs/ only; nobody but an agent writes and nobody deletes (expiry is the lifecycle rule's job).
+  AgentLogReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: AgentTransport
+    Properties:
+      Description: Read the CI/CD agent deploy logs of this platform stage (AC-04 §12).
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ReadAgentLogs
+            Effect: Allow
+            Action: s3:GetObject
+            Resource: !Sub "${AgentLogBucket.Arn}/logs/*"
+          - Sid: ListAgentLogs
+            Effect: Allow
+            Action: s3:ListBucket
+            Resource: !GetAtt AgentLogBucket.Arn
+            Condition:
+              StringLike:
+                s3:prefix: logs/*
+
+  # Events wait unconsumed (Executor stopped or failing) or land in the DLQ (malformed, repeatedly failing).
+  AgentResultsDlqNotEmptyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: AgentTransport
+    Properties:
+      AlarmName: !Sub cicd-${Stage}-agent-results-dlq-not-empty
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt AgentResultsDlq.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+
+  AgentResultsOldestMessageAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: AgentTransport
+    Properties:
+      AlarmName: !Sub cicd-${Stage}-agent-results-oldest-message-age
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt AgentResultsQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 600
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+
 Outputs:
   DeployQueueUrl:
     Description: Deploy queue URL (operator and Executor configuration steps).
@@ -682,3 +929,23 @@ Outputs:
   ExecutorLogGroupName:
     Description: Executor log group name (log shipping step in the runbook).
     Value: !Ref ExecutorLogGroup
+  AgentResultsQueueUrl:
+    Condition: AgentTransport
+    Description: Agent results queue URL (Executor setting CICD_AGENT_RESULTS_QUEUE_URL).
+    Value: !Ref AgentResultsQueue
+  AgentResultsQueueArn:
+    Condition: AgentTransport
+    Description: Agent results queue ARN (agent-stack.yaml parameter ResultsQueueArn).
+    Value: !GetAtt AgentResultsQueue.Arn
+  AgentResultsDlqUrl:
+    Condition: AgentTransport
+    Description: Agent results DLQ URL (inspection runbook step).
+    Value: !Ref AgentResultsDlq
+  AgentLogBucketName:
+    Condition: AgentTransport
+    Description: Agent log bucket (Executor setting CICD_AGENT_LOG_BUCKET; agent-stack.yaml parameter LogBucketName).
+    Value: !Ref AgentLogBucket
+  AgentLogReadPolicyArn:
+    Condition: AgentTransport
+    Description: Managed policy to attach to the roles or SSO permission sets that read deploy logs.
+    Value: !Ref AgentLogReadPolicy

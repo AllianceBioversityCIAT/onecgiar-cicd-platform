@@ -4,9 +4,10 @@
 GitHub Actions (OIDC, a CI role per repository) → ECR → SQS → central Executor → DynamoDB. The pilot
 application's target is registered with fictitious SSH data and `deployWindowPolicy: required`, so every request
 ends `FAILED (DEPLOY_WINDOW_CLOSED)` by design: **no real deployment has run yet**. The next architecture,
-**AC-04 (`SQS_AGENT`: asynchronous Executor, one agent per server)**, is **approved (revision 2)**; **E1** (contracts), **E2** (the asynchronous Executor path)
-and **E3** (the server agent, a plain Node.js process) are committed and pushed to `feature/multi-repository-ci`; **E4**
-(infrastructure as code) is in progress, uncommitted, and is never deployed without the owner's authorization. A new conversation resumes from this
+**AC-04 (`SQS_AGENT`: asynchronous Executor, one agent per server)**, is **approved (revision 2)**; **E1** (contracts), **E2** (the asynchronous Executor path),
+**E3** (the server agent, a plain Node.js process) and **E4** (infrastructure as code, not deployed) are committed and
+pushed to `feature/multi-repository-ci`; **E5** (AWS validation) is being prepared and needs the owner's authorization for
+every AWS operation. A new conversation resumes from this
 file without any chat history.
 
 ## 1. Approved architecture
@@ -47,7 +48,8 @@ Rationale: [architecture-change-04.md](specs/changes/cicd-executor-poc/architect
 | AC-04 E1: agent contracts (`target-record` transport fields, `agent-record`, `agent-command`, `agent-event`, `agent-query`, `agent-heartbeat`, `domain/agent-protocol`, admin tool `agent-put`/`agent-get`) | Yes, commit `8528231` (pushed to `feature/multi-repository-ci`) | `check:local` exit 0: 1705 tests passed, 95 skipped, 29 todo (the E2/E3 acceptance cases); guards 8/8; integration 14/14 files | No (no AWS change in E1). The Executor **refuses** `sqs-agent` targets (`TARGET_INVALID`) until E2 |
 | AC-04 E2: asynchronous Executor path (outbox dispatch to a FIFO command queue, results consumer, pinned and held locks without TTL, fresh fencing token per dispatch, reconciler re-send/query/hard deadline, hold release by evidence or `TARGET_RESOLUTION_RECORDED`, SSH X16 hold) | Yes, commit `8a520ce` (pushed to `feature/multi-repository-ci`) | `check:local` exit 0: 1729 passed, 110 skipped, 13 todo (E3 cases); guards 8/8; integration 15/15 files, 102 tests (13 agent scenarios on DynamoDB Local); ElasticMQ FIFO dispatcher test | No (no AWS change). Off unless `CICD_AGENT_RESULTS_QUEUE_URL` and `CICD_AGENT_LOG_BUCKET` are set |
 | AC-04 E3: server agent (`executor/src/agent/`): a plain Node.js process, systemd optional (owner decision 2026-10-13), run directly or under an existing PM2 daemon. Includes the journal, fencing, scheduler, outbox, S3 logs, drain on stop, recovery of scripts left by an abruptly ended agent, `runAs` deploy user or `self`, and the `infra/agent/` packaging | Yes, approved by the owner (2026-10-13), committed and pushed to `feature/multi-repository-ci` | `check:local` exit 0: 1770 passed, 117 skipped, 12 todo (E5 cases); `agent.test.ts` 41 passed + 1 POSIX-only; ElasticMQ 11/11 + 1 POSIX-only (real `node main.js` process); guards 8/8; integration 15/15 files, 102 tests; footprint measured locally (idle about 48 MB RSS, CPU < 0.01 %) | No: not installed anywhere |
-| AC-04 E4–E7 (templates, real agent, first real deploy, notifications with log links) | No | — | — |
+| AC-04 E4: infrastructure as code (`template.yaml` switch `EnableAgentTransport`, default off: results FIFO queue + DLQ, log bucket, Executor agent permissions; `agent-stack.yaml` per agent; `target-script-role.yaml` per target) | Yes, approved by the owner (2026-10-13), committed and pushed to `feature/multi-repository-ci` | `sam validate --lint` 4/4 templates; contract tests: 34 new + the 78 existing on the switch-off rendering (identical platform) | **No: nothing deployed**; change set and real IAM/SQS/S3 behavior are E5 |
+| AC-04 E5–E7 (real agent, first real deploy, notifications with log links) | No | — | — |
 
 Evidence: [execution.md](specs/changes/cicd-executor-poc/execution.md). Branch `feature/multi-repository-ci` is pushed
 and **not merged** to `main`; the DEV stack was updated from that branch's template, so `main` must not be deployed
@@ -72,9 +74,10 @@ before the merge.
 | E0 | AC-04 approved | **Done** (revision 2, 2026-10-10) |
 | E1 | Schemas, registry records, admin tool, contract tests | **Done**, local commit `8528231` |
 | E2 | Executor async path (see §3) | **Done**, commit `8a520ce`, pushed to `feature/multi-repository-ci` |
-| E3 | Server agent and packaging (see §3) | **Done**, approved 2026-10-13, pushed to `feature/multi-repository-ci` |
-| **E4 (next, needs authorization)** | Templates: platform additions, `agent-stack.yaml`, `target-script-role.yaml` | — |
-| E5–E7 | One real agent with a no-op script; Reporting Tool DEV on `sqs-agent`; notifications with log links | — |
+| E3 | Server agent and packaging (see §3) | **Done**, approved 2026-10-13, commit `9cf8208` pushed to `feature/multi-repository-ci` |
+| E4 | Templates: platform additions, `agent-stack.yaml`, `target-script-role.yaml` | **Done**, approved 2026-10-13, pushed to `feature/multi-repository-ci`; not deployed |
+| **E5 (next, needs authorization)** | One real agent with a no-op script: change sets, deployment, identity, server | — |
+| E6–E7 | Reporting Tool DEV on `sqs-agent`; notifications with log links | — |
 
 **Owner decisions applied:** OP-1 (a late `FINISHED` never releases a hold automatically) and OP-2 (reuse
 `TARGET_RESOLUTION_RECORDED`). **Pending:** CA and server inventory for IAM Roles Anywhere (AP-5); Executor hosting (AP-9); merge of the branch;

@@ -15,5 +15,8 @@
   { "ParameterKey": "ReconcileScheduleState", "ParameterValue": "DISABLED" },
   { "ParameterKey": "AlarmTopicArn", "ParameterValue": "" },
   { "ParameterKey": "EnablePointInTimeRecovery", "ParameterValue": "false" },
-  { "ParameterKey": "AdditionalCiRoleArns", "ParameterValue": "" }
+  { "ParameterKey": "AdditionalCiRoleArns", "ParameterValue": "" },
+  { "ParameterKey": "EnableAgentTransport", "ParameterValue": "false" },
+  { "ParameterKey": "AgentResultsRetentionSeconds", "ParameterValue": "345600" },
+  { "ParameterKey": "AgentLogRetentionDays", "ParameterValue": "90" }
 ]

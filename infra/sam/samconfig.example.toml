@@ -19,6 +19,8 @@ resolve_s3 = true
 #   "ExistingGitHubOidcProviderArn=<EXISTING_OIDC_PROVIDER_ARN>"  (if the account already has the GitHub OIDC provider)
 #   "CiEcrRepositoryArn=<ECR_REPOSITORY_ARN>"  (omit it to create and use the probe repository cicd-poc-${Stage}-probe)
 #   "AlarmTopicArn=<SNS_TOPIC_ARN>"  (optional)
+#   "EnableAgentTransport=true"  (architecture-change-04: agent results queue, log bucket, Executor agent permissions;
+#    the default "false" leaves the stack exactly as before)
 # when you need them.
 parameter_overrides = [
   "Stage=dev",

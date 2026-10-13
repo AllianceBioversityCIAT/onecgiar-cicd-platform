@@ -1,0 +1,114 @@
+# @akili-spec changes/cicd-executor-poc architecture-change-04 §11.3, AP-2 (E4)
+#
+# OPTIONAL: one stack per target whose deploy script needs AWS (for example, pulling its images from ECR or reading its
+# own secret), named for example `cicd-script-<stage>-<targetId>`. Targets whose scripts need no AWS have none.
+#
+# Credentials of this role are assumed by the agent for ONE run (session name = execution id, visible in CloudTrail)
+# and passed only to that target's script; DEV and PROD targets use different stacks. Only the agent roles that serve
+# the target may assume it.
+#
+# Deploy order:
+#   1. deploy the agent stack;
+#   2. deploy this stack with that stack's AgentRoleArn;
+#   3. add this stack's ScriptRoleArn to the agent stack's ScriptRoleArns and to the target's catalog entry
+#      (scriptRoleArn).
+#
+# Publication policy (DD-23): no account ID, repository or secret name here; every value is a parameter.
+AWSTemplateFormatVersion: "2010-09-09"
+Description: ONECGIAR CI/CD Platform - per-target deploy script role (optional, AP-2).
+
+Parameters:
+  Stage:
+    Type: String
+    AllowedPattern: "^[a-z][a-z0-9-]{0,15}$"
+    ConstraintDescription: Lowercase letters, digits and hyphens; starts with a letter; at most 16 characters.
+    Description: Platform stage.
+  TargetId:
+    Type: String
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{1,62}$"
+    Description: The target this role belongs to (Target Registry targetId).
+  AgentRoleArns:
+    Type: String
+    AllowedPattern: "^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=.@_/-]+(,arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=.@_/-]+){0,4}$"
+    ConstraintDescription: Comma-separated IAM role ARNs (no spaces, 1 to 5).
+    Description: AgentRoleArn of the agent stack(s) that serve this target - the only principals allowed to assume this role.
+  EcrRepositoryArns:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:ecr:[a-z0-9-]+:[0-9]{12}:repository/[a-z0-9._/-]+(,arn:aws[a-z-]*:ecr:[a-z0-9-]+:[0-9]{12}:repository/[a-z0-9._/-]+){0,19}$"
+    Description: ECR repositories the script pulls from (read only). Empty means none.
+  SecretArns:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+(,arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+){0,19}$"
+    Description: The target's own secrets the script reads (full secret ARNs, no wildcard). Empty means none.
+  ManagedPolicyArns:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:iam::([0-9]{12}|aws):policy/[A-Za-z0-9+=,.@_/-]+(,arn:aws[a-z-]*:iam::([0-9]{12}|aws):policy/[A-Za-z0-9+=,.@_/-]+){0,9}$"
+    Description: Further managed policies the target's script needs (reviewed per target). Empty means none.
+
+Conditions:
+  HasEcrRepositories: !Not [!Equals [!Ref EcrRepositoryArns, ""]]
+  HasSecrets: !Not [!Equals [!Ref SecretArns, ""]]
+  HasManagedPolicies: !Not [!Equals [!Ref ManagedPolicyArns, ""]]
+
+Resources:
+  ScriptRole:
+    Type: AWS::IAM::Role
+    Properties:
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AgentsServingTheTarget
+            Effect: Allow
+            Principal:
+              AWS: !Split [",", !Ref AgentRoleArns]
+            Action: sts:AssumeRole
+      ManagedPolicyArns: !If [HasManagedPolicies, !Split [",", !Ref ManagedPolicyArns], !Ref "AWS::NoValue"]
+      Policies:
+        - !If
+          - HasEcrRepositories
+          - PolicyName: pull-target-images
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                # ACCEPTED EXCEPTION (as for the CI role): ecr:GetAuthorizationToken has no resource scoping.
+                - Sid: EcrAuthorizationToken
+                  Effect: Allow
+                  Action: ecr:GetAuthorizationToken
+                  Resource: "*"
+                - Sid: EcrPullTargetRepositories
+                  Effect: Allow
+                  Action:
+                    - ecr:BatchCheckLayerAvailability
+                    - ecr:BatchGetImage
+                    - ecr:GetDownloadUrlForLayer
+                  Resource: !Split [",", !Ref EcrRepositoryArns]
+          - !Ref AWS::NoValue
+        - !If
+          - HasSecrets
+          - PolicyName: read-target-secrets
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Sid: ReadTargetSecrets
+                  Effect: Allow
+                  Action:
+                    - secretsmanager:DescribeSecret
+                    - secretsmanager:GetSecretValue
+                  Resource: !Split [",", !Ref SecretArns]
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+        - Key: Stage
+          Value: !Ref Stage
+        - Key: TargetId
+          Value: !Ref TargetId
+
+Outputs:
+  ScriptRoleArn:
+    Description: Script role ARN (catalog scriptRoleArn of the target; agent stack ScriptRoleArns).
+    Value: !GetAtt ScriptRole.Arn

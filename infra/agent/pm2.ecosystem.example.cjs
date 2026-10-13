@@ -9,7 +9,13 @@ module.exports = {
       // Node.js 22 for the agent only, if the server's default node is another version (applications keep theirs).
       interpreter: "/opt/cicd-agent/node/bin/node",
       cwd: "/opt/cicd-agent",
-      env: { CICD_AGENT_HOME: "/opt/cicd-agent", NODE_ENV: "production" },
+      env: {
+        CICD_AGENT_HOME: "/opt/cicd-agent",
+        NODE_ENV: "production",
+        // ec2-instance-role and roles-anywhere modes (README "AWS identity"); omit both in ec2-instance-profile mode.
+        // AWS_CONFIG_FILE: "/opt/cicd-agent/.aws/config",
+        // AWS_PROFILE: "cicd-agent",
+      },
       exec_mode: "fork",
       instances: 1,
       autorestart: true,

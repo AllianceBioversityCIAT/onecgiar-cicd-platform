@@ -436,3 +436,34 @@ These are listed as `todo` in `agent-protocol.pending.test.ts`:
 - the footprint on the host.
 
 Windows runs prove the agent's logic, not Linux process, sudo, Docker or PM2 behavior.
+
+## 24. E4 implementation notes (infrastructure as code, 2026-10-13)
+Templates only, **nothing deployed**. No approved decision changed. Choices fixed by E4:
+
+| Item | As implemented |
+|---|---|
+| Platform switch | `template.yaml` gains `EnableAgentTransport` (default `"false"`). Off, the rendered stack is exactly the deployed one: the existing contract suite runs unchanged on that rendering. On, it adds the results FIFO queue and DLQ, their policy, the log bucket and its policy, a read-only log policy and two alarms, and it adds two statements to `ExecutorRole`. No other resource changes, as a contract test checks. |
+| Agent stack | `agent-stack.yaml`, one per agent: command FIFO queue and DLQ, queue policy, agent role, identity binding, two alarms. Queue names follow the agent record schema (`cicd-agent-<stage>-<agentId>-cmd.fifo`; DLQ `…-dlq.fifo`, both ≤ 80 characters). |
+| Script roles | `target-script-role.yaml`, optional, one per target that needs AWS: ECR pull and secret reads on listed resources, plus reviewed managed policies. It is trusted only by the agent roles serving the target. |
+| Results-queue senders (§11.4) | The queue policy denies `SendMessage` to any principal without the tag `CicdAgentStage=<Stage>`, which every agent role carries. New agents therefore need no platform-stack update. The Executor still maps each event's `SenderId` to the registered role id. |
+| Consumers | Both queue policies also deny consumption to everyone but the intended reader (Executor on results, the agent on its commands): a stray consumer could otherwise swallow commands or events. |
+| Executor (§11.5) | `sqs:SendMessage` on `cicd-agent-<Stage>-*-cmd.fifo`, plus consumption of the results queue. The results consumer and the reconciler run inside the Executor and use its role, so there are no separate roles. |
+| Identity (AP-5) | Three modes. `ec2-instance-profile` is for a server without a profile. `ec2-instance-role` is for a server that already has one: the profile is never replaced, and the agent assumes its role through `credential_source = Ec2InstanceMetadata`. `roles-anywhere` binds the trust anchor and the certificate CN = `agentId`. CloudFormation `Rules` enforce the parameters each mode needs. |
+| Log write scope | `TargetLogArns` lists one `arn:…:s3:::<bucket>/logs/<project>/<environment>/<targetId>/*` per target. The parameter pattern rejects broader prefixes. Full ARNs are passed because a CloudFormation `Fn::Join` delimiter cannot contain the bucket name. |
+| Log key layout | Unchanged (§12, set by the Executor in E2): `logs/<project>/<environment>/<targetId>/<executionId>/<dispatchToken>/`. The agent is recorded in `meta.json`, not in the key. |
+| Retention (AP-6) | One bucket per platform stage with one expiry rule, `AgentLogRetentionDays`, default 90 for DEV. Per-environment retention inside one stage (180 for STAGING, 365 for PROD) would need object tags written by the agent: an open point for when those environments are onboarded. |
+| Alarms (§14) | SQS-native ones only: results DLQ and age, and per agent the command DLQ and backlog. "Stale agent" and "holds" alarms need Executor metrics that do not exist yet (E7). |
+| Encryption | SSE-SQS on every queue; SSE-S3 on the bucket, with uploads that are not SSE-S3 refused. No KMS key. |
+
+Validated locally:
+
+- `sam validate --lint`, SAM CLI 1.151.0, passes on all four templates;
+- `agent-infrastructure.contract.test.ts`, 34 tests;
+- the existing `sam-template` contract suite, 78 tests, on the switch-off rendering.
+
+Not validated, because it needs AWS (E5):
+
+- that IAM, SQS and S3 enforce these policies as intended;
+- principal tags on the roles' sessions;
+- the instance-role chain and Roles Anywhere;
+- the change set on the deployed stack, which should show only additions and one in-place `ExecutorRole` modification.

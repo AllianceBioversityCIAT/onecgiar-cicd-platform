@@ -1,0 +1,368 @@
+# @akili-spec changes/cicd-executor-poc architecture-change-04 §6, §11.1, §11.2, §11.4, §14, AP-1, AP-4, AP-5 (E4)
+#
+# One stack per agent (one server x one platform stage, AP-4), for example `cicd-agent-<stage>-<agentId>`. It
+# holds the agent's FIFO command queue and DLQ, the queue policy, the agent role and its identity binding. It
+# creates nothing on the server: the agent is a plain Node.js process (infra/agent/README.md).
+#
+# Prerequisite: the platform stack with EnableAgentTransport=true. Its outputs feed ExecutorRoleArn,
+# ResultsQueueArn and the log bucket name inside TargetLogArns.
+#
+# After deploying, register the agent (target-registry tool `agent-put`):
+#   - CommandQueueUrl becomes the agent record's commandQueueUrl;
+#   - AgentRoleId becomes its roleId;
+#   - the catalog targets become its targets.
+#
+# Identity (AP-5, §11.1), one mode per stack:
+#   - ec2-instance-profile: a new instance profile for a server WITHOUT one;
+#   - ec2-instance-role: a server that already has an instance profile (never replaced). The agent assumes this role
+#     from the instance role, through credential_source = Ec2InstanceMetadata in its AWS config;
+#   - roles-anywhere: on premises, one X.509 certificate per server whose CN equals AgentId (IAM Roles Anywhere).
+# Never static access keys.
+#
+# Publication policy (DD-23): no account ID, host or secret name here; every value is a parameter.
+AWSTemplateFormatVersion: "2010-09-09"
+Description: ONECGIAR CI/CD Platform - one server agent (command FIFO queue, DLQ, agent role, identity binding).
+
+Parameters:
+  Stage:
+    Type: String
+    AllowedPattern: "^[a-z][a-z0-9-]{0,15}$"
+    ConstraintDescription: Lowercase letters, digits and hyphens; starts with a letter; at most 16 characters.
+    Description: Platform stage (the platform stack's Stage).
+  AgentId:
+    Type: String
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{1,39}$"
+    ConstraintDescription: The agent record's agentId (lowercase letters, digits and hyphens, 2 to 40 characters).
+    Description: Agent identifier (agent.json agentId; certificate CN in roles-anywhere mode).
+  ExecutorRoleArn:
+    Type: String
+    AllowedPattern: "^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$"
+    Description: The platform stack's ExecutorRoleArn output, the only principal allowed to send commands.
+  ResultsQueueArn:
+    Type: String
+    AllowedPattern: "^arn:aws[a-z-]*:sqs:[a-z0-9-]+:[0-9]{12}:cicd-agent-results-[a-z][a-z0-9-]{0,15}\\.fifo$"
+    Description: The platform stack's AgentResultsQueueArn output.
+  TargetLogArns:
+    Type: String
+    AllowedPattern: "^arn:aws[a-z-]*:s3:::[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/logs/[A-Za-z0-9._-]{1,64}/[A-Za-z0-9._-]{1,64}/[a-z0-9][a-z0-9-]{1,62}/\\*(,arn:aws[a-z-]*:s3:::[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/logs/[A-Za-z0-9._-]{1,64}/[A-Za-z0-9._-]{1,64}/[a-z0-9][a-z0-9-]{1,62}/\\*){0,49}$"
+    ConstraintDescription: Comma-separated arn:aws:s3:::<log bucket>/logs/<project>/<environment>/<targetId>/* (1 to 50, no spaces).
+    Description: One log key prefix per catalog target of this agent; the agent may write logs there and nowhere else.
+  ScriptRoleArns:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=.@_/-]+(,arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=.@_/-]+){0,49}$"
+    ConstraintDescription: Comma-separated IAM role ARNs (no spaces, at most 50).
+    Description: Script roles (target-script-role.yaml stacks) of this agent's catalog targets that need AWS (AP-2). Empty means none.
+  IdentityMode:
+    Type: String
+    AllowedValues: [ec2-instance-profile, ec2-instance-role, roles-anywhere]
+    Description: How the agent process gets temporary credentials (AP-5).
+  InstanceRoleArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$"
+    Description: ec2-instance-role mode only - the role of the server's EXISTING instance profile. Empty otherwise.
+  RolesAnywhereTrustAnchorArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:rolesanywhere:[a-z0-9-]+:[0-9]{12}:trust-anchor/[0-9a-f-]{36}$"
+    Description: roles-anywhere mode only - the account's trust anchor (the platform CA, AP-5). Empty otherwise.
+  CommandRetentionSeconds:
+    Type: Number
+    Default: 345600
+    MinValue: 3600
+    MaxValue: 1209600
+    Description: Retention of the command queue (seconds; default 4 days). Commands and evidence queries wait there while the agent is stopped.
+  CommandMaxReceiveCount:
+    Type: Number
+    Default: 5
+    MinValue: 2
+    MaxValue: 20
+    Description: Receives before a command goes to the DLQ (an agent crashing before it journals one; never while it waits for a slot).
+  CommandBacklogAlarmSeconds:
+    Type: Number
+    Default: 900
+    MinValue: 300
+    MaxValue: 86400
+    Description: Alarm when the oldest command has waited this long (agent stopped or unreachable).
+  AlarmTopicArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]{1,256}$"
+    Description: Optional SNS topic for the alarms. Empty means alarms have no actions.
+
+Rules:
+  InstanceRoleMatchesMode:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Equals [!Ref IdentityMode, ec2-instance-role]
+            - !Not [!Equals [!Ref InstanceRoleArn, ""]]
+          - !And
+            - !Not [!Equals [!Ref IdentityMode, ec2-instance-role]]
+            - !Equals [!Ref InstanceRoleArn, ""]
+        AssertDescription: InstanceRoleArn is required in ec2-instance-role mode and must be empty in the other modes.
+  TrustAnchorMatchesMode:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Equals [!Ref IdentityMode, roles-anywhere]
+            - !Not [!Equals [!Ref RolesAnywhereTrustAnchorArn, ""]]
+          - !And
+            - !Not [!Equals [!Ref IdentityMode, roles-anywhere]]
+            - !Equals [!Ref RolesAnywhereTrustAnchorArn, ""]
+        AssertDescription: RolesAnywhereTrustAnchorArn is required in roles-anywhere mode and must be empty in the other modes.
+
+Conditions:
+  UseInstanceProfile: !Equals [!Ref IdentityMode, ec2-instance-profile]
+  UseInstanceRole: !Not [!Equals [!Ref InstanceRoleArn, ""]]
+  UseRolesAnywhere: !Not [!Equals [!Ref RolesAnywhereTrustAnchorArn, ""]]
+  HasScriptRoles: !Not [!Equals [!Ref ScriptRoleArns, ""]]
+  HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, ""]]
+
+Resources:
+  # ---------------------------------------------------------------- Command queue (AP-1, §6)
+  CommandDlq:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: !Sub cicd-agent-${Stage}-${AgentId}-dlq.fifo
+      FifoQueue: true
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+        - Key: Stage
+          Value: !Ref Stage
+        - Key: AgentId
+          Value: !Ref AgentId
+
+  # FIFO: group = targetId (one target's commands and queries in order, other targets never blocked), deduplication
+  # = commandId or the query's id, both set by the Executor (no content-based deduplication). The name matches the
+  # agent record schema and the Executor's send permission (cicd-agent-<Stage>-*-cmd.fifo).
+  CommandQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: !Sub cicd-agent-${Stage}-${AgentId}-cmd.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: false
+      VisibilityTimeout: 120
+      ReceiveMessageWaitTimeSeconds: 20
+      MessageRetentionPeriod: !Ref CommandRetentionSeconds
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt CommandDlq.Arn
+        maxReceiveCount: !Ref CommandMaxReceiveCount
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+        - Key: Stage
+          Value: !Ref Stage
+        - Key: AgentId
+          Value: !Ref AgentId
+
+  # §11.4: only the Executor role may send (the agent also checks SenderId) and only this agent's role may consume.
+  CommandQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref CommandQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenySendFromNonExecutor
+            Effect: Deny
+            Principal: "*"
+            Action: sqs:SendMessage
+            Resource: !GetAtt CommandQueue.Arn
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn: !Ref ExecutorRoleArn
+          - Sid: DenyConsumeFromNonAgent
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+              - sqs:ChangeMessageVisibility
+            Resource: !GetAtt CommandQueue.Arn
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn: !GetAtt AgentRole.Arn
+
+  # ---------------------------------------------------------------- Agent role (§11.2)
+  # Exactly the agent's own calls: its command queue, the results queue, its targets' log prefixes, its targets'
+  # script roles. Tagged CicdAgentStage=<Stage>: the platform's results queue refuses senders without that tag.
+  AgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - !If
+            - UseInstanceProfile
+            - Sid: Ec2InstanceProfile
+              Effect: Allow
+              Principal:
+                Service: ec2.amazonaws.com
+              Action: sts:AssumeRole
+            - !Ref AWS::NoValue
+          - !If
+            - UseInstanceRole
+            - Sid: Ec2ExistingInstanceRole
+              Effect: Allow
+              Principal:
+                AWS: !Ref InstanceRoleArn
+              Action: sts:AssumeRole
+            - !Ref AWS::NoValue
+          - !If
+            - UseRolesAnywhere
+            - Sid: RolesAnywhereCertificate
+              Effect: Allow
+              Principal:
+                Service: rolesanywhere.amazonaws.com
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
+                - sts:SetSourceIdentity
+              Condition:
+                ArnEquals:
+                  aws:SourceArn: !Ref RolesAnywhereTrustAnchorArn
+                StringEquals:
+                  aws:PrincipalTag/x509Subject/CN: !Ref AgentId
+            - !Ref AWS::NoValue
+      Policies:
+        - PolicyName: agent-runtime
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: OwnCommandQueue
+                Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:ChangeMessageVisibility
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt CommandQueue.Arn
+              - Sid: SendResults
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !Ref ResultsQueueArn
+              - Sid: PutTargetLogs
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Split [",", !Ref TargetLogArns]
+              - !If
+                - HasScriptRoles
+                - Sid: AssumeTargetScriptRoles
+                  Effect: Allow
+                  Action: sts:AssumeRole
+                  Resource: !Split [",", !Ref ScriptRoleArns]
+                - !Ref AWS::NoValue
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+        - Key: Stage
+          Value: !Ref Stage
+        - Key: AgentId
+          Value: !Ref AgentId
+        - Key: CicdAgentStage
+          Value: !Ref Stage
+
+  # ---------------------------------------------------------------- Identity binding (§11.1, AP-5)
+  AgentInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: UseInstanceProfile
+    Properties:
+      Roles:
+        - !Ref AgentRole
+
+  AgentRolesAnywhereProfile:
+    Type: AWS::RolesAnywhere::Profile
+    Condition: UseRolesAnywhere
+    Properties:
+      Name: !Sub cicd-agent-${Stage}-${AgentId}
+      Enabled: true
+      DurationSeconds: 3600
+      RoleArns:
+        - !GetAtt AgentRole.Arn
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+        - Key: Stage
+          Value: !Ref Stage
+        - Key: AgentId
+          Value: !Ref AgentId
+
+  # ---------------------------------------------------------------- Alarms (§14)
+  CommandDlqNotEmptyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub cicd-${Stage}-agent-${AgentId}-command-dlq-not-empty
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt CommandDlq.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+
+  # A command older than this means the agent is stopped, unreachable or stuck: requests for its targets wait (the
+  # Executor still applies notAfter, queries and the hard deadline).
+  CommandBacklogAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub cicd-${Stage}-agent-${AgentId}-command-backlog
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt CommandQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: !Ref CommandBacklogAlarmSeconds
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+
+Outputs:
+  CommandQueueUrl:
+    Description: The agent's command queue URL (agent record commandQueueUrl; agent.json commandQueueUrl).
+    Value: !Ref CommandQueue
+  CommandQueueArn:
+    Description: The agent's command queue ARN.
+    Value: !GetAtt CommandQueue.Arn
+  CommandDlqUrl:
+    Description: The agent's command DLQ URL (inspection runbook step).
+    Value: !Ref CommandDlq
+  AgentRoleArn:
+    Description: Agent role ARN (trusted by the target-script-role.yaml stacks of its targets; AWS config role_arn in ec2-instance-role mode).
+    Value: !GetAtt AgentRole.Arn
+  AgentRoleId:
+    Description: Agent role ID (agent record roleId; the Executor checks every event's SenderId against it).
+    Value: !GetAtt AgentRole.RoleId
+  InstanceProfileName:
+    Condition: UseInstanceProfile
+    Description: Instance profile to attach to the server (ec2-instance-profile mode).
+    Value: !Ref AgentInstanceProfile
+  RolesAnywhereProfileArn:
+    Condition: UseRolesAnywhere
+    Description: Roles Anywhere profile for the server's aws_signing_helper credential_process (roles-anywhere mode).
+    Value: !GetAtt AgentRolesAnywhereProfile.ProfileArn
