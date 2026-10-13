@@ -311,6 +311,8 @@ Revision 2 adds about 25 probable hours (E2 +15, E3 +10). Critical path: E0 → 
 
 **Approved by the owner (2026-10-10):** AP-1 FIFO queues for commands and results; AP-2 per-target script roles, agent identity separate, no shared permanent credentials; AP-3 UNKNOWN keeps the target blocked until evidence or an authorized operator; AP-4 one agent per server and platform stage; AP-5 EC2 instance profile, IAM Roles Anywhere on premises, one identity per agent (CA and inventory in the infrastructure phase); AP-6 log retention 90/180/365 days, SSE-S3, private bucket, IAM/SSO access, logs from the MVP, links in notifications; AP-7 timing values above, configurable; AP-8 SSH kept during the transition, removal only after a later review; AP-9 Executor hosting decided before STAGING, design independent of the workstation, temporary credentials through a role.
 
+**Amended by the owner (2026-10-13):** for the agents, AP-5 (one identity per agent) and the "no shared permanent credentials" part of AP-2 are replaced by one shared IAM user per platform stage, and `ExecutorRole` is never modified for the agent transport. See §25.
+
 **Still open:**
 
 | # | Decision | Recommendation |
@@ -467,3 +469,17 @@ Not validated, because it needs AWS (E5):
 - principal tags on the roles' sessions;
 - the instance-role chain and Roles Anywhere;
 - the change set on the deployed stack, which should show only additions and one in-place `ExecutorRole` modification.
+
+## 25. E5 amendment: shared agent identity (owner decision, 2026-10-13)
+The owner chose operational simplicity over per-agent IAM isolation. Nothing else in this document changes: one
+command queue per agent, one results queue and log bucket per stage, and every agent-side and Executor-side check.
+
+| Item | As decided and implemented (local, nothing deployed) |
+|---|---|
+| Identity | One IAM user per platform stage, `cicd-agents` (`infra/sam/agent-shared-identity.yaml`): no console access; may only consume the stage's agent command queues, send to its results queue and upload under `logs/` of its bucket. Tagged `CicdAgentStage=<Stage>`, so the results queue policy needs no change |
+| Credentials | One access key, created by CloudFormation straight into the secret `cicd/agents/credentials`. The owner copies it into each server's `config/agent.env` (0600); the agent loads it with `node --env-file` and never reads Secrets Manager. Rotation: raise `KeySerial`, refill every `agent.env`, restart the agents |
+| Agent stack | New `IdentityMode=shared-iam-user` (`SharedAgentUserArn`): no agent role or identity binding; the command queue is consumed by the shared user. `Rules` keep `TargetLogArns` and `ScriptRoleArns` out of that mode (no role to scope or to assume script roles with) |
+| Executor | Its send grant moves to each command queue policy (`AllowExecutorSend`) and its consume grant to the results queue policy (`AllowExecutorConsume`). With the switch on, the platform change set only adds resources; `ExecutorRole` is untouched |
+| Own queue only | IAM cannot separate agents sharing one user, so the agent refuses at start any `commandQueueUrl` other than `cicd-agent-<stage>-<agentId>-cmd.fifo` (`src/agent/config.ts`; loopback emulator URLs exempt) |
+| Accepted limitations | The key lets its holder read or delete any agent's commands of the stage, send results as any agent and upload under `logs/`. It never lets anyone send a command or run anything on a server. A leak from one server affects every agent of the stage, and a rotation touches every server. The Executor cannot attribute an event to one agent by `SenderId` |
+| Executor integration (not implemented) | The agent record's `roleId` pattern (`^AROA`) must also accept the user id (`AIDA…`), followed by a new Executor build. Then `CICD_AGENT_*` settings plus a restart, and registry records. Listed in `docs/gate-b/13-agent-shared-identity.md` §10 |

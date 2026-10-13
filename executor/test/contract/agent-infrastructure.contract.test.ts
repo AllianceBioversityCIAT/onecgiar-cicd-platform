@@ -2,8 +2,10 @@
 //
 // Static contract test for the agent infrastructure (E4). Nothing is sent to AWS. It covers:
 //   - the platform stack's sqs-agent additions (infra/sam/template.yaml with EnableAgentTransport=true): they appear
-//     only behind that switch and change no existing resource but the Executor's two new statements;
-//   - infra/sam/agent-stack.yaml (one per agent) and infra/sam/target-script-role.yaml (optional, one per target);
+//     only behind that switch and change no existing resource, ExecutorRole included (its grants live in the queue
+//     policies, owner decision 2026-10-13);
+//   - infra/sam/agent-stack.yaml (one per agent, role modes and the shared-iam-user mode),
+//     infra/sam/agent-shared-identity.yaml (the stage's shared agent user) and infra/sam/target-script-role.yaml;
 //   - consistency with the code that uses them: queue names (agent record schema, Executor send permission), the
 //     Executor and agent configuration formats, the agent's receive visibility, the S3 key layout and the tags the
 //     results queue policy relies on.
@@ -28,11 +30,13 @@ import {
   type Json,
   type PolicyStatement,
 } from "./support/cfn-template.js";
+import { ownCommandQueueName } from "../../src/agent/config.js";
 import { repoRoot } from "./support/schema-paths.js";
 
 const samDir = path.dirname(samTemplatePath);
 const agentStackPath = path.join(samDir, "agent-stack.yaml");
 const scriptRolePath = path.join(samDir, "target-script-role.yaml");
+const sharedIdentityPath = path.join(samDir, "agent-shared-identity.yaml");
 const getAtt = (id: string, attr = "Arn"): Json => ({ "Fn::GetAtt": [id, attr] });
 const key = (v: unknown): string => JSON.stringify(v);
 
@@ -41,6 +45,7 @@ let off: CfnTemplate;
 let on: CfnTemplate;
 let agent: CfnTemplate;
 let script: CfnTemplate;
+let shared: CfnTemplate;
 
 beforeAll(() => {
   raw = loadSamTemplate();
@@ -48,6 +53,7 @@ beforeAll(() => {
   on = withConditions(raw, { AgentTransport: true });
   agent = parseCfnYaml(readFileSync(agentStackPath, "utf8"));
   script = parseCfnYaml(readFileSync(scriptRolePath, "utf8"));
+  shared = parseCfnYaml(readFileSync(sharedIdentityPath, "utf8"));
 });
 
 const statementsOf = (t: CfnTemplate, roleId: string): PolicyStatement[] => rolePolicyStatements(t.Resources[roleId]!);
@@ -96,31 +102,17 @@ describe("platform stack: the agent transport is opt-in and changes nothing else
     for (const name of AGENT_OUTPUTS) expect((raw.Outputs[name] as { Condition?: string }).Condition, name).toBe("AgentTransport");
   });
 
-  it("on, every pre-existing resource except ExecutorRole is identical (deploy queue and its policy, CI roles, tables, schedule, alarms)", () => {
-    for (const [name, resource] of Object.entries(off.Resources)) {
-      if (name === "ExecutorRole") continue;
-      expect(key(on.Resources[name]), name).toBe(key(resource));
-    }
+  it("on, every pre-existing resource is identical, ExecutorRole included (deploy queue and its policy, roles, tables, schedule, alarms)", () => {
+    for (const [name, resource] of Object.entries(off.Resources)) expect(key(on.Resources[name]), name).toBe(key(resource));
+    expect(key(raw.Resources.ExecutorRole)).not.toContain("AgentTransport");
   });
 
-  it("on, ExecutorRole gains exactly the two AC-04 §11.5 statements and keeps every other one unchanged", () => {
-    const before = statementsOf(off, "ExecutorRole");
-    const after = statementsOf(on, "ExecutorRole");
-    expect(after.filter((s) => !before.some((b) => key(b) === key(s))).map((s) => s.Sid).sort()).toEqual(["AgentCommandSend", "AgentResultsConsume"]);
-    expect(before.every((b) => after.some((s) => key(s) === key(b)))).toBe(true);
-    expect(key(on.Resources.ExecutorRole!.Properties.AssumeRolePolicyDocument)).toBe(key(off.Resources.ExecutorRole!.Properties.AssumeRolePolicyDocument));
-  });
-
-  it("the Executor may send only to its stage's agent command queues and consume only the results queue; no S3, STS or IAM", () => {
-    const after = statementsOf(on, "ExecutorRole");
-    const send = after.find((s) => s.Sid === "AgentCommandSend")!;
-    expect(send).toMatchObject({ Effect: "Allow", Action: "sqs:SendMessage" });
-    expect(send.Resource).toEqual({ "Fn::Sub": "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:cicd-agent-${Stage}-*-cmd.fifo" });
-    const consume = after.find((s) => s.Sid === "AgentResultsConsume")!;
-    expect(asArray(consume.Action).sort()).toEqual(["sqs:ChangeMessageVisibility", "sqs:DeleteMessage", "sqs:ReceiveMessage"]);
-    expect(consume.Resource).toEqual(getAtt("AgentResultsQueue"));
-    const services = new Set(after.flatMap((s) => asArray(s.Action)).map((a) => a.split(":")[0]));
-    for (const forbidden of ["s3", "sts", "iam", "ec2", "ssm", "kms"]) expect(services.has(forbidden), forbidden).toBe(false);
+  it("the Executor's agent grants live in the queue policies: consume the results queue here, send to command queues in agent-stack.yaml", () => {
+    const allow = policyStatements(on.Resources.AgentResultsQueuePolicy!).find((s) => s.Sid === "AllowExecutorConsume")!;
+    expect(allow).toMatchObject({ Effect: "Allow", Principal: { AWS: getAtt("ExecutorRole") }, Resource: getAtt("AgentResultsQueue") });
+    expect(asArray(allow.Action).sort()).toEqual(["sqs:ChangeMessageVisibility", "sqs:DeleteMessage", "sqs:ReceiveMessage"]);
+    const send = policyStatements(agent.Resources.CommandQueuePolicy!).find((s) => s.Sid === "AllowExecutorSend")!;
+    expect(send).toMatchObject({ Effect: "Allow", Principal: { AWS: { Ref: "ExecutorRoleArn" } }, Action: "sqs:SendMessage", Resource: getAtt("CommandQueue") });
   });
 });
 
@@ -140,9 +132,10 @@ describe("platform stack: results queue (AP-1, §11.4)", () => {
     expect(raw.Parameters.AgentResultsRetentionSeconds).toMatchObject({ Type: "Number", Default: 345600 });
   });
 
-  it("only agent roles of this stage (tag CicdAgentStage) may send and only the Executor role may consume", () => {
+  it("only agent identities of this stage (tag CicdAgentStage) may send and only the Executor role may consume", () => {
     const statements = policyStatements(on.Resources.AgentResultsQueuePolicy!);
-    expect(statements.every((s) => s.Effect === "Deny" && s.Principal === "*")).toBe(true);
+    expect(statements.filter((s) => s.Effect !== "Deny").map((s) => s.Sid)).toEqual(["AllowExecutorConsume"]);
+    expect(statements.filter((s) => s.Effect === "Deny").every((s) => s.Principal === "*")).toBe(true);
     const send = statements.find((s) => s.Sid === "DenySendFromNonAgents")!;
     expect(send.Action).toBe("sqs:SendMessage");
     expect(send.Condition).toEqual({ StringNotEquals: { "aws:PrincipalTag/CicdAgentStage": { Ref: "Stage" } } });
@@ -307,13 +300,14 @@ describe("agent-stack.yaml: resources and command queue (§6, §11.4, AP-1)", ()
     expect(sendPermission.test(sub("cicd-agent-results-${Stage}.fifo", SAMPLE))).toBe(false);
   });
 
-  it("only the Executor role may send and only this agent's role may consume", () => {
+  it("only the Executor role may send and only this agent's identity (its role, or the shared agent user) may consume", () => {
     const statements = policyStatements(agent.Resources.CommandQueuePolicy!);
-    expect(statements.every((s) => s.Effect === "Deny" && s.Principal === "*")).toBe(true);
+    expect(statements.filter((s) => s.Effect !== "Deny").map((s) => s.Sid)).toEqual(["AllowExecutorSend"]);
+    expect(statements.filter((s) => s.Effect === "Deny").every((s) => s.Principal === "*")).toBe(true);
     expect(statements.find((s) => s.Sid === "DenySendFromNonExecutor")).toMatchObject({ Action: "sqs:SendMessage", Condition: { ArnNotEquals: { "aws:PrincipalArn": { Ref: "ExecutorRoleArn" } } } });
     const consume = statements.find((s) => s.Sid === "DenyConsumeFromNonAgent")!;
     expect(asArray(consume.Action).sort()).toEqual(["sqs:ChangeMessageVisibility", "sqs:DeleteMessage", "sqs:ReceiveMessage"]);
-    expect(consume.Condition).toEqual({ ArnNotEquals: { "aws:PrincipalArn": getAtt("AgentRole") } });
+    expect(consume.Condition).toEqual({ ArnNotEquals: { "aws:PrincipalArn": { "Fn::If": ["UseSharedUser", { Ref: "SharedAgentUserArn" }, getAtt("AgentRole")] } } });
   });
 });
 
@@ -333,7 +327,7 @@ describe("agent-stack.yaml: agent role (§11.2) and identity (§11.1, AP-5)", ()
   });
 
   it("the script-role statement exists only when ScriptRoleArns is given", () => {
-    const conditional = statementsOf(agent, "AgentRole").find((s) => (s as unknown as Record<string, Json>)["Fn::If"] !== undefined) as unknown as { "Fn::If": Json[] };
+    const conditional = statementsOf(agent, "AgentRole").find((s) => ((s as unknown as Record<string, Json[]>)["Fn::If"] ?? [])[0] === "HasScriptRoles") as unknown as { "Fn::If": Json[] };
     expect(conditional["Fn::If"][0]).toBe("HasScriptRoles");
     expect(conditional["Fn::If"][2]).toEqual({ Ref: "AWS::NoValue" });
   });
@@ -348,7 +342,6 @@ describe("agent-stack.yaml: agent role (§11.2) and identity (§11.1, AP-5)", ()
       "arn:aws:s3:::cicd-agent-logs-dev-123456789012-us-east-1/*",
       "arn:aws:s3:::cicd-agent-logs-dev-123456789012-us-east-1/logs/prms/dev/*",
       `${one}, ${one}`,
-      "",
     ]) {
       expect(ok.test(bad), bad).toBe(false);
     }
@@ -378,8 +371,8 @@ describe("agent-stack.yaml: agent role (§11.2) and identity (§11.1, AP-5)", ()
   });
 
   it("Rules require InstanceRoleArn and RolesAnywhereTrustAnchorArn exactly in their own mode; the profile resources follow the mode", () => {
-    expect(Object.keys(agent.Rules ?? {}).sort()).toEqual(["InstanceRoleMatchesMode", "TrustAnchorMatchesMode"]);
-    expect(agent.Parameters.IdentityMode!.AllowedValues).toEqual(["ec2-instance-profile", "ec2-instance-role", "roles-anywhere"]);
+    expect(Object.keys(agent.Rules ?? {}).sort()).toEqual(["InstanceRoleMatchesMode", "RoleModeSettings", "SharedUserMatchesMode", "TrustAnchorMatchesMode"]);
+    expect(agent.Parameters.IdentityMode!.AllowedValues).toEqual(["ec2-instance-profile", "ec2-instance-role", "roles-anywhere", "shared-iam-user"]);
     expect(agent.Parameters.IdentityMode!.Default).toBeUndefined();
     expect(agent.Resources.AgentInstanceProfile!.Condition).toBe("UseInstanceProfile");
     expect(agent.Resources.AgentRolesAnywhereProfile!.Condition).toBe("UseRolesAnywhere");
@@ -434,12 +427,125 @@ describe("agent templates: hygiene and publication policy", () => {
     }
   });
 
-  it("contain no 12-digit number, IPv4 address, static credential or host", () => {
+  it("contain no 12-digit number, IPv4 address, static credential or host; only agent-shared-identity.yaml creates an IAM user or key", () => {
+    for (const file of [samTemplatePath, agentStackPath, scriptRolePath, sharedIdentityPath]) {
+      const text = readFileSync(file, "utf8");
+      expect(text, file).not.toMatch(/(?<![0-9A-Za-z])[0-9]{12}(?![0-9A-Za-z])/);
+      expect(text, file).not.toMatch(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/);
+      expect(text, file).not.toMatch(/AKIA[0-9A-Z]{16}/);
+    }
     for (const file of [samTemplatePath, agentStackPath, scriptRolePath]) {
       const text = readFileSync(file, "utf8");
       expect(text, file).not.toMatch(/(?<![0-9A-Za-z])[0-9]{12}(?![0-9A-Za-z])/);
       expect(text, file).not.toMatch(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/);
       expect(text, file).not.toMatch(/AKIA[0-9A-Z]{16}|AWS::IAM::AccessKey|AWS::IAM::User\b/);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------- shared identity
+// Owner decision (2026-10-13, amends AP-5): one IAM user per platform stage shared by every agent, its access key held
+// in Secrets Manager and copied by the owner into each server's .env. Each agent still has its own command queue.
+describe("agent-shared-identity.yaml: the stage's shared agent user", () => {
+  const userStatements = (): PolicyStatement[] =>
+    (shared.Resources.AgentsUser!.Properties.Policies as unknown as { PolicyDocument: { Statement: PolicyStatement[] } }[]).flatMap((p) => p.PolicyDocument.Statement);
+
+  it("creates exactly the user, its access key and the secret; the user has no console password and no managed policy", () => {
+    expect(Object.entries(shared.Resources).map(([n, r]) => `${n}:${r.Type}`).sort()).toEqual(
+      ["AgentsAccessKey:AWS::IAM::AccessKey", "AgentsCredentialsSecret:AWS::SecretsManager::Secret", "AgentsUser:AWS::IAM::User"].sort(),
+    );
+    const user = shared.Resources.AgentsUser!.Properties;
+    for (const p of ["LoginProfile", "ManagedPolicyArns", "Groups", "PermissionsBoundary"]) expect(user[p], p).toBeUndefined();
+    expect(shared.Parameters.UserName!.Default).toBe("cicd-agents");
+    expect(shared.Parameters.SecretName!.Default).toBe("cicd/agents/credentials");
+  });
+
+  it("grants exactly the agent's calls on this stage's agent queues and log prefix; nothing else", () => {
+    const byId = Object.fromEntries(userStatements().map((s) => [s.Sid, s]));
+    expect(Object.keys(byId).sort()).toEqual(["ConsumeAgentCommandQueues", "PutAgentLogs", "SendAgentResults"]);
+    expect(userStatements().every((s) => s.Effect === "Allow" && s.Condition === undefined)).toBe(true);
+    expect(asArray(byId.ConsumeAgentCommandQueues!.Action).sort()).toEqual(["sqs:ChangeMessageVisibility", "sqs:DeleteMessage", "sqs:ReceiveMessage"]);
+    expect(byId.ConsumeAgentCommandQueues!.Resource).toEqual({ "Fn::Sub": "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:cicd-agent-${Stage}-*-cmd.fifo" });
+    expect(byId.SendAgentResults).toMatchObject({ Action: "sqs:SendMessage", Resource: { "Fn::Sub": "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:cicd-agent-results-${Stage}.fifo" } });
+    expect(byId.PutAgentLogs).toMatchObject({ Action: "s3:PutObject", Resource: { "Fn::Sub": "arn:${AWS::Partition}:s3:::cicd-agent-logs-${Stage}-${AWS::AccountId}-${AWS::Region}/logs/*" } });
+    expect(starResources(userStatements())).toEqual([]);
+    expect(wildcardAllowActions(shared)).toEqual([]);
+    // The agent's own SQS and S3 calls are exactly these actions (src/agent/adapters.ts, main.ts).
+    const adapter = ["adapters.ts", "main.ts"].map((f) => readFileSync(path.join(repoRoot, "executor", "src", "agent", f), "utf8")).join("\n");
+    for (const call of ["ReceiveMessageCommand", "DeleteMessageCommand", "ChangeMessageVisibilityCommand", "SendMessageCommand", "PutObjectCommand"]) expect(adapter, call).toContain(call);
+  });
+
+  it("its resources are exactly the names the platform and agent stacks create, never a DLQ or another stage", () => {
+    const arnName = (s: PolicyStatement): string => sub((s.Resource as { "Fn::Sub": string })["Fn::Sub"], SAMPLE);
+    const byId = Object.fromEntries(userStatements().map((s) => [s.Sid, s]));
+    const consume = new RegExp(`^${arnName(byId.ConsumeAgentCommandQueues!).replace(/[.]/g, "\\.").replace("*", "[a-z0-9-]+")}$`);
+    const queueArn = (name: string): string => `arn:aws:sqs:us-east-1:123456789012:${name}`;
+    expect(consume.test(queueArn(sub((agent.Resources.CommandQueue!.Properties.QueueName as { "Fn::Sub": string })["Fn::Sub"], SAMPLE)))).toBe(true);
+    for (const other of [sub("cicd-agent-${Stage}-${AgentId}-dlq.fifo", SAMPLE), sub("cicd-agent-results-${Stage}.fifo", SAMPLE), "cicd-agent-prod-example-server-dev-cmd.fifo", "cicd-events-dev"]) {
+      expect(consume.test(queueArn(other)), other).toBe(false);
+    }
+    expect(arnName(byId.SendAgentResults!)).toBe(queueArn(sub((on.Resources.AgentResultsQueue!.Properties.QueueName as { "Fn::Sub": string })["Fn::Sub"], SAMPLE)));
+    expect(arnName(byId.PutAgentLogs!)).toBe(`arn:aws:s3:::${sub((on.Resources.AgentLogBucket!.Properties.BucketName as { "Fn::Sub": string })["Fn::Sub"], SAMPLE)}/logs/*`);
+  });
+
+  it("is tagged CicdAgentStage=<Stage>, the tag the results queue policy requires of every sender", () => {
+    expect(shared.Resources.AgentsUser!.Properties.Tags).toContainEqual({ Key: "CicdAgentStage", Value: { Ref: "Stage" } });
+    expect(shared.Resources.AgentsUser!.Properties.Tags).toContainEqual({ Key: "Project", Value: "ONECGIAR-CICD-Platform" });
+  });
+
+  it("the key goes straight into the secret (keys of the .env), rotates by KeySerial, and is never an output", () => {
+    expect(shared.Resources.AgentsAccessKey!.Properties).toEqual({ UserName: { Ref: "AgentsUser" }, Serial: { Ref: "KeySerial" }, Status: "Active" });
+    expect(shared.Resources.AgentsCredentialsSecret!.Properties.SecretString).toEqual({
+      "Fn::Sub": '{"AWS_ACCESS_KEY_ID":"${AgentsAccessKey}","AWS_SECRET_ACCESS_KEY":"${AgentsAccessKey.SecretAccessKey}"}',
+    });
+    expect(shared.Resources.AgentsCredentialsSecret!.Properties.Name).toEqual({ Ref: "SecretName" });
+    expect(key(shared.Outputs)).not.toMatch(/AgentsAccessKey|SecretAccessKey|SecretString/);
+    expect(Object.keys(shared.Outputs).sort()).toEqual(["AgentsUserArn", "CredentialsSecretArn"]);
+  });
+
+  it("passes the lint-style checks (E1029, W1020, W1030)", () => {
+    expect(embeddedVarsOutsideSub(shared as unknown as Json)).toEqual([]);
+    expect(subWithoutVariable(shared.Resources as unknown as Json)).toEqual([]);
+    expect(unguardedEmptyDefaultRefs(shared)).toEqual([]);
+  });
+});
+
+describe("agent-stack.yaml: shared-iam-user mode", () => {
+  const sharedMode = (): CfnTemplate => withConditions(agent, { UseSharedUser: true, UseAgentRole: false, UseInstanceProfile: false, UseInstanceRole: false, UseRolesAnywhere: false, HasScriptRoles: false, HasTargetLogs: false });
+  const roleMode = (): CfnTemplate => withConditions(agent, { UseSharedUser: false, UseAgentRole: true, UseInstanceProfile: true, UseInstanceRole: false, UseRolesAnywhere: false, HasTargetLogs: true });
+
+  it("creates only the command queue, its DLQ and policy and the two alarms: no agent role, no identity binding", () => {
+    expect(Object.keys(sharedMode().Resources).sort()).toEqual(["CommandBacklogAlarm", "CommandDlq", "CommandDlqNotEmptyAlarm", "CommandQueue", "CommandQueuePolicy"]);
+    expect(Object.keys(sharedMode().Outputs).sort()).toEqual(["CommandDlqUrl", "CommandQueueArn", "CommandQueueUrl"]);
+    expect(agent.Resources.AgentRole!.Condition).toBe("UseAgentRole");
+    expect(agent.Conditions.UseSharedUser).toEqual({ "Fn::Not": [{ "Fn::Equals": [{ Ref: "SharedAgentUserArn" }, ""] }] });
+    expect(agent.Conditions.UseAgentRole).toEqual({ "Fn::Equals": [{ Ref: "SharedAgentUserArn" }, ""] });
+    expect(agent.Conditions.HasTargetLogs).toEqual({ "Fn::Not": [{ "Fn::Equals": [{ Ref: "TargetLogArns" }, ""] }] });
+  });
+
+  it("the queue is consumed by the shared user in this mode and by the agent role otherwise; the Executor alone sends in both", () => {
+    const consumer = (t: CfnTemplate): Json => policyStatements(t.Resources.CommandQueuePolicy!).find((s) => s.Sid === "DenyConsumeFromNonAgent")!.Condition!.ArnNotEquals!["aws:PrincipalArn"]!;
+    expect(consumer(sharedMode())).toEqual({ Ref: "SharedAgentUserArn" });
+    expect(consumer(roleMode())).toEqual(getAtt("AgentRole"));
+    for (const t of [sharedMode(), roleMode()]) {
+      const send = policyStatements(t.Resources.CommandQueuePolicy!).find((s) => s.Sid === "DenySendFromNonExecutor")!;
+      expect(send.Condition).toEqual({ ArnNotEquals: { "aws:PrincipalArn": { Ref: "ExecutorRoleArn" } } });
+    }
+  });
+
+  it("SharedAgentUserArn accepts an IAM user ARN only; Rules tie it, TargetLogArns and ScriptRoleArns to the mode", () => {
+    const ok = pattern(agent, "SharedAgentUserArn");
+    expect(ok.test("arn:aws:iam::123456789012:user/cicd-agents")).toBe(true);
+    expect(ok.test("")).toBe(true);
+    for (const bad of ["arn:aws:iam::123456789012:role/cicd-agents", "arn:aws:iam::123456789012:root", "cicd-agents"]) expect(ok.test(bad), bad).toBe(false);
+    expect(agent.Parameters.TargetLogArns!.Default).toBe("");
+    expect(key(agent.Rules!.SharedUserMatchesMode)).toContain('"Ref":"SharedAgentUserArn"');
+    expect(key(agent.Rules!.RoleModeSettings)).toContain('"Ref":"ScriptRoleArns"');
+    expect(key(agent.Rules!.RoleModeSettings)).toContain('"Ref":"TargetLogArns"');
+  });
+
+  it("the queue name is the one the agent insists on consuming (src/agent/config.ts)", () => {
+    const name = sub((agent.Resources.CommandQueue!.Properties.QueueName as { "Fn::Sub": string })["Fn::Sub"], SAMPLE);
+    expect(name).toBe(ownCommandQueueName(SAMPLE.Stage, SAMPLE.AgentId));
   });
 });

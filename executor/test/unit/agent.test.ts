@@ -602,7 +602,7 @@ describe("agent: more refusals and configuration (AC-04 §10.1, §10.4, §17)", 
       agentId: AGENT_ID,
       stage: "dev",
       region: "us-east-1",
-      commandQueueUrl: "https://queue.example.invalid/cmd.fifo",
+      commandQueueUrl: "https://queue.example.invalid/cicd-agent-dev-example-server-dev-cmd.fifo",
       resultsQueueUrl: "https://queue.example.invalid/results.fifo",
       executorRoleId: EXECUTOR_ROLE,
       logBucket: "example-logs-dev",
@@ -806,7 +806,7 @@ describe("agent: isolation from the applications it deploys (owner review of E3)
       agentId: AGENT_ID,
       stage: "dev",
       region: "us-east-1",
-      commandQueueUrl: "https://queue.example.invalid/cmd.fifo",
+      commandQueueUrl: "https://queue.example.invalid/cicd-agent-dev-example-server-dev-cmd.fifo",
       resultsQueueUrl: "https://queue.example.invalid/results.fifo",
       executorRoleId: EXECUTOR_ROLE,
       logBucket: "example-logs-dev",
@@ -823,12 +823,30 @@ describe("agent: isolation from the applications it deploys (owner review of E3)
     expect(() => loadAgentConfig({ ...config, commandQueueUrl: "http://queue.example.invalid/cmd.fifo" }, { agentId: AGENT_ID, targets: { "app-a-dev": { ...target, runAs: "self" } } })).toThrowError(/commandQueueUrl/);
   });
 
+  it("consumes only its own command queue: with a shared IAM identity, another agent's queue or stage is refused at start", () => {
+    const config = {
+      agentId: AGENT_ID,
+      stage: "dev",
+      region: "us-east-1",
+      commandQueueUrl: "https://queue.example.invalid/123456789012/cicd-agent-dev-example-server-dev-cmd.fifo",
+      resultsQueueUrl: "https://queue.example.invalid/123456789012/cicd-agent-results-dev.fifo",
+      executorRoleId: EXECUTOR_ROLE,
+      logBucket: "example-logs-dev",
+      stateDir: "/opt/cicd-agent/data",
+    };
+    const catalog = { agentId: AGENT_ID, targets: { "app-a-dev": { scriptId: "deploy-app-a-dev", path: "/opt/cicd/scripts/deploy-app-a-dev.sh", runAs: "self", timeoutSeconds: 900 } } };
+    expect(loadAgentConfig(config, catalog).commandQueueUrl).toBe(config.commandQueueUrl);
+    for (const name of ["cicd-agent-dev-other-server-dev-cmd.fifo", "cicd-agent-prod-example-server-dev-cmd.fifo", "cicd-agent-dev-example-server-dev-dlq.fifo", "cicd-agent-results-dev.fifo", "xcicd-agent-dev-example-server-dev-cmd.fifo"]) {
+      expect(() => loadAgentConfig({ ...config, commandQueueUrl: `https://queue.example.invalid/123456789012/${name}` }, catalog), name).toThrowError(/must be this agent's own queue \(cicd-agent-dev-example-server-dev-cmd\.fifo\)/);
+    }
+  });
+
   it("defaults: two scripts in parallel, and a shutdown grace that never cuts a script short of its own timeout", () => {
     const config = {
       agentId: AGENT_ID,
       stage: "dev",
       region: "us-east-1",
-      commandQueueUrl: "https://queue.example.invalid/cmd.fifo",
+      commandQueueUrl: "https://queue.example.invalid/cicd-agent-dev-example-server-dev-cmd.fifo",
       resultsQueueUrl: "https://queue.example.invalid/results.fifo",
       executorRoleId: EXECUTOR_ROLE,
       logBucket: "example-logs-dev",

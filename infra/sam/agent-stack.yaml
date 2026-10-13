@@ -9,19 +9,22 @@
 #
 # After deploying, register the agent (target-registry tool `agent-put`):
 #   - CommandQueueUrl becomes the agent record's commandQueueUrl;
-#   - AgentRoleId becomes its roleId;
+#   - AgentRoleId becomes its roleId (role modes; for shared-iam-user see docs/gate-b/13-agent-shared-identity.md);
 #   - the catalog targets become its targets.
 #
 # Identity (AP-5, §11.1), one mode per stack:
 #   - ec2-instance-profile: a new instance profile for a server WITHOUT one;
 #   - ec2-instance-role: a server that already has an instance profile (never replaced). The agent assumes this role
 #     from the instance role, through credential_source = Ec2InstanceMetadata in its AWS config;
-#   - roles-anywhere: on premises, one X.509 certificate per server whose CN equals AgentId (IAM Roles Anywhere).
-# Never static access keys.
+#   - roles-anywhere: on premises, one X.509 certificate per server whose CN equals AgentId (IAM Roles Anywhere);
+#   - shared-iam-user (owner decision, 2026-10-13): the stage's single agent user of agent-shared-identity.yaml,
+#     whose access key every server's agent reads from its local .env. No agent role is created; this queue is
+#     consumed by that user, and each agent refuses any command queue but its own (src/agent/config.ts).
+# The Executor's right to send commands is granted by this queue's policy, so its role is never modified.
 #
 # Publication policy (DD-23): no account ID, host or secret name here; every value is a parameter.
 AWSTemplateFormatVersion: "2010-09-09"
-Description: ONECGIAR CI/CD Platform - one server agent (command FIFO queue, DLQ, agent role, identity binding).
+Description: ONECGIAR CI/CD Platform - one server agent (command FIFO queue, DLQ, agent role or shared agent user, identity binding).
 
 Parameters:
   Stage:
@@ -44,9 +47,10 @@ Parameters:
     Description: The platform stack's AgentResultsQueueArn output.
   TargetLogArns:
     Type: String
-    AllowedPattern: "^arn:aws[a-z-]*:s3:::[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/logs/[A-Za-z0-9._-]{1,64}/[A-Za-z0-9._-]{1,64}/[a-z0-9][a-z0-9-]{1,62}/\\*(,arn:aws[a-z-]*:s3:::[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/logs/[A-Za-z0-9._-]{1,64}/[A-Za-z0-9._-]{1,64}/[a-z0-9][a-z0-9-]{1,62}/\\*){0,49}$"
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:s3:::[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/logs/[A-Za-z0-9._-]{1,64}/[A-Za-z0-9._-]{1,64}/[a-z0-9][a-z0-9-]{1,62}/\\*(,arn:aws[a-z-]*:s3:::[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/logs/[A-Za-z0-9._-]{1,64}/[A-Za-z0-9._-]{1,64}/[a-z0-9][a-z0-9-]{1,62}/\\*){0,49}$"
     ConstraintDescription: Comma-separated arn:aws:s3:::<log bucket>/logs/<project>/<environment>/<targetId>/* (1 to 50, no spaces).
-    Description: One log key prefix per catalog target of this agent; the agent may write logs there and nowhere else.
+    Description: One log key prefix per catalog target of this agent; the agent may write logs there and nowhere else. Role modes only (required there); empty in shared-iam-user mode.
   ScriptRoleArns:
     Type: String
     Default: ""
@@ -55,7 +59,7 @@ Parameters:
     Description: Script roles (target-script-role.yaml stacks) of this agent's catalog targets that need AWS (AP-2). Empty means none.
   IdentityMode:
     Type: String
-    AllowedValues: [ec2-instance-profile, ec2-instance-role, roles-anywhere]
+    AllowedValues: [ec2-instance-profile, ec2-instance-role, roles-anywhere, shared-iam-user]
     Description: How the agent process gets temporary credentials (AP-5).
   InstanceRoleArn:
     Type: String
@@ -67,6 +71,11 @@ Parameters:
     Default: ""
     AllowedPattern: "^$|^arn:aws[a-z-]*:rolesanywhere:[a-z0-9-]+:[0-9]{12}:trust-anchor/[0-9a-f-]{36}$"
     Description: roles-anywhere mode only - the account's trust anchor (the platform CA, AP-5). Empty otherwise.
+  SharedAgentUserArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:iam::[0-9]{12}:user/[A-Za-z0-9+=,.@_/-]+$"
+    Description: shared-iam-user mode only - the AgentsUserArn output of agent-shared-identity.yaml. Empty otherwise.
   CommandRetentionSeconds:
     Type: Number
     Default: 345600
@@ -112,11 +121,37 @@ Rules:
             - !Not [!Equals [!Ref IdentityMode, roles-anywhere]]
             - !Equals [!Ref RolesAnywhereTrustAnchorArn, ""]
         AssertDescription: RolesAnywhereTrustAnchorArn is required in roles-anywhere mode and must be empty in the other modes.
+  SharedUserMatchesMode:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Equals [!Ref IdentityMode, shared-iam-user]
+            - !Not [!Equals [!Ref SharedAgentUserArn, ""]]
+          - !And
+            - !Not [!Equals [!Ref IdentityMode, shared-iam-user]]
+            - !Equals [!Ref SharedAgentUserArn, ""]
+        AssertDescription: SharedAgentUserArn is required in shared-iam-user mode and must be empty in the other modes.
+  RoleModeSettings:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Equals [!Ref IdentityMode, shared-iam-user]
+            - !Equals [!Ref TargetLogArns, ""]
+            - !Equals [!Ref ScriptRoleArns, ""]
+          - !And
+            - !Not [!Equals [!Ref IdentityMode, shared-iam-user]]
+            - !Not [!Equals [!Ref TargetLogArns, ""]]
+        AssertDescription: TargetLogArns is required in the role modes; shared-iam-user mode takes neither TargetLogArns nor ScriptRoleArns (it has no agent role to scope or to assume script roles with).
 
 Conditions:
+  # shared-iam-user mode exactly when SharedAgentUserArn is set (Rules SharedUserMatchesMode).
+  UseSharedUser: !Not [!Equals [!Ref SharedAgentUserArn, ""]]
+  UseAgentRole: !Equals [!Ref SharedAgentUserArn, ""]
   UseInstanceProfile: !Equals [!Ref IdentityMode, ec2-instance-profile]
   UseInstanceRole: !Not [!Equals [!Ref InstanceRoleArn, ""]]
   UseRolesAnywhere: !Not [!Equals [!Ref RolesAnywhereTrustAnchorArn, ""]]
+  # Always true in the role modes (Rules RoleModeSettings); TargetLogArns is empty only in shared-iam-user mode.
+  HasTargetLogs: !Not [!Equals [!Ref TargetLogArns, ""]]
   HasScriptRoles: !Not [!Equals [!Ref ScriptRoleArns, ""]]
   HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, ""]]
 
@@ -165,7 +200,9 @@ Resources:
         - Key: AgentId
           Value: !Ref AgentId
 
-  # §11.4: only the Executor role may send (the agent also checks SenderId) and only this agent's role may consume.
+  # §11.4: only the Executor role may send (the agent also checks SenderId) and only this agent's identity (its role,
+  # or the shared agent user) may consume. The send grant lives here (same account: a queue policy grant is enough), so
+  # ExecutorRole is not modified.
   CommandQueuePolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
@@ -174,6 +211,12 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
+          - Sid: AllowExecutorSend
+            Effect: Allow
+            Principal:
+              AWS: !Ref ExecutorRoleArn
+            Action: sqs:SendMessage
+            Resource: !GetAtt CommandQueue.Arn
           - Sid: DenySendFromNonExecutor
             Effect: Deny
             Principal: "*"
@@ -192,13 +235,14 @@ Resources:
             Resource: !GetAtt CommandQueue.Arn
             Condition:
               ArnNotEquals:
-                aws:PrincipalArn: !GetAtt AgentRole.Arn
+                aws:PrincipalArn: !If [UseSharedUser, !Ref SharedAgentUserArn, !GetAtt AgentRole.Arn]
 
   # ---------------------------------------------------------------- Agent role (§11.2)
   # Exactly the agent's own calls: its command queue, the results queue, its targets' log prefixes, its targets'
   # script roles. Tagged CicdAgentStage=<Stage>: the platform's results queue refuses senders without that tag.
   AgentRole:
     Type: AWS::IAM::Role
+    Condition: UseAgentRole
     Properties:
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
@@ -253,10 +297,13 @@ Resources:
                 Effect: Allow
                 Action: sqs:SendMessage
                 Resource: !Ref ResultsQueueArn
-              - Sid: PutTargetLogs
-                Effect: Allow
-                Action: s3:PutObject
-                Resource: !Split [",", !Ref TargetLogArns]
+              - !If
+                - HasTargetLogs
+                - Sid: PutTargetLogs
+                  Effect: Allow
+                  Action: s3:PutObject
+                  Resource: !Split [",", !Ref TargetLogArns]
+                - !Ref AWS::NoValue
               - !If
                 - HasScriptRoles
                 - Sid: AssumeTargetScriptRoles
@@ -353,9 +400,11 @@ Outputs:
     Description: The agent's command DLQ URL (inspection runbook step).
     Value: !Ref CommandDlq
   AgentRoleArn:
+    Condition: UseAgentRole
     Description: Agent role ARN (trusted by the target-script-role.yaml stacks of its targets; AWS config role_arn in ec2-instance-role mode).
     Value: !GetAtt AgentRole.Arn
   AgentRoleId:
+    Condition: UseAgentRole
     Description: Agent role ID (agent record roleId; the Executor checks every event's SenderId against it).
     Value: !GetAtt AgentRole.RoleId
   InstanceProfileName:

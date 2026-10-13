@@ -16,8 +16,9 @@
 | R | Read-only queries R1–R6 (§3) | Read | Nothing |
 | A0 | Platform change set with `EnableAgentTransport=false` | Change set (proposal) | Nothing; must show **no change** |
 | A1 | Platform change set with `EnableAgentTransport=true`, reviewed | Change set (proposal) | Nothing until executed |
-| A1-X | Execute A1 | Stack update | Results FIFO queue + DLQ + policy, log bucket + policy, read-only log policy, 2 alarms; 2 statements on `ExecutorRole` |
-| G | Agent stack for the TEST server's `<AGENT_ID>` (§5), change set then execution | Stack create | Command FIFO queue + DLQ + policy, agent role, identity binding of its mode, 2 alarms |
+| A1-X | Execute A1 | Stack update | Results FIFO queue + DLQ + policy, log bucket + policy, read-only log policy, 2 alarms. `ExecutorRole` is not modified (its grant is in the results queue policy) |
+| U | Shared agent identity, once per stage ([13](13-agent-shared-identity.md) §6) | Stack create | IAM user `cicd-agents`, its access key, secret `cicd/agents/credentials` |
+| G | Agent stack for the TEST server's `<AGENT_ID>` (§5), change set then execution | Stack create | Command FIFO queue + DLQ + policy, 2 alarms; in a role mode also the agent role and its identity binding |
 | I-B | Mode B only: associate the agent stack's instance profile with the TEST instance | EC2 association | The instance's IAM profile (only if it has none) |
 | I-C | Mode C only: one Roles Anywhere trust anchor from the owner's self-managed CA | Roles Anywhere | A trust anchor (no AWS Private CA) |
 | X | Cleanup (§7) | Stack delete or update | Removes G; optionally reverts A1 |
@@ -36,10 +37,10 @@ The Executor-driven test (`CICD_AGENT_*` plus an Executor restart) is a later, s
 | Check | Result |
 |---|---|
 | `template.yaml`, switch off, vs deployed (`bf5d9df`) | Resources, outputs, conditions **identical**; 3 parameters added with defaults; none removed or changed |
-| Switch on vs deployed | **Add** 8: `AgentResultsQueue`, `AgentResultsDlq`, `AgentResultsQueuePolicy`, `AgentLogBucket`, `AgentLogBucketPolicy`, `AgentLogReadPolicy`, `AgentResultsDlqNotEmptyAlarm`, `AgentResultsOldestMessageAgeAlarm`. **Modify** 1: `ExecutorRole` (inline policy). **Remove**: none |
+| Switch on vs deployed | **Add** 8: `AgentResultsQueue`, `AgentResultsDlq`, `AgentResultsQueuePolicy`, `AgentLogBucket`, `AgentLogBucketPolicy`, `AgentLogReadPolicy`, `AgentResultsDlqNotEmptyAlarm`, `AgentResultsOldestMessageAgeAlarm`. **Modify**: none (the Executor's grants are in the queue policies). **Remove**: none |
 | Tables, deploy queue and policy, `CiRole`, OIDC provider, schedule, existing alarms | Unchanged with the switch on or off (contract test) |
 | SSH transport, GitHub Actions, Executor restart | Not affected; no restart needed |
-| `sam validate --lint` | 4/4 templates |
+| `sam validate --lint` | 5/5 templates |
 
 **Critical finding.** `executor/.local/gate-b/samconfig.toml` (2026-10-08) has no `AdditionalCiRoleArns`, but the stack
 has had it since change set B (2026-10-10). `sam deploy` uses template defaults for missing parameters, so that file
@@ -90,8 +91,7 @@ R2 also gives `ExecutorRoleArn` and `ExecutorRoleId`, which the TEST server conf
    aws cloudformation describe-change-set --change-set-name <CHANGE_SET_ARN> --region $R --profile $P --output json > executor/.local/e5/change-set-a1.json
    ```
 
-**Expected A1:** the 8 `Add` of §2, plus `Modify ExecutorRole` with `Replacement False` and scope `Properties`
-(`Policies`). Nothing else.
+**Expected A1:** the 8 `Add` of §2. Nothing else: no `Modify`, `ExecutorRole` included.
 
 **Stop on any of these:**
 - a `Remove`;
@@ -109,13 +109,17 @@ It only removes the proposal.
 **After A1-X:**
 - the stack is `UPDATE_COMPLETE`, with the 5 new outputs;
 - R6 repeated is **identical**;
-- the Executor role shows the 2 new statements;
+- the Executor role's policy is identical to before;
 - the bucket has its public-access block and encryption;
 - the results queue attributes are FIFO, with deduplication, retention and redrive.
 
 The running Executor is neither restarted nor affected.
 
 ## 5. Agent stack for the TEST server (G)
+
+**Owner decision (2026-10-13):** `IdentityMode=shared-iam-user` with `SharedAgentUserArn` (output of step U); the
+command, expected change set and server setup are in [13](13-agent-shared-identity.md) §6. The modes below remain
+for later use.
 
 The identity mode comes from data D3 of [12](12-agent-test-server.md); see its §6.1 for the trade-offs. The target and
 prefix are those of the no-op catalog.
@@ -213,7 +217,7 @@ Four alarms cost about USD 0.40/month; there is no alarm action (`AlarmTopicArn`
 2. Delete the agent stack: `aws cloudformation delete-stack --stack-name cicd-agent-dev-<AGENT_ID> --region $R --profile $P`.
    For mode B, disassociate the instance profile first. For mode C, keep or delete the trust anchor.
 3. Platform: keep the transport for E6, or revert with a change set built like A0 but against the post-A1 state
-   (`EnableAgentTransport=false`). It must show 8 `Remove` + `Modify ExecutorRole` only. The log bucket is
+   (`EnableAgentTransport=false`). It must show 8 `Remove` only. The log bucket is
    **retained**: empty and delete it by hand before enabling the switch again, otherwise the bucket name collides.
 
 ## 8. Costs (us-east-1 list prices; confirm with the AWS Pricing Calculator)

@@ -73,6 +73,11 @@ const POSIX_USER = /^[a-z_][a-z0-9_-]{0,31}$/;
 const RESOURCE = /^[a-z0-9][a-z0-9-]{0,40}$/;
 const ROLE_ARN = /^arn:aws[a-z-]*:iam::[0-9]{12}:role\/[A-Za-z0-9+=,.@_/-]+$/;
 
+/** The command queue agent-stack.yaml creates for this agent. */
+export function ownCommandQueueName(stage: string, agentId: string): string {
+  return `cicd-agent-${stage}-${agentId}-cmd.fifo`;
+}
+
 function int(value: unknown, min: number, max: number): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : undefined;
 }
@@ -109,6 +114,12 @@ export function loadAgentConfig(rawConfig: unknown, rawCatalog: unknown, opts: {
   const region = str(c, "region", /^[a-z]{2}(-[a-z]+)+-[0-9]$/, "agent");
   const commandQueueUrl = str(c, "commandQueueUrl", FIFO_URL, "agent");
   const resultsQueueUrl = str(c, "resultsQueueUrl", FIFO_URL, "agent");
+  // Shared identity (agent-shared-identity.yaml): every agent of a stage may hold the same IAM user, which IAM lets
+  // read every agent command queue of that stage. The agent itself therefore consumes only its OWN queue, named
+  // cicd-agent-<stage>-<agentId>-cmd.fifo by agent-stack.yaml. Loopback URLs (a local SQS emulator) are exempt.
+  if (commandQueueUrl.startsWith("https://") && agentId !== "" && stage !== "" && !commandQueueUrl.endsWith(`/${ownCommandQueueName(stage, agentId)}`)) {
+    problems.push(`agent.commandQueueUrl must be this agent's own queue (${ownCommandQueueName(stage, agentId)})`);
+  }
   const executorRoleId = str(c, "executorRoleId", ROLE_ID, "agent");
   const logBucket = str(c, "logBucket", BUCKET, "agent");
   // A local directory: an absolute path of this platform, without . or .. segments.

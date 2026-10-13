@@ -112,7 +112,7 @@ Parameters:
     Type: String
     Default: "false"
     AllowedValues: ["true", "false"]
-    Description: Create the agent results queue, its DLQ, the agent log bucket and the Executor's agent permissions (AC-04).
+    Description: Create the agent results queue (with its Executor consume grant), its DLQ and the agent log bucket (AC-04). ExecutorRole is never modified.
   AgentResultsRetentionSeconds:
     Type: Number
     Default: 345600
@@ -400,26 +400,9 @@ Resources:
                   - sqs:ChangeMessageVisibility
                   - sqs:SendMessage
                 Resource: !GetAtt DeployQueue.Arn
-              # AC-04 §11.5: commands and evidence queries to the agents of this stage (command queues are created by
-              # agent-stack.yaml and named cicd-agent-<Stage>-<AgentId>-cmd.fifo), events from the results queue.
-              # Each command queue's policy additionally denies SendMessage to every other principal.
-              - !If
-                - AgentTransport
-                - Sid: AgentCommandSend
-                  Effect: Allow
-                  Action: sqs:SendMessage
-                  Resource: !Sub "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:cicd-agent-${Stage}-*-cmd.fifo"
-                - !Ref AWS::NoValue
-              - !If
-                - AgentTransport
-                - Sid: AgentResultsConsume
-                  Effect: Allow
-                  Action:
-                    - sqs:ReceiveMessage
-                    - sqs:DeleteMessage
-                    - sqs:ChangeMessageVisibility
-                  Resource: !GetAtt AgentResultsQueue.Arn
-                - !Ref AWS::NoValue
+              # AC-04 §11.5: the Executor's agent permissions (send commands, consume results) are granted by the
+              # queues' own policies (AgentResultsQueuePolicy here, CommandQueuePolicy in agent-stack.yaml), never
+              # here: the running Executor's role is not modified by the agent transport (owner decision, 2026-10-13).
               - Sid: StateTableItems
                 Effect: Allow
                 Action:
@@ -713,9 +696,11 @@ Resources:
         - Key: Stage
           Value: !Ref Stage
 
-  # AC-04 §11.4: only agent roles of THIS stage may send (agent-stack.yaml tags every agent role
-  # CicdAgentStage=<Stage>), and only the Executor role may consume. The Executor additionally maps each event's
-  # SenderId to the agent's registered role id and refuses events for targets that agent does not serve.
+  # AC-04 §11.4: only agent identities of THIS stage may send (agent-stack.yaml tags every agent role, and
+  # agent-shared-identity.yaml the shared agent user, CicdAgentStage=<Stage>), and only the Executor role may consume.
+  # The consume grant lives here (same account: a queue policy grant is enough), so ExecutorRole is not modified.
+  # The Executor additionally maps each event's SenderId to the agent's registered id and refuses events for targets
+  # that agent does not serve.
   AgentResultsQueuePolicy:
     Type: AWS::SQS::QueuePolicy
     Condition: AgentTransport
@@ -725,6 +710,15 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
+          - Sid: AllowExecutorConsume
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt ExecutorRole.Arn
+            Action:
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+              - sqs:ChangeMessageVisibility
+            Resource: !GetAtt AgentResultsQueue.Arn
           - Sid: DenySendFromNonAgents
             Effect: Deny
             Principal: "*"

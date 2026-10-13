@@ -140,7 +140,9 @@ Set-Location "$BUILD\executor"; npm ci --no-audit --no-fund; npm run build
 New-Item -ItemType Directory -Force "$STAGE\dist" | Out-Null
 Copy-Item -Recurse dist\src "$STAGE\dist\src"; Copy-Item package.json, package-lock.json $STAGE
 Copy-Item -Recurse ..\schemas "$STAGE\schemas"
-Copy-Item <REPO>\infra\agent\pilot\noop-deploy.sh "$STAGE\noop-deploy.sh"   # from the working copy (see note)
+New-Item -ItemType Directory -Force "$STAGE\pilot" | Out-Null
+Copy-Item ..\infra\agent\pilot\noop-deploy.sh "$STAGE\pilot\noop-deploy.sh"
+Copy-Item -Recurse ..\infra\agent\bin "$STAGE\bin"; Copy-Item ..\infra\agent\agent.env.example $STAGE   # 13 §5
 Set-Location $STAGE; npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 Remove-Item -Recurse -Force node_modules\.bin                   # Windows shims, useless on Linux
 Set-Location ..; tar -czf "cicd-agent-$REL.tar.gz" "cicd-agent-$REL"
@@ -148,9 +150,8 @@ Set-Location ..; tar -czf "cicd-agent-$REL.tar.gz" "cicd-agent-$REL"
 git -C D:\executor_component worktree remove $BUILD            # after copying the artifact
 ```
 
-`<REPO>` is the owner's working copy (`D:\executor_component`). `infra/agent/pilot/` (`noop-deploy.sh`,
-`make-message.mjs`) is not in `c28f0d3`: until its commit is approved it is taken from the working copy, and
-`make-message.mjs` runs there (after `npm run build` in `<REPO>\executor`).
+`<RELEASE>` is a commit: everything in the artifact comes from it. `make-message.mjs` runs in the owner's working
+copy (`D:\executor_component`, after `npm run build` in `executor\`).
 
 The production dependencies are plain JavaScript (`--ignore-scripts` skips the optional native helper of `ssh2`,
 which the agent does not load), so the Windows-built tree runs on Linux.
@@ -185,7 +186,7 @@ tar -xzf "/tmp/cicd-agent-$REL.tar.gz" -C "$H/releases"
 chown -R root:root "$H/releases/cicd-agent-$REL"
 find "$H/releases/cicd-agent-$REL" -type d -exec chmod 0755 {} +; find "$H/releases/cicd-agent-$REL" -type f -exec chmod 0644 {} +
 ln -sfn "$H/releases/cicd-agent-$REL" "$H/current"
-install -o root -g root -m 0755 "$H/current/noop-deploy.sh" "$H/scripts/noop-deploy.sh"
+install -o root -g root -m 0755 "$H/current/pilot/noop-deploy.sh" "$H/scripts/noop-deploy.sh"
 grep -c $'\r' "$H/scripts/noop-deploy.sh"                                     # must print 0 (no CRLF)
 # Only with a private Node.js:
 mkdir "$H/node" && tar -xzf /tmp/node-v<NODE_VERSION>-linux-<ARCH>.tar.gz -C "$H/node" --strip-components=1
@@ -340,7 +341,10 @@ Prerequisites, from [11](11-agent-transport-e5.md):
   | `logBucket` | `AgentLogBucketName` |
   | `executorRoleId` | `ExecutorRoleId` |
 
-### 6.1 Identity (temporary credentials only)
+### 6.1 Identity
+
+**Owner decision (2026-10-13): the agents use the shared identity of [13](13-agent-shared-identity.md)** (one IAM
+user per stage, key in `config/agent.env`, `bin/start-agent.sh`). The per-agent modes below stay available.
 
 | Mode | When (D3) | Server change | AWS change (authorization) | Notes |
 |---|---|---|---|---|

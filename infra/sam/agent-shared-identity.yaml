@@ -1,0 +1,106 @@
+# @akili-spec changes/cicd-executor-poc architecture-change-04 §11.1, §11.2, AP-5 (amended by the owner, 2026-10-13)
+#
+# The ONE AWS identity every agent of a platform stage shares (owner decision, 2026-10-13): an IAM user without
+# console access, its access key, and the Secrets Manager secret that holds that key. One stack per platform stage,
+# for example `cicd-agents-identity-dev`. The agents never read the secret: the owner copies the two values into
+# each server's local .env (docs/gate-b/13-agent-shared-identity.md).
+#
+# - The key is created by CloudFormation and written straight into the secret: it appears in no output, event or
+#   console page. Rotation: raise KeySerial (CloudFormation creates the new key, updates the secret, then deletes the
+#   old key), then update every server's .env and restart its agent. Commands wait in SQS and results in each
+#   agent's outbox meanwhile, so nothing is lost.
+# - The user may only consume this stage's agent command queues, send to this stage's results queue and upload logs
+#   under logs/ of this stage's log bucket. It cannot send commands (each command queue's policy accepts only the
+#   Executor role, and every agent checks the sender), read DynamoDB or secrets, or reach the deploy queue.
+# - IAM cannot tell the agents apart: each agent consumes only the queue named after its own agentId and stage
+#   (src/agent/config.ts refuses any other at start).
+# - Tagged CicdAgentStage=<Stage>, the tag the platform's results queue policy requires of every sender.
+#
+# Deploy with CAPABILITY_NAMED_IAM (the user has a fixed name). Publication policy (DD-23): no account ID here.
+AWSTemplateFormatVersion: "2010-09-09"
+Description: ONECGIAR CI/CD Platform - shared agent identity of one platform stage (IAM user, access key, secret).
+
+Parameters:
+  Stage:
+    Type: String
+    AllowedPattern: "^[a-z][a-z0-9-]{0,15}$"
+    ConstraintDescription: Lowercase letters, digits and hyphens; starts with a letter; at most 16 characters.
+    Description: Platform stage (the platform stack's Stage).
+  UserName:
+    Type: String
+    Default: cicd-agents
+    AllowedPattern: "^[A-Za-z0-9+=,.@_-]{1,64}$"
+    Description: Name of the shared agent IAM user.
+  SecretName:
+    Type: String
+    Default: cicd/agents/credentials
+    AllowedPattern: "^[A-Za-z0-9/_+=.@-]{1,256}$"
+    Description: Secrets Manager name of the agent credentials (keys AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).
+  KeySerial:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    Description: Raise by one to rotate the access key (a new key replaces the old one and the secret is updated).
+
+Resources:
+  AgentsUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Ref UserName
+      # No LoginProfile: no console password, programmatic access only.
+      Policies:
+        - PolicyName: agent-transport
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Exactly the agent's calls (src/agent/adapters.ts): receive, delete and extend its commands.
+              - Sid: ConsumeAgentCommandQueues
+                Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:ChangeMessageVisibility
+                Resource: !Sub "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:cicd-agent-${Stage}-*-cmd.fifo"
+              - Sid: SendAgentResults
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !Sub "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:cicd-agent-results-${Stage}.fifo"
+              # The log bucket's own policy still requires TLS and SSE-S3 on every upload.
+              - Sid: PutAgentLogs
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::cicd-agent-logs-${Stage}-${AWS::AccountId}-${AWS::Region}/logs/*"
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+        - Key: Stage
+          Value: !Ref Stage
+        - Key: CicdAgentStage
+          Value: !Ref Stage
+
+  AgentsAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref AgentsUser
+      Serial: !Ref KeySerial
+      Status: Active
+
+  AgentsCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Ref SecretName
+      Description: Access key of the shared CI/CD agent user; copied by the owner into each server's agent .env.
+      SecretString: !Sub '{"AWS_ACCESS_KEY_ID":"${AgentsAccessKey}","AWS_SECRET_ACCESS_KEY":"${AgentsAccessKey.SecretAccessKey}"}'
+      Tags:
+        - Key: Project
+          Value: ONECGIAR-CICD-Platform
+        - Key: Stage
+          Value: !Ref Stage
+
+Outputs:
+  AgentsUserArn:
+    Description: Shared agent user ARN (agent-stack.yaml SharedAgentUserArn in shared-iam-user mode).
+    Value: !GetAtt AgentsUser.Arn
+  CredentialsSecretArn:
+    Description: Secret holding the shared agent access key (read by the owner only, never by an agent).
+    Value: !Ref AgentsCredentialsSecret

@@ -32,9 +32,10 @@ override the two files. Nothing outside these directories is written.
   - `"runAs": "self"` runs it as `cicd-agent` itself, without sudo, for servers where no sudo rule is wanted. The
     script then has only the agent user's permissions and can write the agent's own `data/`, so use it only for
     scripts that need no other privileges.
-- **AWS credentials.** Temporary credentials only, never static keys. The agent's own AWS resources and role come from
-  one `infra/sam/agent-stack.yaml` stack per agent (see "AWS identity" below). Per-target script roles are assumed per
-  run (AP-2).
+- **AWS credentials.** Since the owner decision of 2026-10-13, the shared agent user of the stage
+  ([13-agent-shared-identity.md](../../docs/gate-b/13-agent-shared-identity.md)): its access key sits in
+  `config/agent.env` (0600), loaded by `bin/start-agent.sh`. The agent's command queue comes from one
+  `infra/sam/agent-stack.yaml` stack per agent. The per-agent role modes below remain available.
 - **Network.** Outbound HTTPS to SQS, S3 and STS in the platform region. No inbound port: the agent listens on nothing.
 
 ## AWS identity (agent-stack.yaml `IdentityMode`)
@@ -44,6 +45,7 @@ override the two files. Nothing outside these directories is written.
 | `ec2-instance-profile` | EC2 instance **without** an instance profile | Attach the stack's `InstanceProfileName`; the default credential chain picks it up |
 | `ec2-instance-role` | EC2 instance that **already has** an instance profile (it is never replaced, so its applications keep their permissions) | The agent assumes the agent role from the instance role (below) |
 | `roles-anywhere` | On premises | One X.509 certificate per server, CN = `agentId`, private key readable by `cicd-agent` only; `aws_signing_helper` as `credential_process` (below) |
+| `shared-iam-user` (**current**, owner decision 2026-10-13) | Any server | The stage's shared IAM user `cicd-agents` (`agent-shared-identity.yaml`); its key in `config/agent.env`. Each agent consumes only its own queue (the agent refuses any other at start) |
 
 `/opt/cicd-agent/.aws/config` (owned by root, readable by `cicd-agent`), with `AWS_PROFILE=cicd-agent` and
 `AWS_CONFIG_FILE` pointing to it in the agent's environment:
@@ -67,6 +69,9 @@ can read, isolates the agent's identity better. IMDSv2 with a hop limit of 1 kee
 credentials. Changing that is a server setting, decided in E5.
 
 ## Running it
+
+With the shared identity, `bin/start-agent.sh` and `bin/stop-agent.sh` (copied to `<home>/bin/`) start the agent with
+`node --env-file=config/agent.env` in a clean environment and stop only that process.
 
 Directly, for a trial or behind any process manager:
 
@@ -152,6 +157,9 @@ CPU use belongs to Docker and the scripts, not to the agent, and is bounded by `
 | File | Purpose |
 |---|---|
 | `agent.example.json`, `catalog.example.json` | Configuration and catalog with placeholders |
+| `agent.env.example` | The agent environment of the shared identity (credentials filled on the server only) |
+| `bin/start-agent.sh`, `bin/stop-agent.sh` | Start with `agent.env` in a clean environment; stop only the agent |
+| `pilot/noop-deploy.sh`, `pilot/make-message.mjs` | The no-op pilot script and the manual command generator (E5) |
 | `sudoers.example` | One rule per script that runs as a deploy user |
 | `pm2.ecosystem.example.cjs` | Running under an existing, supervised PM2 daemon |
 | `optional/cicd-agent.service` | Optional systemd reference unit |

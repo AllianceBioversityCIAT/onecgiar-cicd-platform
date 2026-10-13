@@ -12,6 +12,8 @@ npm-debug.log*
 # Env / secrets
 .env
 .env.*
+# A filled agent environment (shared agent credentials); only agent.env.example is versioned.
+agent.env
 *.pem
 *.key
 
