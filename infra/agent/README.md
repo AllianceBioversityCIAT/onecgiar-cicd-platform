@@ -12,7 +12,7 @@ reconciliation stay in the central Executor.
 
 | Path | Owner and mode | Content |
 |---|---|---|
-| `/opt/cicd-agent/package.json`, `node_modules/` (production only), `dist/`, `schemas/` | root, read-only | The build: `npm ci --omit=dev` and `npm run build` of `executor/`, plus a copy of the repository's `schemas/` |
+| `/opt/cicd-agent/releases/<release>/` (`package.json`, production `node_modules/`, `dist/src/`, `schemas/`) and the symlink `/opt/cicd-agent/current` | root, read-only | The artifact built off the server ([12-agent-test-server.md](../../docs/gate-b/12-agent-test-server.md)); an update adds a release and moves `current` |
 | `/opt/cicd-agent/config/agent.json`, `catalog.json` | root, 0644 | From `agent.example.json` and `catalog.example.json` |
 | `/opt/cicd-agent/data/` | `cicd-agent`, 0700 | Journal, target state, outbox, captured output (`stateDir`) |
 | `/opt/cicd-agent/logs/` | `cicd-agent`, 0750 | Operational logs (JSON lines), when run directly or under PM2 |
@@ -72,7 +72,7 @@ Directly, for a trial or behind any process manager:
 
 ```bash
 sudo -u cicd-agent env CICD_AGENT_HOME=/opt/cicd-agent \
-  /usr/bin/node /opt/cicd-agent/dist/src/agent/main.js >> /opt/cicd-agent/logs/agent.log 2>&1
+  /usr/bin/node /opt/cicd-agent/current/dist/src/agent/main.js >> /opt/cicd-agent/logs/agent.log 2>&1
 ```
 
 A bare process is not restarted after a crash or a reboot. For continuous operation use a supervisor the server
@@ -88,7 +88,7 @@ already has:
 | Status | `pgrep -u cicd-agent -f agent/main.js` | `pm2 describe cicd-agent` |
 | Logs | `logs/agent.log` | `pm2 logs cicd-agent`, or `logs/agent.*.log` |
 | Stop or restart | `kill -TERM <pid>`, then start again | `pm2 stop|restart cicd-agent` |
-| Update | Replace `dist/`, `node_modules/`, `schemas/`, then restart the agent | Same, then `pm2 restart cicd-agent` |
+| Update | Add a new `releases/<release>/`, point `current` to it, restart the agent | Same, then `pm2 restart cicd-agent` |
 
 - **Liveness.** The central Executor also sees the agent: a heartbeat every `heartbeatSeconds`.
 - **Updates and restarts.** They touch only the agent: no Docker, PM2 application or other service is restarted.

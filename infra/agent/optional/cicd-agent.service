@@ -15,7 +15,7 @@ Group=cicd-agent
 WorkingDirectory=/opt/cicd-agent
 Environment=CICD_AGENT_HOME=/opt/cicd-agent
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/node /opt/cicd-agent/dist/src/agent/main.js
+ExecStart=/usr/bin/node /opt/cicd-agent/current/dist/src/agent/main.js
 Restart=on-failure
 RestartSec=5
 # Approved (AC-04 §10.7): on stop, systemd signals the agent AND the running deploy scripts at once.

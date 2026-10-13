@@ -5,7 +5,7 @@ module.exports = {
   apps: [
     {
       name: "cicd-agent",
-      script: "/opt/cicd-agent/dist/src/agent/main.js",
+      script: "/opt/cicd-agent/current/dist/src/agent/main.js",
       // Node.js 22 for the agent only, if the server's default node is another version (applications keep theirs).
       interpreter: "/opt/cicd-agent/node/bin/node",
       cwd: "/opt/cicd-agent",
