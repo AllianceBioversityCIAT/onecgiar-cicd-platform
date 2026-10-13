@@ -4,8 +4,9 @@
 GitHub Actions (OIDC, a CI role per repository) → ECR → SQS → central Executor → DynamoDB. The pilot
 application's target is registered with fictitious SSH data and `deployWindowPolicy: required`, so every request
 ends `FAILED (DEPLOY_WINDOW_CLOSED)` by design: **no real deployment has run yet**. The next architecture,
-**AC-04 (`SQS_AGENT`: asynchronous Executor, one agent per server)**, is **approved (revision 2)**; **E1** (contracts) is committed
-locally and **E2** (the asynchronous Executor path) is implemented and tested locally, uncommitted; **E3 needs the owner's authorization**. A new conversation resumes from this
+**AC-04 (`SQS_AGENT`: asynchronous Executor, one agent per server)**, is **approved (revision 2)**; **E1** (contracts), **E2** (the asynchronous Executor path)
+and **E3** (the server agent, a plain Node.js process) are committed and pushed to `feature/multi-repository-ci`; **E4**
+(infrastructure as code) is in progress, uncommitted, and is never deployed without the owner's authorization. A new conversation resumes from this
 file without any chat history.
 
 ## 1. Approved architecture
@@ -43,9 +44,10 @@ Rationale: [architecture-change-04.md](specs/changes/cicd-executor-poc/architect
 | Multi-repository CI (D2) | Yes: per-repository CI role template, `AdditionalCiRoleArns`, Executor bindings | Yes | Yes: the pilot repository's role, queue allowance, binding secret and CD Environment are deployed |
 | Notifications switch `CICD_NOTIFICATIONS_DISABLED` | Yes | Yes | Yes: Slack is **disabled** in the running Executor (owner decision, weekend tests) |
 | GitHub Actions → OIDC → ECR → SQS → Executor → DynamoDB | Yes | Yes | **Yes, twice**: both requests ended `FAILED (DEPLOY_WINDOW_CLOSED)`, no lock, no SSH, nothing deployed (pilot target with fictitious SSH data, `required`, no window) |
-| AC-04 E1: agent contracts (`target-record` transport fields, `agent-record`, `agent-command`, `agent-event`, `agent-query`, `agent-heartbeat`, `domain/agent-protocol`, admin tool `agent-put`/`agent-get`) | Yes (local, uncommitted) | `check:local` exit 0: 1705 tests passed, 95 skipped, 29 todo (the E2/E3 acceptance cases); guards 8/8; integration 14/14 files | No (no AWS change in E1). The Executor **refuses** `sqs-agent` targets (`TARGET_INVALID`) until E2 |
-| AC-04 E2: asynchronous Executor path (outbox dispatch to a FIFO command queue, results consumer, pinned and held locks without TTL, fresh fencing token per dispatch, reconciler re-send/query/hard deadline, hold release by evidence or `TARGET_RESOLUTION_RECORDED`, SSH X16 hold) | Yes (local, uncommitted, branch `feature/ac-04-sqs-agent`) | `check:local` exit 0: 1729 passed, 110 skipped, 13 todo (E3 cases); guards 8/8; integration 15/15 files, 102 tests (13 agent scenarios on DynamoDB Local); ElasticMQ FIFO dispatcher test | No (no AWS change). Off unless `CICD_AGENT_RESULTS_QUEUE_URL` and `CICD_AGENT_LOG_BUCKET` are set |
-| AC-04 E3–E7 (agent, templates, real agent, first real deploy, notifications with log links) | No | — | — |
+| AC-04 E1: agent contracts (`target-record` transport fields, `agent-record`, `agent-command`, `agent-event`, `agent-query`, `agent-heartbeat`, `domain/agent-protocol`, admin tool `agent-put`/`agent-get`) | Yes, commit `8528231` (pushed to `feature/multi-repository-ci`) | `check:local` exit 0: 1705 tests passed, 95 skipped, 29 todo (the E2/E3 acceptance cases); guards 8/8; integration 14/14 files | No (no AWS change in E1). The Executor **refuses** `sqs-agent` targets (`TARGET_INVALID`) until E2 |
+| AC-04 E2: asynchronous Executor path (outbox dispatch to a FIFO command queue, results consumer, pinned and held locks without TTL, fresh fencing token per dispatch, reconciler re-send/query/hard deadline, hold release by evidence or `TARGET_RESOLUTION_RECORDED`, SSH X16 hold) | Yes, commit `8a520ce` (pushed to `feature/multi-repository-ci`) | `check:local` exit 0: 1729 passed, 110 skipped, 13 todo (E3 cases); guards 8/8; integration 15/15 files, 102 tests (13 agent scenarios on DynamoDB Local); ElasticMQ FIFO dispatcher test | No (no AWS change). Off unless `CICD_AGENT_RESULTS_QUEUE_URL` and `CICD_AGENT_LOG_BUCKET` are set |
+| AC-04 E3: server agent (`executor/src/agent/`): a plain Node.js process, systemd optional (owner decision 2026-10-13), run directly or under an existing PM2 daemon. Includes the journal, fencing, scheduler, outbox, S3 logs, drain on stop, recovery of scripts left by an abruptly ended agent, `runAs` deploy user or `self`, and the `infra/agent/` packaging | Yes, approved by the owner (2026-10-13), committed and pushed to `feature/multi-repository-ci` | `check:local` exit 0: 1770 passed, 117 skipped, 12 todo (E5 cases); `agent.test.ts` 41 passed + 1 POSIX-only; ElasticMQ 11/11 + 1 POSIX-only (real `node main.js` process); guards 8/8; integration 15/15 files, 102 tests; footprint measured locally (idle about 48 MB RSS, CPU < 0.01 %) | No: not installed anywhere |
+| AC-04 E4–E7 (templates, real agent, first real deploy, notifications with log links) | No | — | — |
 
 Evidence: [execution.md](specs/changes/cicd-executor-poc/execution.md). Branch `feature/multi-repository-ci` is pushed
 and **not merged** to `main`; the DEV stack was updated from that branch's template, so `main` must not be deployed
@@ -60,6 +62,8 @@ before the merge.
 | 3 | `none` mode does not guarantee the deployed version | Use only when the source is fixed outside the request |
 | 4 | Unknown outcomes block a target until evidence or an operator resolves them (AC-04 AP-3) | Operator tooling in E2 (reuse `TARGET_RESOLUTION_RECORDED`) |
 | 5 | No real deployment validated | AC-04 E5–E6 |
+| 6 | Application isolation also depends on the deploy scripts (no self-started daemons, no host-wide operations, exit on `SIGTERM`) | Script rules in `infra/agent/README.md`; leftovers are logged; verified on Linux in E5 |
+| 7 | A script running as another user that ignores `SIGTERM` cannot be killed by the unprivileged agent | Script requirement; the run ends unknown and the target stays held; E5 check |
 
 ## 5. Next activities (AC-04 plan, §19)
 
@@ -67,9 +71,9 @@ before the merge.
 |---|---|---|
 | E0 | AC-04 approved | **Done** (revision 2, 2026-10-10) |
 | E1 | Schemas, registry records, admin tool, contract tests | **Done**, local commit `8528231` |
-| E2 | Executor async path (see §3) | **Done locally**, uncommitted |
-| **E3 (next, needs authorization)** | `agent/` package (Node.js 22): catalog, journal, target state, scheduler with resources, outbox, spawn via sudo, S3 upload | — |
-| E4 | Templates: platform additions, `agent-stack.yaml`, `target-script-role.yaml` | — |
+| E2 | Executor async path (see §3) | **Done**, commit `8a520ce`, pushed to `feature/multi-repository-ci` |
+| E3 | Server agent and packaging (see §3) | **Done**, approved 2026-10-13, pushed to `feature/multi-repository-ci` |
+| **E4 (next, needs authorization)** | Templates: platform additions, `agent-stack.yaml`, `target-script-role.yaml` | — |
 | E5–E7 | One real agent with a no-op script; Reporting Tool DEV on `sqs-agent`; notifications with log links | — |
 
 **Owner decisions applied:** OP-1 (a late `FINISHED` never releases a hold automatically) and OP-2 (reuse
@@ -91,5 +95,5 @@ restoring Slack. Open decisions OD-Q5, OD-Q7, OD-Q11–Q15 and OD-N1 are never r
 1. [CLAUDE.md](../CLAUDE.md) — rules and commands.
 2. This file.
 3. [architecture-change-04.md](specs/changes/cicd-executor-poc/architecture-change-04.md) — the agent design and the E0–E7 plan.
-4. `executor/src/domain/agent-protocol/` and `executor/test/unit/agent-protocol*.test.ts` — the protocol rules and the pending E2/E3 cases.
+4. `executor/src/domain/agent-protocol/`, `executor/src/agent/` and `executor/test/unit/agent*.test.ts` — the protocol rules, the agent and the pending E5 cases.
 5. [execution.md](specs/changes/cicd-executor-poc/execution.md) (latest records).

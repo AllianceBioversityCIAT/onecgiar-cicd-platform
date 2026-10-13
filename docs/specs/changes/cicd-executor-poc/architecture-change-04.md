@@ -334,3 +334,105 @@ No decision of this document changed. Details fixed by the implementation and it
 | Hold release | `TARGET_RESOLUTION_RECORDED` releases a hold of the same execution (owner and token) before removing the `unresolved[]` entry; verified never-started evidence uses the same service with `resolvedBy = agent:<agentId>` |
 | SSH | X16 holds the lock as well (AP-3); renew and release never touch a pinned or held lock |
 | Not in E2 | The agent (E3), templates (E4), the real SQS `SenderId` and deduplication window (E5), log links in notifications (E7) |
+
+## 23. E3 implementation notes (agent, 2026-10-13)
+No approved decision about the protocol, locks, fencing, journal, outbox, scheduler or logs changed.
+
+**Owner decision (2026-10-13): the agent is a plain Node.js process, and systemd is optional.** It runs directly
+(`node dist/src/agent/main.js`) or under a supervisor the server already has: an existing, supervised PM2 daemon, or
+the optional systemd reference unit. §10.7's systemd row and its `KillMode` setting now apply only to that optional
+unit. Installation and operation are in `infra/agent/README.md`.
+
+| Item | As implemented |
+|---|---|
+| Location | `executor/src/agent/` (entry `main.ts`), built and tested with the Executor package. It is installed as `dist/`, production `node_modules/` and `schemas/` under `/opt/cicd-agent` (`CICD_AGENT_HOME`), with `config/`, `data/` (`stateDir`) and `logs/` beside them. |
+| Dependencies | `@aws-sdk/client-s3` and `@aws-sdk/client-sts` 3.1146.0, the same version as the installed clients (owner authorization). Four packages are added. `overrides` pin `@aws-sdk/middleware-sdk-s3` 3.972.77 and `@aws-sdk/checksums` 3.1001.1, so no shared SDK package moves to a day-old release. `npm audit --omit=dev`: 0 vulnerabilities. The 6 dev-only advisories (vitest/esbuild) are unchanged. |
+| Supervisor independence | No code path depends on systemd, PM2 or cgroups. A stop request is `SIGTERM`, `SIGINT` or the IPC message `shutdown` (PM2's Windows mode). Logs are JSON lines on stdout/stderr. |
+| Journal | One file per command under `stateDir`, written atomically (temporary file, fsync, rename); `meta.json` holds the journal epoch. Order: `ACCEPTED` (fsync) → `DeleteMessage` → `STARTING` → spawn → `STARTED` → `FINISHED`. Recovery: `ACCEPTED` → `NOT_STARTED ABANDONED`; `STARTING`/`STARTED` → `LOST`, never re-run. Pruned at start and daily past `journalRetentionDays`. |
+| Recovery after an abrupt end | Without systemd, nothing kills a script whose agent process died. On its next start, **before receiving anything**, the agent checks each `STARTED` entry: if the journaled pid is alive **and** started inside the journaled spawn window (`/proc` start time, Linux), its process group gets `SIGTERM`, then `SIGKILL` after the kill grace. The entry is reported `LOST`. A recycled pid, or a script that already exited, is never signaled. Elsewhere start times cannot be verified, so nothing is signaled. |
+| Outbox, fencing, unauthorized senders, `NEVER_SEEN` | As in E3. The outbox is written first and sent in `seq` order. The highest fencing token is kept per target. Unauthorized senders are dropped with no journal entry. `NEVER_SEEN` writes a tombstone. `NO_RECORD` uses `seq = 900000 + query`. |
+| Scheduler | `maxParallel` (default **2**), all-or-nothing capacity resources, one run per target, no starvation, `BUSY` at `notAfter`. There is no server-wide lock. |
+| Spawn | `"runAs": "<deploy user>"` runs `sudo -n [--preserve-env=<AWS keys>] -u <user> -- <path> <args>`; `"runAs": "self"` runs the script directly as the agent user (no sudo) on servers without a sudo rule. There is no shell, and the script gets its own process group. A timeout sends `SIGTERM` to the group, then `SIGKILL` after the kill grace. The agent is unprivileged: `SIGKILL` reaches `sudo` but not a script running as another user, so scripts must exit on `SIGTERM`. |
+| End of a run | The run ends when the **script exits**, not when its pipes close. Pipes still held by a leftover process are released after 5 s, and leftovers in the script's process group are reported. Nothing is signaled after a script exited on its own. |
+| Output capture | Bounded memory: backpressure pauses the pipe while the output file is saturated, and the 64 KB tail is kept as chunks (it was rebuilt per chunk). |
+| Logs | Redacted, gzipped, `AES256`, retried for 24 h, then `LOG_UPLOADED` with `status: FAILED`; indexed in memory, so an idle agent reads nothing. **Defect fixed in the shared redaction** (`observability/logger/redaction.ts`). The key/value pattern was quadratic on long runs of letters: 20 MB of output took about 19 s of CPU and blocked the agent's event loop. A lookbehind keeps exactly the same matches and brings it to about 0.15 s. The redaction suite is green. |
+| Packaging | `infra/agent/` contains `README.md`, the configuration and catalog examples, `sudoers.example`, `pm2.ecosystem.example.cjs` and `optional/cicd-agent.service`. Not installed. |
+
+### Stop, restart and supervisors
+
+On a stop request the agent drains:
+
+1. It aborts its long poll and returns batches and commands waiting for a slot to SQS (visibility 0, never journaled).
+2. It starts nothing new.
+3. Running scripts get `shutdownGraceSeconds`. The default is the longest catalog timeout plus its kill grace, and their own timeouts still apply.
+4. Scripts still running after that are stopped and reported `LOST`; the Executor holds the target (AP-3).
+5. It flushes the outbox and exits 0, at once when idle.
+
+| Supervisor | Stop | Abrupt end (SIGKILL, crash) |
+|---|---|---|
+| None (`node` directly) | `kill -TERM`; drains | Scripts keep running until the next start stops them (above); no automatic restart |
+| Existing PM2 daemon | `treekill: false` (only the agent is signaled) and `kill_timeout` ≥ grace + kill grace + 60 s; drains | PM2 restarts the agent, which stops the scripts before receiving |
+| Optional systemd unit | `control-group` (approved) signals scripts at once. `mixed` (proposed) drains | systemd ends the cgroup; restart reports `LOST` |
+
+### What the agent guarantees and what scripts must do
+
+The agent cannot see inside a script. It guarantees:
+
+- it never runs host commands itself;
+- it never signals anything a script left behind after exiting on its own;
+- stopping, restarting or crashing the agent does not stop Docker containers or PM2 applications, which are not its processes;
+- only catalog scripts run, by exact path.
+
+Isolation of applications also depends on the scripts. Each script must:
+
+- act only on its own application;
+- hand it to its supervisor and end;
+- never start a daemon itself (`nohup`, a PM2 daemon on first use);
+- never run host-wide operations (`docker system prune`, `pm2 kill`, `pm2 delete all`, `pm2 update`);
+- exit on `SIGTERM`;
+- declare shared resources in the catalog.
+
+The full table is in `infra/agent/README.md`.
+
+### Commands while the agent is stopped
+
+| Where the command is | What happens | Executor side (E2, unchanged) |
+|---|---|---|
+| Visible in SQS | Waits up to the queue retention. On return every rule applies (identity, schema, catalog, fencing, `notAfter`, clock, journal); an expired command is `NOT_STARTED EXPIRED` | Re-send while it can still start, then queries, then X16 held at the hard deadline. A `NOT_STARTED` answer gives X14 retry, or releases a hold automatically |
+| Received, not deleted | Handed back at shutdown, or visible again after the visibility timeout; it blocks only its own target's FIFO group | Same |
+| `ACCEPTED`, never `STARTING` | `NOT_STARTED ABANDONED`; never runs | X14 retry or automatic release |
+| `STARTING`/`STARTED` | Finished in the grace, or stopped and `LOST`; never re-run | `LOST` gives X16 held; a late `FINISHED` needs an operator (OP-1) |
+| Lost from SQS (retention, DLQ) | Never seen | Queries continue up to 48. The agent answers `NEVER_SEEN` only under the §9.3 rule; otherwise `NO_RECORD` keeps the hold for the operator |
+
+E4 templates: command queue retention well above the longest expected downtime, visibility timeout ≥ 120 s, DLQ with
+an alarm and `maxReceiveCount` ≥ 5.
+
+### Consumption (measured locally on Windows 11, Node 22.23.3 x64; not Linux figures)
+
+Every run uses the real `Agent` and real SDK clients (constructed, no network) with a simulated 20 s long poll and a
+60 s heartbeat.
+
+| Condition | Agent process |
+|---|---|
+| Idle, 180 s, 1000 journal entries | RSS 47.6–50.9 MB over two runs (bare Node: 37.5 MB), heap ≈ 13 MB, CPU < 0.01 % of one core, 3 receives and 1 heartbeat per minute, 0 journal reads or writes |
+| Two concurrent scripts, each writing 20 MB of output in 10 s | CPU 9 % of one core; RSS 49 MB, peaking at 93 MB while the logs are redacted and gzipped; the scripts take their natural 10–12 s (before the redaction fix: 47 s and 79 % CPU) |
+
+The scripts' and Docker's own CPU, memory and network are not the agent's. Real TLS connections add a few MB. The
+figures on the host are an E5 check. `outputCapBytes` bounds the transient peak.
+
+### Not verified in E3 (E5, Linux and AWS)
+
+These are listed as `todo` in `agent-protocol.pending.test.ts`:
+
+- the real `SenderId` and FIFO on Amazon SQS;
+- sudo `!requiretty`/`!use_pty` and the `SIGTERM` relay;
+- a script running as another user that ignores `SIGTERM`;
+- orphan recovery with real `/proc`;
+- the direct and PM2 runs leaving Docker and PM2 applications running;
+- reparenting outside the agent's tree;
+- process-group leftovers;
+- SQS retention, visibility timeout and DLQ;
+- S3 and IAM;
+- the footprint on the host.
+
+Windows runs prove the agent's logic, not Linux process, sudo, Docker or PM2 behavior.

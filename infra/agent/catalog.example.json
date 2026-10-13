@@ -1,0 +1,26 @@
+{
+  "agentId": "<AGENT_ID>",
+  "targets": {
+    "<TARGET_ID_A>": {
+      "scriptId": "deploy-<TARGET_ID_A>",
+      "path": "/opt/cicd/scripts/<DEPLOY_SCRIPT_A>.sh",
+      "arguments": "standard",
+      "runAs": "<DEPLOY_USER_A>",
+      "timeoutSeconds": 1800,
+      "killGraceSeconds": 30,
+      "resources": [],
+      "scriptRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/<SCRIPT_ROLE_A>"
+    },
+    "<TARGET_ID_B>": {
+      "scriptId": "deploy-<TARGET_ID_B>",
+      "path": "/opt/cicd/scripts/<DEPLOY_SCRIPT_B>.sh",
+      "arguments": "none",
+      "runAs": "<DEPLOY_USER_B>",
+      "timeoutSeconds": 900,
+      "killGraceSeconds": 30,
+      "resources": [
+        "pm2-shared"
+      ]
+    }
+  }
+}

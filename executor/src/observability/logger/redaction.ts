@@ -133,8 +133,11 @@ const SENSITIVE_STRING_KEY_FRAGMENT =
  * exemptions `isSensitiveKey` applies to object fields) from being mangled
  * when they appear as string content, e.g. inside a pretty-printed payload.
  */
+// `(?<![A-Za-z_])` only lets a key start where a run of letters starts. It matches exactly what it matched before (the
+// key's `[A-Za-z_]*` prefix absorbed those letters anyway) but tries each run once: without it a long run of letters
+// (a log line of 1 KB) was retried from every letter, quadratic (20 MB of such output took about 20 s of CPU).
 const KEY_VALUE_SECRET_PATTERN = new RegExp(
-  `("?([A-Za-z_]*${SENSITIVE_STRING_KEY_FRAGMENT}[A-Za-z_]*)"?\\s*[:=]\\s*)(?:"([^"]*)"|'([^']*)'|([^\\s,}]+))`,
+  `("?((?<![A-Za-z_])[A-Za-z_]*${SENSITIVE_STRING_KEY_FRAGMENT}[A-Za-z_]*)"?\\s*[:=]\\s*)(?:"([^"]*)"|'([^']*)'|([^\\s,}]+))`,
   "gi",
 );
 

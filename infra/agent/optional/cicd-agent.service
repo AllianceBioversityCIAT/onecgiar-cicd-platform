@@ -1,0 +1,41 @@
+# OPTIONAL reference (architecture-change-04 §10.7, §23): the agent does NOT need systemd. Use this unit only where a
+# dedicated system service is wanted; otherwise run it directly or under an existing PM2 daemon (../README.md).
+# Install: /etc/systemd/system/cicd-agent.service (root:root 0644). Not installed anywhere.
+# Under systemd every process a deploy starts by itself stays in this unit's cgroup and is killed when the unit
+# stops. Docker containers and applications of a PM2 daemon with its own unit are not affected.
+[Unit]
+Description=ONECGIAR CI/CD Platform server agent (sqs-agent transport)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cicd-agent
+Group=cicd-agent
+WorkingDirectory=/opt/cicd-agent
+Environment=CICD_AGENT_HOME=/opt/cicd-agent
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /opt/cicd-agent/dist/src/agent/main.js
+Restart=on-failure
+RestartSec=5
+# Approved (AC-04 §10.7): on stop, systemd signals the agent AND the running deploy scripts at once.
+KillMode=control-group
+# Proposed, owner decision pending (§23): KillMode=mixed lets the agent drain (scripts finish within
+# shutdownGraceSeconds) before anything left in the cgroup gets SIGKILL.
+#KillMode=mixed
+# Must exceed shutdownGraceSeconds + the longest killGraceSeconds + 60 s.
+TimeoutStopSec=3700
+NoNewPrivileges=no
+ProtectSystem=strict
+ReadWritePaths=/opt/cicd-agent/data /opt/cicd-agent/logs
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

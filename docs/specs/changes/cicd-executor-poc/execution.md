@@ -1090,3 +1090,114 @@ the agent would have refused the new command as `STALE_FENCING`. Releases now le
 
 **Not verified here (needs AWS, E5):** the real SQS `SenderId`, the real FIFO deduplication window, IAM and queue
 policies. Simulated SenderIds are never presented as AWS evidence. No AWS, GitHub, server or Executor change.
+
+## AC-04 E3 — server agent (2026-10-10): **implemented and tested locally, uncommitted**
+
+**Scope (owner authorization, E3 only).** E1 (`8528231`) and E2 (`8a520ce`) pushed to `feature/multi-repository-ci`
+(fast-forward). E3 is on `feature/ac-04-sqs-agent`, uncommitted, waiting for the owner's review. E4 not started.
+
+**Implemented** (details in architecture-change-04 §23).
+- `executor/src/agent/`: strict configuration and catalog loader, persistent journal and target state with atomic
+  writes, persistent fencing per target, states ACCEPTED → STARTING → STARTED → FINISHED with restart recovery, outbox,
+  scheduler (`maxParallel`, exclusive resources, one run per target, no starvation, BUSY at `notAfter`), spawn through
+  `sudo -n` without a shell, timeouts with process-group kill, output cap, redacted gzipped S3 logs with 24 h retry,
+  `AGENT_QUERY` answers, heartbeat, SQS/S3/STS adapters, `main.ts`.
+- `infra/agent/`: systemd unit, sudoers example, configuration and catalog examples (placeholders only). The examples
+  load with the real loader once the placeholders are filled in.
+
+**Tests.** `npm run check:local` exit 0: typecheck, lint, build, 64 test files passed / 18 skipped, 1759 passed, 110
+skipped, 6 todo, guards 8/8, 0 production vulnerabilities. `test/unit/agent.test.ts` 30/30 with real child processes
+(a Node fixture script) and the E1 schemas: one start per command (also after redelivery and restart), stale fencing
+refused (also after restart), journal survives restarts, crash after ACCEPTED and after DeleteMessage → NOT_STARTED
+ABANDONED, crash after STARTING → LOST and never re-run, independent applications in parallel, exclusive resource,
+pending events survive restarts, partial output kept on timeout, S3 failure never loses the result, expired or
+pre-journal commands never run, unauthorized senders and script paths never run, NEVER_SEEN/NO_RECORD rule, TARGET_ACTIVE,
+REJECTED_CONFIG, configuration refusals. `npm run test:integration`: 15/15 files, 102 tests (Executor regression).
+
+**Not verified here (E5):** real `SenderId`, FIFO on Amazon SQS, systemd and sudo on Linux, S3/IAM (five `todo`
+cases). `@aws-sdk/client-s3` and `@aws-sdk/client-sts` are not installed (owner authorization). No AWS, GitHub,
+server or Executor change.
+
+### AC-04 E3 — owner review: shutdown, restart and isolation on shared servers (2026-10-10): **implemented and tested locally, uncommitted**
+
+**Scope.** A targeted review of E3 (no general AC-04 audit), local changes only, with the owner's authorization to
+add `@aws-sdk/client-s3` and `@aws-sdk/client-sts`. No commit, push, AWS, server, Executor or Slack change.
+
+**Findings and changes** (details in architecture-change-04 §23).
+- **Defect fixed:** a run ended when the script's pipes closed. A process the script left holding stdout kept the run
+  open until the timeout, and the timeout then killed it with the process group. A run now ends when the script exits,
+  and the agent never signals anything after that.
+- **Shutdown drain:** the in-flight long poll is aborted; batches and commands waiting for a slot go back to the queue
+  (visibility 0); nothing new starts; running scripts get `shutdownGraceSeconds` (default: longest timeout + kill
+  grace), then they are interrupted and reported `LOST`; the outbox is flushed.
+- **Approved setting kept:** `KillMode=control-group` stays in the unit. With it, systemd signals the deploys at
+  once, which defeats the drain. `KillMode=mixed` is proposed for the owner's decision; `process` is rejected.
+- **Isolation:** a read-only cgroup v2 probe logs processes a deploy left in the agent's cgroup. Deploy-script rules
+  are in `infra/agent/README.md` (PM2 daemon under its own unit, no self-started daemons, no host-wide operations).
+  The sudoers example sets `!requiretty` and `!use_pty`.
+- **Idle cost:** the journal is pruned daily (pruning was never called before); an in-memory index of pending log
+  uploads replaces a full journal read on every poll; poll errors back off from 5 s to 60 s; `maxParallel` defaults
+  to 2.
+- **Dependencies:** `@aws-sdk/client-s3` and `@aws-sdk/client-sts` 3.1146.0, four packages; `overrides` keep
+  shared SDK packages at their installed versions. `npm audit --omit=dev`: 0 vulnerabilities.
+
+**Tests.** `npm run check:local` exit 0: 64 files passed / 18 skipped, 1766 passed, 110 skipped, 11 todo; guards 8/8;
+0 production vulnerabilities. `test/unit/agent.test.ts` 37/37. The seven new tests cover:
+- receiving stops at once;
+- waiting commands handed back and run once after the restart;
+- the running script finishes within the grace;
+- a command that expired during the stop is never run;
+- interruption after the grace reports `LOST`, with the outbox kept across the restart and the partial output kept;
+- application processes survive the agent stop, both detached and still holding the pipe;
+- the stray-process probe;
+- the defaults.
+
+The isolation test fails with the previous run-end rule (mutation check). `npm run test:sqs-emulator`: 9/9, including
+the agent's SQS command source on ElasticMQ FIFO (hand-back with visibility 0, no cross-target blocking, long poll
+aborted). `npm run test:integration`: 15/15 files, 102 tests.
+
+**Measured idle footprint** (Windows 11, Node 22.23.3, simulated long poll, 180 s): RSS about 51 MB, heap about
+13 MB, CPU < 0.01 % of one core, no journal reads or writes; identical with 1000 journal entries. Not a Linux figure.
+
+**Not verified here (E5):** systemd stop and crash behavior, Docker and PM2 surviving the agent, cgroup probe, sudo
+process group, queue retention/visibility/DLQ, the real `SenderId`, S3/IAM, the idle footprint on the host.
+
+### AC-04 E3 — owner decision: plain Node.js process, systemd optional (2026-10-13): **implemented and tested locally, uncommitted**
+
+**Scope.** E3 only, local changes. No commit, push, AWS, server, Executor or Slack change.
+
+**Changes** (details in architecture-change-04 §23 and `infra/agent/README.md`).
+- **Supervisor independence.** The agent runs as `node dist/src/agent/main.js` from `/opt/cicd-agent`
+  (`CICD_AGENT_HOME`), directly or under an existing PM2 daemon (`pm2.ecosystem.example.cjs`: `treekill: false`
+  and a long `kill_timeout`). The systemd unit is an optional reference (`optional/`). The stop request is
+  `SIGTERM`, `SIGINT` or the IPC message `shutdown`. The systemd-only cgroup probe was removed.
+- **Recovery without systemd.** On start, before receiving, the agent stops a script of its abruptly ended predecessor
+  that is still running (pid plus `/proc` start time, so a recycled pid is never signaled) and reports it `LOST`.
+- **`runAs: "self"`** for servers where the agent has no sudo rule. Loopback-only `http` queue URLs are accepted
+  (emulator).
+- **Defect fixed:** the shared redaction's key/value pattern was quadratic on long runs of letters. 20 MB of deploy
+  output cost about 19 s of CPU on the agent's event loop and stretched two concurrent 10 s deploys to 47 s. A
+  lookbehind keeps exactly the same matches; it now costs about 0.15 s. Output capture also gained backpressure and a
+  chunked tail.
+- `@aws-sdk/client-s3` and `@aws-sdk/client-sts` were added earlier in E3 (see the previous record).
+
+**Tests.** `npm run check:local` exit 0: 64 files passed / 20 skipped, 1770 passed, 117 skipped, 12 todo; guards 8/8;
+0 production vulnerabilities. `test/unit/agent.test.ts`: 41 passed plus 1 POSIX-only.
+- Orphan recovery: `SIGTERM`, `SIGKILL` escalation, a recycled pid is never signaled, and the interrupted command
+  never runs again.
+- Clean exit when idle; `runAs`; loopback URLs.
+
+`npm run test:sqs-emulator`: 11 passed plus 1 POSIX-only.
+- The real `node dist/src/agent/main.js` process, without systemd or PM2, against ElasticMQ: it starts, sends a
+  heartbeat, drops an unauthorized command (no journal entry) and exits 0 at once on a stop request.
+- An invalid configuration exits 1.
+
+`npm run test:integration`: 15/15 files, 102 tests.
+
+**Measured locally** (Windows 11, Node 22.23.3):
+- idle: about 48 MB RSS and CPU < 0.01 %;
+- two concurrent deploys writing 20 MB each: the agent at 9 % of one core and a transient 93 MB peak. Not Linux
+  figures.
+
+**Not verified here (E5):** sudo relay and `!use_pty`, orphan recovery on real `/proc`, PM2 and direct runs on
+Linux with Docker/PM2 applications, SQS retention/visibility/DLQ, `SenderId`, S3/IAM, the footprint on the host.

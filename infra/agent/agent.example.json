@@ -1,0 +1,20 @@
+{
+  "agentId": "<AGENT_ID>",
+  "stage": "dev",
+  "region": "<AWS_REGION>",
+  "commandQueueUrl": "https://sqs.<AWS_REGION>.amazonaws.com/<AWS_ACCOUNT_ID>/cicd-agent-<STAGE>-<AGENT_ID>-cmd.fifo",
+  "resultsQueueUrl": "https://sqs.<AWS_REGION>.amazonaws.com/<AWS_ACCOUNT_ID>/cicd-agent-results-<STAGE>.fifo",
+  "executorRoleId": "<EXECUTOR_ROLE_ID>",
+  "logBucket": "<LOG_BUCKET_NAME>",
+  "stateDir": "/opt/cicd-agent/data",
+  "maxParallel": 2,
+  "maxPending": 20,
+  "shutdownGraceSeconds": 1830,
+  "resources": {
+    "pm2-shared": 1,
+    "db-migrations": 1
+  },
+  "journalRetentionDays": 30,
+  "heartbeatSeconds": 60,
+  "clockSkewSeconds": 60
+}

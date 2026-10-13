@@ -1,0 +1,19 @@
+# architecture-change-04 §10.7 — /etc/sudoers.d/cicd-agent (root:root 0440, check with `visudo -cf`). Example only.
+# Only for catalog entries with "runAs": "<deploy user>"; entries with "runAs": "self" need no rule.
+# One rule per catalog script: the agent user may run EXACTLY that path as that deploy user, nothing else. Arguments
+# are validated by the agent (AC-03 vector) and again by the script. The agent user is NOT in the docker group; only
+# a deploy user whose script needs Docker is.
+#
+# The agent has no terminal: never require one, and keep the script in sudo's process group (no pseudo-terminal).
+# The agent is unprivileged: its signals reach sudo, which relays SIGTERM to the script; SIGKILL is never relayed and
+# the agent cannot signal another user's processes, so every script must exit on SIGTERM. Verify both settings and
+# this behavior on the target distribution in E5.
+Defaults:cicd-agent !requiretty
+Defaults:cicd-agent !use_pty
+#
+# The script role credentials (AP-2) reach the script through these environment variables only:
+Defaults!/opt/cicd/scripts/<DEPLOY_SCRIPT_A>.sh env_keep += "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION"
+cicd-agent ALL=(<DEPLOY_USER_A>) NOPASSWD: /opt/cicd/scripts/<DEPLOY_SCRIPT_A>.sh
+
+Defaults!/opt/cicd/scripts/<DEPLOY_SCRIPT_B>.sh env_keep += "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION"
+cicd-agent ALL=(<DEPLOY_USER_B>) NOPASSWD: /opt/cicd/scripts/<DEPLOY_SCRIPT_B>.sh
