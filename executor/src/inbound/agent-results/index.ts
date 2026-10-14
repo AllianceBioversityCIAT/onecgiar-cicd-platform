@@ -17,7 +17,7 @@ export interface AgentResultsHandlerDeps {
   readonly onOutcome?: (executionId: string) => void;
 }
 
-/** `AROA...:session` -> `AROA...`; undefined when SQS supplied no SenderId. */
+/** `AROA...:session` -> `AROA...` (an agent role); `AIDA...` as is (the shared agent user); undefined when SQS supplied no SenderId. */
 function roleIdOf(senderId: string | undefined): string | undefined {
   if (senderId === undefined) return undefined;
   const separator = senderId.indexOf(":");

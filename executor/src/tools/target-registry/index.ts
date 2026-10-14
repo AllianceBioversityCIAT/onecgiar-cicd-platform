@@ -90,7 +90,8 @@ export const CHECKLIST = [
 export const AGENT_CHECKLIST = [
   "AGENT ONBOARDING CHECKLIST (confirm every item, then pass --checklist-confirmed)",
   "1. agentId names ONE server and ONE platform stage (AP-4); the same id is in the agent's own configuration.",
-  "2. roleId is the unique id (AROA...) of THIS agent's IAM role, which no other agent or principal uses.",
+  "2. roleId is the unique id of the agent's IAM identity: THIS agent's role (AROA...), used by no other agent or",
+  "   principal, or the stage's shared agent user (AIDA..., agent-shared-identity.yaml), shared by every agent.",
   "3. commandQueueUrl is this agent's own FIFO command queue; its policy lets only the Executor role send.",
   "4. targets lists exactly the targetIds whose catalog entries are installed on this agent; each target record",
   "   names this agentId.",

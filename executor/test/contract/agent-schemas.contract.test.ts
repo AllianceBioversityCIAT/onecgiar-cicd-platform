@@ -149,8 +149,14 @@ describe("schemas/agent-record.schema.json", () => {
     expect(validate(agentRecord()), JSON.stringify(validate.errors)).toBe(true);
   });
 
+  it("accepts the shared agent user's id (AIDA...) as roleId (shared agent identity)", () => {
+    expect(validate(agentRecord({ roleId: "AIDAEXAMPLEEXAMPLE001" })), JSON.stringify(validate.errors)).toBe(true);
+  });
+
   it.each([
     ["role ARN instead of role id", { roleId: "arn:aws:iam::123456789012:role/x" }],
+    ["an access key id instead of an identity id", { roleId: "AKIAIOSFODNN7EXAMPLE" }],
+    ["another principal type (group id)", { roleId: "AGPAEXAMPLEEXAMPLE001" }],
     ["standard queue", { commandQueueUrl: `${FAKE_SQS_QUEUE_BASE}/cicd-agent-dev-x-cmd` }],
     ["foreign queue name", { commandQueueUrl: `${FAKE_SQS_QUEUE_BASE}/other.fifo` }],
     ["empty targets", { targets: [] }],

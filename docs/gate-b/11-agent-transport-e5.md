@@ -42,10 +42,18 @@ The Executor-driven test (`CICD_AGENT_*` plus an Executor restart) is a later, s
 | SSH transport, GitHub Actions, Executor restart | Not affected; no restart needed |
 | `sam validate --lint` | 5/5 templates |
 
-**Critical finding.** `executor/.local/gate-b/samconfig.toml` (2026-10-08) has no `AdditionalCiRoleArns`, but the stack
-has had it since change set B (2026-10-10). `sam deploy` uses template defaults for missing parameters, so that file
-would remove the pilot repository's CI role from the deploy queue policy. Every deploy config of E5 is built from R2,
-and A0 proves it.
+**Critical finding (corrected 2026-10-13).** `executor/.local/gate-b/samconfig.toml` (2026-10-08) is stale: it predates
+change set B (2026-10-10) and has no `AdditionalCiRoleArns`. Checked in the SAM CLI 1.151.0 source
+(`samcli/commands/deploy/deploy_context.py`, `merge_parameters`):
+- `sam deploy` sends `UsePreviousValue` for every template parameter missing from `parameter_overrides`. A missing
+  `AdditionalCiRoleArns` therefore keeps its current value; it does **not** fall back to the template default.
+- The real risk of a stale file is the opposite: every parameter it **does** list overwrites the deployed value with an
+  old one.
+- SAM rejects an empty override written as `Key=`. An empty value must be written as `Key=""` (escaped in TOML), which
+  SAM reads as an empty string.
+
+Every deploy config of E5 is therefore built from R2, with every current parameter written explicitly
+(`AdditionalCiRoleArns` included), and A0 proves it.
 
 ## 3. Read-only queries (R)
 
@@ -73,8 +81,11 @@ R2 also gives `ExecutorRoleArn` and `ExecutorRoleId`, which the TEST server conf
 
 1. Create `executor/.local/e5/samconfig-a0.toml` and `samconfig-a1.toml` from the Gate B config.
    - `parameter_overrides` = **every** parameter of R2 with its current value (`AdditionalCiRoleArns` included), plus
-     `AgentResultsRetentionSeconds=345600` and `AgentLogRetentionDays=90`.
+     `AgentResultsRetentionSeconds=345600` and `AgentLogRetentionDays=90`. Empty values as `Key=""` (see "Critical
+     finding").
    - `EnableAgentTransport=false` in A0, `true` in A1.
+   - A0 is automated by a local script (not versioned: it names the account) that checks the account, region and
+     parameters, creates the change set without executing it, keeps the evidence and deletes it.
    - Keep `tags = "Project=ONECGIAR-CICD-Platform"` and `capabilities = "CAPABILITY_IAM"`.
 2. A0, which must print `No changes to deploy`:
 

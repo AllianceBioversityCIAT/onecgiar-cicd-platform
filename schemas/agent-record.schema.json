@@ -9,7 +9,7 @@
   "properties": {
     "agentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,39}$" },
     "stage": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,15}$", "$comment": "Platform stage (AP-4: one agent per server and platform stage)." },
-    "roleId": { "type": "string", "pattern": "^AROA[A-Z0-9]{17}$", "$comment": "Unique id of the agent's IAM role (never an ARN, never a credential)." },
+    "roleId": { "type": "string", "pattern": "^(AROA|AIDA)[A-Z0-9]{17}$", "$comment": "Unique id of the agent's IAM identity, as SQS reports it in SenderId: its role (AROA...) or, with the shared agent identity (agent-shared-identity.yaml), the stage's shared agent user (AIDA..., the same for every agent of the stage). Never an ARN, never a credential." },
     "commandQueueUrl": {
       "type": "string",
       "pattern": "^https://sqs\\.[a-z0-9-]+\\.amazonaws\\.com/[0-9]{12}/cicd-agent-[a-z0-9-]{1,60}-cmd\\.fifo$",
